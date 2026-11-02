@@ -18,6 +18,9 @@ import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { roomCeilingHeight, roomCeilingTopMm, roomFloorStepMm } from '../finish/roomMetrics.js';
 import { normalizeRect, isValidRect } from '../plan/planGeometry.js';
 
+import { CEILING_BOUNDARY_EPS_MM } from './ceilingBoundaryStyle.js';
+import { DetailSlot } from '../core/constants.js';
+
 /** 部屋が天井を持つか（唯一の述語）。 */
 export { roomHasCeiling };
 
@@ -121,4 +124,65 @@ export function ceilingSurfacesOf(graph) {
     out.push(...zoneFaces);
   }
   return out;
+}
+
+const EPS = CEILING_BOUNDARY_EPS_MM;
+
+// 2 つの矩形が辺を共有するか（辺が EPS 以内で一致し、その辺の方向の重なりが EPS を超える）。
+function rectsShareEdge(a, b) {
+  const yOverlap = Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1);
+  const xOverlap = Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1);
+  return (yOverlap > EPS && (Math.abs(a.x2 - b.x1) <= EPS || Math.abs(a.x1 - b.x2) <= EPS))
+    || (xOverlap > EPS && (Math.abs(a.y2 - b.y1) <= EPS || Math.abs(a.y1 - b.y2) <= EPS));
+}
+
+// 同じ家族の部屋か（同じ部屋・参照の親子・同じ親を参照する兄弟）。段差を作る部分指定の子と親、子どうしの境を拾う。
+function sameRoomFamily(graph, idA, idB) {
+  if (idA === idB) return true;
+  const a = graph.roomMap?.get(idA);
+  const b = graph.roomMap?.get(idB);
+  if (!a || !b) return false;
+  const refsA = a.referenceRoomIds ?? new Set();
+  const refsB = b.referenceRoomIds ?? new Set();
+  return refsA.has(idB) || refsB.has(idA) || [...refsA].some(id => refsB.has(id));
+}
+
+/** ceilingStepHeightsByOwner の持ち主の鍵（区画なら部屋 id と区画 id・部屋単位なら部屋 id と空）。 */
+export const ceilingStepOwnerKey = (roomId, zoneId = null) => `${roomId}|${zoneId ?? ''}`;
+
+/**
+ * 天井の段差の部位図（ceilingStep。S8b-4a）を持つ持ち主（区画 CeilingZone.detailRefs・部屋単位 Room.detailRefs）ごとに、その持ち主が低い側になる
+ * 天井の段差の高さ（mm・昇順・重複なし）を返す。通知（fit を試す段差高）の供給元。
+ * 段差＝平らな面どうし（shape flat）で、同じ家族の部屋の面が矩形の辺を共有し（ceilingBoundaryStyle の EPS）、天井の高さ zMm が EPS を超えて違う境。
+ * 低い側の面の持ち主（zoneId があれば区画・無ければ部屋）に |Δz| を積む。割当てを持つ持ち主が無ければ天井面を計算しない。
+ * @param {object|null} graph
+ * @returns {(room:object, zone?:object|null)=>number[]}
+ */
+export function ceilingStepHeightsByOwner(graph) {
+  const rooms = graph?.rooms ?? [];
+  const owned = new Set();
+  for (const room of rooms) {
+    if (room.detailRefs?.[DetailSlot.CEILING_STEP]) owned.add(ceilingStepOwnerKey(room.id));
+    for (const zone of room.ceilingZones ?? []) {
+      if (zone.detailRefs?.[DetailSlot.CEILING_STEP]) owned.add(ceilingStepOwnerKey(room.id, zone.id));
+    }
+  }
+  const byOwner = new Map();
+  if (owned.size > 0) {
+    const faces = ceilingSurfacesOf(graph).filter(f => (f.shape ?? 'flat') === 'flat');
+    for (let i = 0; i < faces.length; i++) {
+      for (let j = i + 1; j < faces.length; j++) {
+        const [fa, fb] = [faces[i], faces[j]];
+        const dz = Math.abs(fa.zMm - fb.zMm);
+        if (!(dz > EPS) || !sameRoomFamily(graph, fa.roomId, fb.roomId)) continue;
+        if (!fa.rects.some(a => fb.rects.some(b => rectsShareEdge(a, b)))) continue;
+        const low = fa.zMm < fb.zMm ? fa : fb;
+        const key = ceilingStepOwnerKey(low.roomId, low.zoneId);
+        if (!owned.has(key)) continue;
+        if (!byOwner.has(key)) byOwner.set(key, new Set());
+        byOwner.get(key).add(dz);
+      }
+    }
+  }
+  return (room, zone = null) => [...(byOwner.get(ceilingStepOwnerKey(room.id, zone?.id ?? null)) ?? [])].sort((a, b) => a - b);
 }

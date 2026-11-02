@@ -25,7 +25,9 @@ import { CatalogKind } from '../../src/catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../../src/catalog/catalogRegistry.js';
 import { DetailSlot, DetailDash, DetailEdgeMark, DetailParam, PenDir, DETAIL_PRIM_SOURCE, KneeDropFrontSide } from '../../src/core/constants.js';
 import detailBuiltins, { KNEE_CAP_20_KEY } from '../../src/detail/detailBuiltins.js';
-import { junctionFigure, partFigure, paramLen, fixedLen, move, stepNoseFigure } from '../../src/finish/roomDetailTestFixtures.js';
+import { junctionFigure, partFigure, paramLen, fixedLen, move, stepNoseFigure, ceilingNoseFigure } from '../../src/finish/roomDetailTestFixtures.js';
+import { CeilingZone } from '../../src/core/ceilingZone.js';
+import { createZone } from '../../src/ceiling/ceilingZones.js';
 import { ElevationModeState } from '../../src/modes/ElevationModeState.js';
 import { loadDocument } from './loadDoc.mjs';
 
@@ -73,6 +75,10 @@ counterTop.label = 'カウンター天板 厚30 出150＋壁厚＋12（差し替
 const KEY_ST = 'df-jn-stepnose';
 const stepNose = stepNoseFigure(KEY_ST);
 stepNose.label = '段鼻 出120 厚40＋見切り30（差し替え確認用）';
+// (5) 天井の見切り（ceilingStep。S8b-4a）: 低い側の天井面から 出 150 → 厚 40 → 見切り（内へ 120・上へ 30・内へ 30）→ 高い側の天井面まで伸縮。形状差 150 > 100 なので壁面上の天井段差の縦線が差し替わる。
+const KEY_CS = 'df-jn-ceilstep';
+const ceilStep = ceilingNoseFigure(KEY_CS, { overhang: 150 });
+ceilStep.label = '天井の見切り 出150 厚40＋見切り30（差し替え確認用）';
 
 // ---- 構築 ----
 const project = new Project('junction-detail-test', '部屋の取り合い詳細図テスト');
@@ -90,9 +96,10 @@ const Yb = addCL(CenterLineType.HORIZONTAL, 1500);
 const Yd = addCL(CenterLineType.HORIZONTAL, 1400);
 const Yc = addCL(CenterLineType.HORIZONTAL, 1800);   // 帯の端の腰壁の区間 y 1400..1800（S8b-2。洋室の南面・納戸の北面の端が仕切り壁 X1 の隅に突き当たる）
 const Xs = addCL(CenterLineType.VERTICAL, 1500);    // 小上がり（LDK の部分指定の子。床 +300）の境（S8b-3。S8b-2 の確認箇所＝仕切り壁 X1 の LDK 側から離す）
+const Xz = addCL(CenterLineType.VERTICAL, 5500);    // 洋室の下がり天井の区画の境（S8b-4a。洋室の東半分＝x 5500..7000 の天井を 2100 に下げる）
 const cellKey = (L, T, R, B) => `${L.id}:${T.id}:${R.id}:${B.id}`;
 const ldk = graph.addRoom(new Set([cellKey(X0, Y0, X1, Y1)]), 'LDK');
-const yoshitsu = graph.addRoom(new Set([cellKey(X1, Y0, X2, Yb)]), '洋室');
+const yoshitsu = graph.addRoom(new Set([cellKey(X1, Y0, Xz, Yb), cellKey(Xz, Y0, X2, Yb)]), '洋室');
 const nando = graph.addRoom(new Set([cellKey(X1, Yb, X2, Y1)]), '納戸');
 ldk.setOverride('ceilingHeight', '2400');
 yoshitsu.setOverride('ceilingHeight', '2400');
@@ -100,6 +107,13 @@ nando.setOverride('ceilingHeight', '2400');
 // 小上がり: LDK の x 0..1500 の全セルを部分指定の子にし、床を +300（高い側）。df-jn-stepnose を割り当てる（S8b-3）
 const kamiagari = graph.addRoom(new Set(getCellsInRect(X0.value, Y0.value, Xs.value, Y1.value, graph).map(c => c.key)), '小上がり', undefined, new Set([ldk.id]));
 kamiagari.setFloorLevel(300);
+// 小上がりの天井は LDK より 300 低い（絶対高さ 300＋1800＝2100。LDK は 2400）。天井の段差は部屋単位の割当て（Room.detailRefs.ceilingStep。S8b-4a）で持つ
+kamiagari.setOverride('ceilingHeight', '1800');
+// 洋室の東半分（Xz..X2）を下がり天井の区画（2100）にする（区画の割当て＝CeilingZone.detailRefs.ceilingStep。S8b-4a）
+{
+  const { zones, zoneId } = createZone(graph, yoshitsu, [cellKey(Xz, Y0, X2, Yb)], { heightMm: 2100, shape: 'flat', dims: [] });
+  yoshitsu.setCeilingZones(zones.map(z => (z.id === zoneId ? new CeilingZone({ ...z.toData(), detailRefs: { [DetailSlot.CEILING_STEP]: KEY_CS } }) : z)));
+}
 
 // 構造反映が storage/db.js saveFloor を直呼びするため、最小のインメモリ IDB を差す（makeFrameOnlySectionTestDoc.mjs と同じ）。
 function withFakeIndexedDB(fn) {
@@ -165,10 +179,10 @@ check(!!door.opening && !!win.opening, '戸 1・窓 1 を配置');
 // 割当て（LDK のみ）
 ldk.setDetailRefs({ [DetailSlot.FLOOR_WALL]: KEY_FW, [DetailSlot.WALL_CEILING]: KEY_WC });
 // 床の段差は高い側の部屋（小上がり）に割り当てる（S8b-3）
-kamiagari.setDetailRefs({ [DetailSlot.FLOOR_STEP]: KEY_ST });
+kamiagari.setDetailRefs({ [DetailSlot.FLOOR_STEP]: KEY_ST, [DetailSlot.CEILING_STEP]: KEY_CS });
 
 // ---- 保存 ----
-const catalogs = withEntries(emptyBundle(), CatalogKind.DETAIL_FIGURE, [baseboard, cornice, counterTop, stepNose]);
+const catalogs = withEntries(emptyBundle(), CatalogKind.DETAIL_FIGURE, [baseboard, cornice, counterTop, stepNose, ceilStep]);
 const floors = [{ planeId: plane.id, bytes: serializeGraph(graph) }];
 const struct = serializeStructCLs(project.structGraph, project.structuralInfo, project.memberGroupLedger);
 const json = buildDocumentJson({ floors, struct, planes: serializePlanes(project), site: null, info: null, bootPlaneId: plane.id, catalogs });
@@ -187,10 +201,13 @@ check(rl?.detailRefs?.floorWall === KEY_FW && rl?.detailRefs?.wallCeiling === KE
 check(ry && ry.detailRefs == null, '洋室は未割当て');
 const figs = doc.catalogs?.catalogs?.[CatalogKind.DETAIL_FIGURE] ?? [];
 console.log('同梱の詳細図:', figs.map(f => f.key).join(','));
-check(figs.map(f => f.key).sort().join(',') === [KEY_FW, KEY_WC, KEY_CT, KEY_ST].sort().join(','), '同梱の detailFigure 4 件');
+check(figs.map(f => f.key).sort().join(',') === [KEY_FW, KEY_WC, KEY_CT, KEY_ST, KEY_CS].sort().join(','), '同梱の detailFigure 5 件');
 const rk = G.rooms.find(r => r.name === '小上がり');
 check(rk?.detailRefs?.floorStep === KEY_ST && rk.referenceRoomIds.has(rl.id) && G.effectiveFloorLevel(rk) - G.effectiveFloorLevel(rl) === 300,
   '小上がり（LDK の部分指定の子・床 +300）の detailRefs.floorStep が往復する');
+check(rk?.detailRefs?.ceilingStep === KEY_CS, '小上がりの部屋単位の detailRefs.ceilingStep が往復する');
+check(ry?.ceilingZones.length === 1 && ry.ceilingZones[0].heightMm === 2100 && ry.ceilingZones[0].detailRefs?.ceilingStep === KEY_CS,
+  '洋室の下がり天井の区画（2100）の detailRefs.ceilingStep が往復する');
 check(G.openings.length === 2, `建具 2（${G.openings.length}）`);
 const kneeRecs = [...G.kneeDropWalls.values()];
 console.log('腰壁の記録:', JSON.stringify(kneeRecs));
@@ -283,4 +300,35 @@ check(Object.values(withRefs.kneeCapBy).some(c => c['y-750(50下)'] + c['y-780(2
   const isRiser = p => p.type === 'line' && p.weight === 'thick' && p.x1 === p.x2 && Math.min(p.y1, p.y2) === -300 && Math.max(p.y1, p.y2) === 0;
   check(noses.length >= 2 && noses.length === withoutStep.prims.filter(isRiser).length - withStep.prims.filter(isRiser).length,
     `壁面（上辺・下辺）の riser 縦線 [−300,0] が段鼻の輪郭 ${noses.length} 本に差し替わる（割当て無しの縦線本数と一致）`);
+}
+
+// ---- 天井の段差（S8b-4a）: 洋室の下がり天井の区画（区画の割当て）と小上がり（部屋単位の割当て）の ceilingStep の有無で展開の輪郭の差を見る ----
+{
+  const runElev = async () => {
+    clearOverlays();
+    setOverlay(CatalogKind.DETAIL_FIGURE, { doc: figs, user: detailBuiltins });
+    const st = new ElevationModeState(G, P, { width: 1600, height: 1200 });
+    await st.init();
+    return { bands: st.bands.map(b => ({ name: G.rooms.find(r => r.id === b.roomId)?.name ?? b.roomId, prims: b.primitives })), err: st.materialError };
+  };
+  // 天井の見切りの輪郭: 高い側の天井（y=−2400）→ 低い側の天井（y=−2100）の 7 点の折れ線（CUT・source=detail）
+  const isCeilingNose = p => p.type === 'polyline' && p.source === DETAIL_PRIM_SOURCE && p.weight === 'thick' && p.points.length === 7
+    && p.points[0][1] === -2400 && p.points.at(-1)[1] === -2100 && p.points[0][0] === p.points.at(-1)[0];
+  const noseCountBy = r => Object.fromEntries(r.bands.map(b => [b.name, b.prims.filter(isCeilingNose).length]));
+  const zoneRefs = ry.ceilingZones.map(z => z.toData());
+  const roomRefs = rk.detailRefs;
+  const both = await runElev();
+  ry.setCeilingZones(ry.ceilingZones.map(z => new CeilingZone({ ...z.toData(), detailRefs: null })));
+  const noZone = await runElev();
+  ry.setCeilingZones(zoneRefs.map(d => CeilingZone.fromData(d)));
+  rk.setDetailRefs({ floorStep: KEY_ST });
+  const noRoom = await runElev();
+  rk.setDetailRefs(roomRefs);
+  console.log('天井の見切りの輪郭 polyline（帯ごと）割当てあり:', JSON.stringify(noseCountBy(both)), ' 区画の割当て無し:', JSON.stringify(noseCountBy(noZone)), ' 小上がり（部屋単位）の割当て無し:', JSON.stringify(noseCountBy(noRoom)));
+  for (const b of both.bands) for (const p of b.prims.filter(isCeilingNose)) console.log(`   ${b.name}`, JSON.stringify(p.points));
+  check(both.err === null && noZone.err === null && noRoom.err === null, `天井の段差の通知なし（${both.err}）`);
+  const c = noseCountBy(both);
+  check(c['洋室'] === 2 && c['LDK'] === 2, `洋室の区画（上辺・下辺の 2 面）と小上がり（LDK の帯の上辺・下辺の 2 面）の天井段差の縦線が輪郭 polyline に差し替わる（${JSON.stringify(c)}）`);
+  check(noseCountBy(noZone)['洋室'] === 0 && noseCountBy(noZone)['LDK'] === 2, '区画の割当てを外すと洋室の輪郭が消える（小上がりの分は残る）');
+  check(noseCountBy(noRoom)['LDK'] === 0 && noseCountBy(noRoom)['洋室'] === 2, '小上がりの割当てを外すと LDK の帯の輪郭が消える（洋室の分は残る）');
 }

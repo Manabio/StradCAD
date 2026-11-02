@@ -4,27 +4,41 @@ import assert from 'node:assert/strict';
 import { Room } from '@core';
 import { DetailSlot, ROOM_DETAIL_SLOTS, ROOM_PART_SLOTS } from '../core/constants.js';
 import { roomDetailRefSelects, roomDetailRefsAfterSelect } from './roomDetailRefsEdit.js';
-import { baseboardFigure, wallBackedFigure, stepNoseFigure } from './roomDetailTestFixtures.js';
+import { baseboardFigure, wallBackedFigure, stepNoseFigure, ceilingNoseFigure } from './roomDetailTestFixtures.js';
 import { ROOM_DETAIL_REF_TEXT } from '../error.js';
 
-const { FLOOR_WALL, WALL_CEILING, FLOOR_STEP } = DetailSlot;
+const { FLOOR_WALL, WALL_CEILING, FLOOR_STEP, CEILING_STEP } = DetailSlot;
 const jambPlan = { key: 'df-jamb', label: '方立', category: 'paired', view: 'plan', subject: 'jamb' };
 const FIGURES = [
   { ...baseboardFigure('df-fw1'), label: '巾木A' },
   { ...wallBackedFigure('df-wc1', WALL_CEILING), label: '廻り縁A' },
   { ...stepNoseFigure('df-fs1'), label: '段鼻A' },
+  { ...ceilingNoseFigure('df-cs1'), label: '見切りA' },
   jambPlan,
 ];
 
-test('select は床と壁・壁と天井・床の段差の 3 つで、先頭は「なし」。選択肢は分類（category・view・subject）一致の図だけ（他の分類の図は出ない）', () => {
+test('select は床と壁・壁と天井・床の段差・天井の段差の 4 つで、先頭は「なし」。選択肢は分類（category・view・subject）一致の図だけ（他の分類の図は出ない）', () => {
   const room = new Room('r1', 'LDK');
   const sels = roomDetailRefSelects(room, FIGURES);
   assert.deepEqual(sels.map(s => s.slot), [...ROOM_DETAIL_SLOTS, ...ROOM_PART_SLOTS]);
-  assert.deepEqual(sels.map(s => s.label), ['床と壁', '壁と天井', '床の段差']);
+  assert.deepEqual(sels.map(s => s.label), ['床と壁', '壁と天井', '床の段差', '天井の段差']);
   assert.deepEqual(sels[0].options, [{ value: '', label: ROOM_DETAIL_REF_TEXT.none }, { value: 'df-fw1', label: '巾木A（df-fw1）' }]);
   assert.deepEqual(sels[1].options, [{ value: '', label: 'なし' }, { value: 'df-wc1', label: '廻り縁A（df-wc1）' }]);
   assert.deepEqual(sels[2].options, [{ value: '', label: 'なし' }, { value: 'df-fs1', label: '段鼻A（df-fs1）' }]);
-  assert.deepEqual(sels.map(s => s.value), ['', '', '']);
+  assert.deepEqual(sels[3].options, [{ value: '', label: 'なし' }, { value: 'df-cs1', label: '見切りA（df-cs1）' }]);
+  assert.deepEqual(sels.map(s => s.value), ['', '', '', '']);
+});
+
+test('天井の段差（部屋単位）: 選ぶ・「なし」で外す（他の slot は保つ）。床の段差の図は天井の段差に出ない（同じ part/section でも subject が違う）', () => {
+  const room = new Room('r1', 'LDK');
+  const a = roomDetailRefsAfterSelect(room, CEILING_STEP, 'df-cs1');
+  assert.deepEqual(a, { [CEILING_STEP]: 'df-cs1' });
+  room.setDetailRefs({ ...a, [FLOOR_STEP]: 'df-fs1' });
+  assert.deepEqual(roomDetailRefsAfterSelect(room, CEILING_STEP, ''), { [FLOOR_STEP]: 'df-fs1' });
+  const sels = roomDetailRefSelects(room, FIGURES);
+  assert.equal(sels[3].value, 'df-cs1');
+  assert.ok(!sels[3].options.some(o => o.value === 'df-fs1'));
+  assert.ok(!sels[2].options.some(o => o.value === 'df-cs1'));
 });
 
 test('床の段差: 選ぶ・「なし」で外す（他の slot は保つ）。part の図は床と壁の選択肢に出ず、床と壁の図は床の段差に出ない', () => {

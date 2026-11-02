@@ -341,6 +341,7 @@ canvasのlineCapはbutt（未指定）のままにし、Konvaへ渡す直前のp
 - 帯の切断面の差し替えは**後段処理**（`appendBandCutContent` の後・`finalizeBand` の前。`applyJunctionSectionSwap`）で、図側とエンジン側の両方から単純断面の取り合い区間を `subtractCollinearSpans` で差し引く。断面の中を描かない原則の対象外ではなく、**輪郭だけ**を CUT で描いて内部は描かない。倍率ゲートは 2 パス目だけ（`junctionSectionSwap`）で、1 パス目・単体テスト・golden は常に単純断面。割当て無しは出力が byte 不変。
 - 腰壁・垂れ壁の部位（記録の `detailRefs` の kneeTop・dropBottom。S8b-1）の入口は `emitCtx.kneeDropPartStepsOf(band, col, cut)`（部屋帯だけが渡す。`appendKneeDropPartLines`）。見る側（`cut.viewSign` の手前の部屋）と記録の表の側が違えば鏡像。腰壁の天端は天井に届かない帯、垂れ壁の下端は天井に届く帯の下端の水平線を描いた場合に引く（`kneeCapUnderline` の細線は残す）。
 - 帯の端の隣の面 P が腰壁・垂れ壁（`cornerWallPartial`）の端は junction を飛ばし、代わりに `applyKneeDropSectionSwap`（S8b-2。同じ後段・同じ倍率ゲート）が記録の部位図の輪郭へ差し替える。詳細は `detail-figure-model.md`「要素付きの部位」。記録の探索点は隅の CL と F の部屋の側（仕上げ面から 2 mm）、縦線の差し引きは CUT と全高の中線、向こう側の面は向こう側の部屋の床／天井まで連ねる（帯の外へ出るため隣の面・寸法線との交差は受容）。
+- 天井の段差（低い側の天井面の持ち主＝区画／部屋の `ceilingStep`。S8b-4a）: 壁面上の天井段差の縦線（`appendCeilingLines`）を `applyCeilingStepSectionSwap` が床の段差と同じ後段・同じゲートで輪郭へ差し替える（原点＝`drawnCeilingRiserX`・低い側の天井、s＝高い側へ）。区画から部屋へ継承せず、傾斜・円弧・上階の天井・境界の CL 上の壁・階段裏面の合成区間は差し替えない。見付け面の新設と派生線は 8b-4b。
 - 床の段差（高い側の部屋の `floorStep`。S8b-3）: 段差見付け面（kind 'step'）には `highOwnerRoom` を持たせ水平線を引き、壁面上の床の段差の縦線（`appendFloorLines` の riser）は `applyFloorStepSectionSwap` が同じ後段・同じゲートで輪郭へ差し替える。段差見付け面自身の端の縦線・階段帯のレーン区間の境は対象外。高い側の所有者は riser から高い側の区間へ 2 mm 入った点で探査する（同じ床高で所有者の違う区間は連結されるので中点は不可）。包絡線の定義域は t∈(0, 段差高]。最小描画幅へ調整後の t が段差高以上の派生線は引かない（既知の限界）。
 
 ### 見付の1px保証

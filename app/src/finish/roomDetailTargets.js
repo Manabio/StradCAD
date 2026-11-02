@@ -9,12 +9,14 @@
 //   t は kneeTop が WALL_TOP の origin＝0（腰壁の天端の面）・dropBottom が WALL_BOTTOM の origin＝0（垂れ壁の下端の面）。
 // 床の段差の部位（floorStep。S8b-3。floorStepTargets）: s は STEP_EDGE の origin＝0（立ち上がり面。低い側が正）、
 //   t は FL の origin＝0（高い側の床）・end＝段差高（低い側の床）。param なし。
+// 天井の段差の部位（ceilingStep。S8b-4a。ceilingStepTargets）: s は STEP_EDGE の origin＝0（立ち上がり面。高い側が正）、
+//   t は CEILING_FACE の origin＝0（低い側の天井面）・end＝−段差高（高い側の天井面）。param なし。
 // 依存は constants・error・detail/detailPlacement.js だけの葉。
 // ================================================================
 
 import { DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam, DetailSlot } from '../core/constants.js';
 import { materialCodesOf } from '../detail/detailPlacement.js';
-import { ERR_DETAIL_DATUM_UNSUPPORTED, DETAIL_TARGET_JUNCTION, DETAIL_TARGET_PART, DETAIL_TARGET_PART_STEP } from '../error.js';
+import { ERR_DETAIL_DATUM_UNSUPPORTED, DETAIL_TARGET_JUNCTION, DETAIL_TARGET_PART, DETAIL_TARGET_PART_STEP, DETAIL_TARGET_PART_CEILING_STEP } from '../error.js';
 
 /** このモジュールが返す失敗の種類（openings/openingDetailFrame.js DetailFrameError と同じ語彙・同じ code）。 */
 export const RoomDetailError = Object.freeze({
@@ -46,21 +48,22 @@ function datumBase(d, tOriginRole, wallThicknessMm) {
   return undefined;
 }
 
-// 床の段差（floorStep。S8b-3）が供給する基準の値。s＝STEP_EDGE の origin（立ち上がり面）・t＝FL の origin（高い側の床）と end（低い側の床＝段差高）
-function stepDatumBase(d, stepHeightMm) {
+// 段差の部位（floorStep・ceilingStep）が供給する基準の値。s＝STEP_EDGE の origin（立ち上がり面）・
+// t＝tRole の origin（床: 高い側の床・天井: 低い側の天井面）と end（相手側の面＝tEndMm。t は下向き正なので床は +段差高・天井は −段差高）
+function stepDatumBase(d, { tRole, tEndMm }) {
   if (d.role === DetailDatumRole.STEP_EDGE && d.axis === DetailAxis.S && d.kind === DetailDatumKind.ORIGIN) return 0;
-  if (d.role === DetailDatumRole.FL && d.axis === DetailAxis.T) {
+  if (d.role === tRole && d.axis === DetailAxis.T) {
     if (d.kind === DetailDatumKind.ORIGIN) return 0;
-    if (d.kind === DetailDatumKind.END) return stepHeightMm;
+    if (d.kind === DetailDatumKind.END) return tEndMm;
   }
   return undefined;
 }
 
-function buildTargets(fig, { tOriginRole, wallThicknessMm, stepHeightMm, materialMap, targetName }) {
+function buildTargets(fig, { tOriginRole, wallThicknessMm, step, materialMap, targetName }) {
   const datums = {};
   for (const d of Array.isArray(fig?.datums) ? fig.datums : []) {
     if (d === null || typeof d !== 'object') continue; // 形の不正は fit の検証（INVALID）が理由つきで返す
-    const base = stepHeightMm === undefined ? datumBase(d, tOriginRole, wallThicknessMm) : stepDatumBase(d, stepHeightMm);
+    const base = step === undefined ? datumBase(d, tOriginRole, wallThicknessMm) : stepDatumBase(d, step);
     if (base === undefined) {
       return fail(RoomDetailError.UNSUPPORTED_DATUM, ERR_DETAIL_DATUM_UNSUPPORTED(d.id, `${d.role}・${d.axis}・${d.kind}`, targetName));
     }
@@ -71,8 +74,8 @@ function buildTargets(fig, { tOriginRole, wallThicknessMm, stepHeightMm, materia
     const m = materialMap?.get(code);
     if (m) materials[code] = { thickness: m.thickness, x: m.x, y: m.y };
   }
-  // 床の段差は壁厚の param を持たない（段差高は FL の end で吸う）
-  const params = stepHeightMm === undefined ? { [DetailParam.WALL_THICKNESS]: wallThicknessMm } : {};
+  // 床・天井の段差は壁厚の param を持たない（段差高は t の end で吸う）
+  const params = step === undefined ? { [DetailParam.WALL_THICKNESS]: wallThicknessMm } : {};
   return { targets: { datums, params, materials } };
 }
 
@@ -110,5 +113,17 @@ export function partTargets(fig, { slot, wallThicknessMm, materialMap = null }) 
  */
 export function floorStepTargets(fig, { stepHeightMm, materialMap = null }) {
   if (!Number.isFinite(stepHeightMm) || stepHeightMm <= 0) return fail(RoomDetailError.INVALID_STEP_HEIGHT, `段差高が正の数ではありません: ${String(stepHeightMm)}`);
-  return buildTargets(fig, { stepHeightMm, materialMap, targetName: DETAIL_TARGET_PART_STEP });
+  return buildTargets(fig, { step: { tRole: DetailDatumRole.FL, tEndMm: stepHeightMm }, materialMap, targetName: DETAIL_TARGET_PART_STEP });
+}
+
+/**
+ * 天井の段差の部位（ceilingStep。S8b-4a）の targets。s は STEP_EDGE の origin＝0（立ち上がり面。空気側＝高い側が正）、
+ * t は CEILING_FACE の origin＝0（低い側の天井面）・end＝−stepHeightMm（高い側の天井面。t は下向き正なので上が負。伸縮で段差高を吸う）。
+ * param は持たない。他の（role・軸・種別）は UNSUPPORTED_DATUM（FL を使った図など）。
+ * @param {object} fig
+ * @param {{stepHeightMm:number, materialMap?:{get:(code:string)=>object|undefined}|null}} p
+ */
+export function ceilingStepTargets(fig, { stepHeightMm, materialMap = null }) {
+  if (!Number.isFinite(stepHeightMm) || stepHeightMm <= 0) return fail(RoomDetailError.INVALID_STEP_HEIGHT, `段差高が正の数ではありません: ${String(stepHeightMm)}`);
+  return buildTargets(fig, { step: { tRole: DetailDatumRole.CEILING_FACE, tEndMm: -stepHeightMm }, materialMap, targetName: DETAIL_TARGET_PART_CEILING_STEP });
 }

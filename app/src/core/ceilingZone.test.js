@@ -7,14 +7,28 @@ import {
 } from '../core.js';
 import { isEmptyCeilingZone } from './ceilingZone.js';
 
-const FULL = { id: 'z1', cells: ['b:b:b:b', 'a:a:a:a'], heightMm: 2700, shape: CeilingShape.SLOPE, dims: [1200, 90] };
+const FULL = { id: 'z1', cells: ['b:b:b:b', 'a:a:a:a'], heightMm: 2700, shape: CeilingShape.SLOPE, dims: [1200, 90], detailRefs: { ceilingStep: 'df-cs' } };
 
 test('toData/fromData: 全項目を既定以外にした区画が往復し、cells は昇順になる。キー集合は CEILING_ZONE_KEYS', () => {
   const z = CeilingZone.fromData(FULL);
   const data = z.toData();
   assert.deepEqual(Object.keys(data).sort(), [...CEILING_ZONE_KEYS].sort());
-  assert.deepEqual(data, { id: 'z1', cells: ['a:a:a:a', 'b:b:b:b'], heightMm: 2700, shape: 'slope', dims: [1200, 90] });
+  assert.deepEqual(data, { id: 'z1', cells: ['a:a:a:a', 'b:b:b:b'], heightMm: 2700, shape: 'slope', dims: [1200, 90], detailRefs: { ceilingStep: 'df-cs' } });
   assert.deepEqual(CeilingZone.fromData(data).toData(), data);
+});
+
+test('detailRefs（S8b-4a）: toData には null でも常に入る。空・不正は null に正規化され、withCells／withHeight は割当てを運ぶ。凍結される', () => {
+  const plain = CeilingZone.fromData({ id: 'z', cells: ['a'], heightMm: 2400 });
+  assert.equal(plain.detailRefs, null);
+  assert.ok(Object.hasOwn(plain.toData(), 'detailRefs') && plain.toData().detailRefs === null);
+  for (const bad of [{}, { ceilingStep: '' }, { ceilingStep: 5 }, [], 'x', 7]) {
+    assert.equal(CeilingZone.fromData({ id: 'z', cells: ['a'], heightMm: 2400, detailRefs: bad }).detailRefs, null, JSON.stringify(bad));
+  }
+  const z = CeilingZone.fromData({ id: 'z', cells: ['a'], heightMm: 2400, detailRefs: { ceilingStep: 'df-cs' } });
+  assert.ok(Object.isFrozen(z.detailRefs));
+  assert.deepEqual(z.withCells(['b']).detailRefs, { ceilingStep: 'df-cs' });
+  assert.deepEqual(z.withHeight(2100).detailRefs, { ceilingStep: 'df-cs' });
+  assert.equal(isEmptyCeilingZone(new CeilingZone({ id: 'z', cells: ['a'], heightMm: null, detailRefs: { ceilingStep: 'df-cs' } })), true, '割当てだけでは指定ありにならない（isEmptyCeilingZone は不変）');
 });
 
 test('不変: 区画・cells・dims は凍結されている。withCells／withHeight は新しい区画を返す', () => {
@@ -65,8 +79,8 @@ test('restoreCeilingZones: 不正・空の区画を捨て、区画をまたい�
     { id: 'z1', cells: ['e'], heightMm: 3000 },        // id 重複は後を捨てる
   ]);
   assert.deepEqual(out.map(z => z.toData()), [
-    { id: 'z1', cells: ['a', 'b'], heightMm: 2400, shape: 'flat', dims: [] },
-    { id: 'z2', cells: ['c'], heightMm: 2600, shape: 'flat', dims: [] },
+    { id: 'z1', cells: ['a', 'b'], heightMm: 2400, shape: 'flat', dims: [], detailRefs: null },
+    { id: 'z2', cells: ['c'], heightMm: 2600, shape: 'flat', dims: [], detailRefs: null },
   ]);
   assert.ok(Object.isFrozen(out));
 });
@@ -110,10 +124,10 @@ test('【失敗系】restoreCeilingZones: 壊れた形状・寸法の区画は�
     { id: 'e', cells: ['v'], heightMm: null, shape: 'slope', dims: [] },           // flat・null＝指定なし
   ]);
   assert.deepEqual(out.map(z => z.toData()), [
-    { id: 'a', cells: ['x'], heightMm: 2600, shape: 'flat', dims: [] },
-    { id: 'b', cells: ['y'], heightMm: 2500, shape: 'flat', dims: [] },
-    { id: 'c', cells: ['z'], heightMm: 2400, shape: 'flat', dims: [] },
-    { id: 'd', cells: ['w'], heightMm: 2300, shape: 'slope', dims: [1200, 0] },
+    { id: 'a', cells: ['x'], heightMm: 2600, shape: 'flat', dims: [], detailRefs: null },
+    { id: 'b', cells: ['y'], heightMm: 2500, shape: 'flat', dims: [], detailRefs: null },
+    { id: 'c', cells: ['z'], heightMm: 2400, shape: 'flat', dims: [], detailRefs: null },
+    { id: 'd', cells: ['w'], heightMm: 2300, shape: 'slope', dims: [1200, 0], detailRefs: null },
   ]);
 });
 

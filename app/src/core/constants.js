@@ -579,11 +579,14 @@ export const DetailSlot = Object.freeze({
   KNEE_TOP:     'kneeTop',     // 腰壁の天端（腰壁・垂れ壁の記録の detailRefs。S8b-1）
   DROP_BOTTOM:  'dropBottom',  // 垂れ壁の下端（同上）
   FLOOR_STEP:   'floorStep',   // 床の段差（高い側の部屋の Room.detailRefs。S8b-3）
+  CEILING_STEP: 'ceilingStep', // 天井の段差（低い側の天井面の持ち主＝区画の CeilingZone.detailRefs か部屋の Room.detailRefs。S8b-4a）
 });
 /** 部屋（Room.detailRefs）に割り当てられる slot（S8a。wall・floor・ceiling の part は要素付き＝8b）。 */
 export const ROOM_DETAIL_SLOTS = Object.freeze([DetailSlot.FLOOR_WALL, DetailSlot.WALL_CEILING]);
 /** 部屋（Room.detailRefs）に割り当てられる要素付き（part）の slot（S8b-3。ROOM_DETAIL_SLOTS には混ぜない＝junction の fit と通知が誤って回る）。 */
-export const ROOM_PART_SLOTS = Object.freeze([DetailSlot.FLOOR_STEP]);
+export const ROOM_PART_SLOTS = Object.freeze([DetailSlot.FLOOR_STEP, DetailSlot.CEILING_STEP]);
+/** 天井区画（Room.ceilingZones の CeilingZone.detailRefs）に割り当てられる slot（S8b-4a。区画どうしの段差は低い側の区画が持つ）。 */
+export const CEILING_ZONE_DETAIL_SLOTS = Object.freeze([DetailSlot.CEILING_STEP]);
 /** 腰壁・垂れ壁の記録（graph.kneeDropWalls の値の detailRefs）に割り当てられる slot（S8b-1。ROOM_DETAIL_SLOTS には混ぜない）。 */
 export const KNEE_DROP_DETAIL_SLOTS = Object.freeze([DetailSlot.KNEE_TOP, DetailSlot.DROP_BOTTOM]);
 /**
@@ -625,6 +628,7 @@ export const DETAIL_SLOT_TARGETS = Object.freeze({
   [DetailSlot.KNEE_TOP]:     Object.freeze({ category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.WALL }),
   [DetailSlot.DROP_BOTTOM]:  Object.freeze({ category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.WALL }),
   [DetailSlot.FLOOR_STEP]:   Object.freeze({ category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.FLOOR }),
+  [DetailSlot.CEILING_STEP]: Object.freeze({ category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.CEILING }),
 });
 /** 基準（Datum）の種別。origin=図を載せる原点・end=伸縮区間の終端。 */
 export const DetailDatumKind = Object.freeze({
@@ -644,7 +648,7 @@ export const DetailDatumRole = Object.freeze({
   CEILING_FACE:     'ceilingFace',
   WALL_TOP:         'wallTop',    // 腰壁の天端の面（t の origin。S8b-1）
   WALL_BOTTOM:      'wallBottom', // 垂れ壁の下端の面（t の origin。S8b-1）
-  STEP_EDGE:        'stepEdge',   // 床の段差の立ち上がり面（s の origin。低い側が正。S8b-3）
+  STEP_EDGE:        'stepEdge',   // 床・天井の段差の立ち上がり面（s の origin。空気側が正＝床は低い側・天井は高い側。S8b-3・S8b-4a）
   GL:               'gl',
   ROOF_SURFACE:     'roofSurface',
   EAVE_EDGE:        'eaveEdge',
@@ -668,7 +672,7 @@ export const DetailMaterialField = Object.freeze({
   X:         'x',
   Y:         'y',
 });
-/** 部分詳細ヘルパーの床の段差（floorStep）の試し込みの既定の段差高（mm。S8b-3 のリード指定。実際の段差高は部屋の床高の差）。 */
+/** 部分詳細ヘルパーの床・天井の段差（floorStep・ceilingStep）の試し込みの既定の段差高（mm。S8b-3 のリード指定。実際の段差高は床高・天井高の差）。 */
 export const DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM = 300;
 /** 詳細図の出どころ（provenance.source）。 */
 export const DetailProvenanceSource = Object.freeze({

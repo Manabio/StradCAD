@@ -41,6 +41,8 @@ const LOCATION_LABELS = Object.freeze({
   ceilingBacking: '天井下地',
   floorBacking: '床下地',
   shaftWallMaterial: '昇降路壁材',
+  ceilingZone: '天井区画',
+  kneeDrop: '腰壁・垂れ壁',
   opening: '建具',
   columns: '柱',
   beams: '梁',

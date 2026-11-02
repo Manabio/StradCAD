@@ -37,7 +37,8 @@ import { buildCodeTable, currentDocumentAliases, peekUnresolvedCodes, ROOF_SPEC_
 import { buildResolveRows } from '../catalog/resolveQueue.js';
 import { materialCodesOf } from '../detail/detailPlacement.js';
 import { collectRoomJunctionFailures } from '../finish/roomDetailJunction.js';
-import { collectKneeDropPartFailures, collectFloorStepFailures } from '../finish/partDetail.js';
+import { collectKneeDropPartFailures, collectFloorStepFailures, collectCeilingStepFailures } from '../finish/partDetail.js';
+import { ceilingStepHeightsByOwner } from '../ceiling/ceilingSurfaces.js';
 import { floorStepHeightsByOwner } from '../elevation/elevationStepFace.js';
 import { detailFigureCatalog } from '../openings/openingCatalog.js';
 import { REMOVED_MATERIALS } from '../catalog/legacyMaterialCodes.js';
@@ -333,6 +334,7 @@ export class FinishModeState {
         ...collectRoomJunctionFailures(this.graph, seen, { materialMap }),
         ...collectKneeDropPartFailures(this.graph, seen, { materialMap }), // 腰壁・垂れ壁の部位（S8b-1）
         ...collectFloorStepFailures(this.graph, seen, { materialMap, stepHeightsOf: floorStepHeightsByOwner(this.graph) }), // 床の段差（S8b-3）
+        ...collectCeilingStepFailures(this.graph, seen, { materialMap, stepHeightsOf: ceilingStepHeightsByOwner(this.graph) }), // 天井の段差（S8b-4a）
       ].filter(f => f.wallThickness !== undefined || f.stepHeightMm !== undefined);
     } catch (err) {
       console.error('[finish] 部屋の取り合いの詳細図の合わせ込み検査に失敗:', err);
@@ -369,6 +371,12 @@ export class FinishModeState {
       for (const room of this.graph.rooms) {
         for (const [slot, key] of Object.entries(room.detailRefs ?? {})) {
           if (!appMap.has(key)) usage.push({ code: key, location: 'room', roomId: room.id, slot });
+        }
+        // 天井区画の割当て（CeilingZone.detailRefs の ceilingStep。S8b-4a）
+        for (const zone of room.ceilingZones ?? []) {
+          for (const [slot, key] of Object.entries(zone.detailRefs ?? {})) {
+            if (!appMap.has(key)) usage.push({ code: key, location: 'ceilingZone', roomId: room.id, zoneId: zone.id, slot });
+          }
         }
       }
       // 腰壁・垂れ壁の記録（kneeDropWalls の detailRefs。S8b-1）
@@ -648,7 +656,10 @@ export class FinishModeState {
 
     // 部屋の取り合い（rooms[].detailRefs）が指す詳細図の material 束縛の材コード（推移。S8a）。割当てが無ければ合成しない。
     // 腰壁・垂れ壁の記録（kneeDropWalls の detailRefs。S8b-1）も同じ扱い。
-    const refHolders = [...(g?.rooms ?? []), ...(g?.kneeDropWalls?.values() ?? [])].filter(holder => holder.detailRefs);
+    // 天井区画（rooms[].ceilingZones[] の detailRefs。S8b-4a）も同じ扱い。
+    const refHolders = [
+      ...(g?.rooms ?? []), ...(g?.rooms ?? []).flatMap(r => r.ceilingZones ?? []), ...(g?.kneeDropWalls?.values() ?? []),
+    ].filter(holder => holder.detailRefs);
     if (refHolders.length > 0) {
       const figures = detailFigureCatalog();
       for (const holder of refHolders) {

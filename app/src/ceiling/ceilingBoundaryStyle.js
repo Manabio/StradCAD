@@ -9,7 +9,8 @@
  */
 
 /** 長さ・座標・高さの一致判定の許容（mm）。解決器の EPS（0.5）と同じ。 */
-const EPS = 0.5;
+export const CEILING_BOUNDARY_EPS_MM = 0.5;
+const EPS = CEILING_BOUNDARY_EPS_MM;
 
 /** 印の値（prim.style）。 */
 export const CEILING_BOUNDARY_STYLE = 'ceilingBoundary';

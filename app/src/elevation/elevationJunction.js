@@ -16,12 +16,13 @@ import {
 } from '../core/constants.js';
 import { computeEnvelope, EnvelopeWeight } from '../detail/detailPlacement.js';
 import { resolveRoomDetailFigure, fitRoomJunction, wallAssemblyThicknessMm } from '../finish/roomDetailJunction.js';
-import { kneeDropPartEnvelope, floorStepEnvelope } from '../finish/partDetail.js';
+import { kneeDropPartEnvelope, floorStepEnvelope, ceilingStepEnvelope } from '../finish/partDetail.js';
 import { sameAxisLine, kneeDropRecordsOnAxis, kneeDropRecordsForWallPoint, kneeDropWallGeometry } from '../finish/kneeDropWall.js';
 import { graphList } from '../graphReadScope.js';
 import { effectiveHeight, effectiveSillHeight } from '../openings/openingNumbering.js';
-import { ElevationLineRole, weightForRole, minDrawnMm, PROBE_EPS_MM } from './elevationStyle.js';
-import { drawnRiserX, halfWallThicknessMm, roomOwnerByCell } from './elevationFloorProfile.js';
+import { ElevationLineRole, weightForRole, minDrawnMm, PROBE_EPS_MM, GAP_EPS_MM } from './elevationStyle.js';
+import { drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm, roomOwnerByCell } from './elevationFloorProfile.js';
+import { zoneCeilingFieldOf } from './space/zoneCeiling.js';
 import { worldToCell } from '../finish/gridCells.js';
 import { wallLessEndAt, cornerOpeningZRanges, faceBoundaryLocalX, localXOf } from './elevationFaces.js';
 import { composeRoomFaces } from './elevationFaceList.js';
@@ -510,11 +511,17 @@ export function floorStepLineSpecs(face, { materialMap = null, scaleDenom } = {}
     .map(({ t, weight }) => ({ t, role: roleOf(weight) }));
 }
 
-// 面 F の面ローカル x の位置の床の所有者（wallAdjacentFloorSegments の probeGapOwners と同じ探査点）。引けなければ null。
-function floorOwnerAtLocalX(face, room, graph, localX) {
+// 面 F の面ローカル x の位置の探査点（世界座標。wallAdjacentFloorSegments の probeGapOwners と同じ奥行き）。
+function probePointAtLocalX(face, localX) {
   const run = face.originWorld + localX * face.dirSign;
   const depth = face.axisCL.value + face.inward * PROBE_EPS_MM;
-  const cell = face.isVertical ? worldToCell(depth, run, graph) : worldToCell(run, depth, graph);
+  return face.isVertical ? [depth, run] : [run, depth];
+}
+
+// 面 F の面ローカル x の位置の床の所有者。引けなければ null。
+function floorOwnerAtLocalX(face, room, graph, localX) {
+  const [px, py] = probePointAtLocalX(face, localX);
+  const cell = worldToCell(px, py, graph);
   return cell ? (roomOwnerByCell(room, graph).get(cell.key) ?? null) : null;
 }
 
@@ -532,8 +539,6 @@ function floorOwnerAtLocalX(face, room, graph, localX) {
  */
 export function applyFloorStepSectionSwap(primitives, layout, { graph, room, materialMap = null, includeFace = () => true }) {
   if (!room || !(graph?.rooms ?? []).some(r => r.detailRefs?.[DetailSlot.FLOOR_STEP])) return;
-  const cutWeight = weightForRole(ElevationLineRole.CUT);
-  const eps = DETAIL_FIT_EPS_MM;
   const envCache = new Map();
   layout.faceRuns.forEach(({ face, xCursor, floorSegments: segs }) => {
     if (face.kind === 'step' || !includeFace(face) || !(segs?.length > 1)) return;
@@ -559,11 +564,115 @@ export function applyFloorStepSectionSwap(primitives, layout, { graph, room, mat
       const y = 0 - Math.max(da, db); // 0 − で −0 を作らない
       const sx = aHigh ? 1 : -1;
       const reach = Math.min(env.outline[env.outline.length - 1][1], stepHeightMm);
-      const prims = subtractCollinearSpans(primitives, { axis: 'x', at: x, lo: y, hi: y + reach, weight: cutWeight });
-      const pts = env.outline.map(([s, t]) => [x + s * sx, y + t]);
-      if (Math.abs(env.outline[0][0]) > eps) pts.unshift([x, y]); // 出（鼻）の天端は高い側の床面の続き
-      prims.push(polyline(pts, { weight: cutWeight, source: DETAIL_PRIM_SOURCE }));
-      replacePrimitives(primitives, prims);
+      // 出（鼻）の天端は高い側の床面の続き＝輪郭の先頭の前に riser 上端を補う
+      placeStepOutline(primitives, { outline: env.outline, x, y, sx, lo: y, hi: y + reach, closeAt: 'first' });
     }
   });
+}
+
+// ---- 天井の段差（CeilingZone／Room.detailRefs の ceilingStep。S8b-4a）----
+
+// 区間 seg が水平な自階の天井か（傾斜・円弧・上階の天井〔多層書き〕でない）。傾いた CUT 線は縦線の差し引きに合わない（G1）。
+const isLevelOwnStoreyCeiling = seg => seg.chMm != null && seg.chHiMm == null && !seg.ceilArc && (seg.ceilFloorZMm ?? 0) === 0;
+
+// 境界の CL の上、面の壁の仕上げ面から部屋の側へ CORNER_PROBE_INTO_ROOM_MM 入った奥行きに壁が立つか
+// （G2。立てば天井の段差は壁〔垂れ壁含む〕の管轄で、部位図の対象でない。仕切り壁は外壁の仕上げ面から始まるので、通り芯の少し内側では外れる）。
+function wallStandsOnBoundary(face, segLo, segHi, graph) {
+  const clId = segLo.hiCLId ?? segHi.loCLId;
+  if (clId == null) return false;
+  const depth = (Number.isFinite(face.faceValue) ? face.faceValue : face.axisCL.value) + face.inward * CORNER_PROBE_INTO_ROOM_MM;
+  return (graphList(graph, 'walls') ?? []).some(w => {
+    if (w.axisCL?.id !== clId
+      || !(Math.min(w.coord1, w.coord2) - DETAIL_FIT_EPS_MM <= depth && depth <= Math.max(w.coord1, w.coord2) + DETAIL_FIT_EPS_MM)) return false;
+    // 腰壁だけの壁（垂れ壁なし）は天井まで届かない＝天井段差の管轄なので壁とみなさない
+    const recs = kneeDropRecordsForWallPoint(graph, w, depth);
+    return !(recs.length > 0 && recs.every(({ rec }) => rec.knee && !rec.drop));
+  });
+}
+
+// 低い側の区間の位置（面ローカル x）の天井面の持ち主。区画の面なら区画（zone）・それ以外は部屋 owner（zone は null）。
+// 区画の面でも、区画の割当てが無ければ部屋の割当てには継承しない。面が平面でない・持ち主が引けなければ null。
+// ch＝持ち主の天井高（G3 の比較値。区画の面は区画の基準の CH・他は部屋の CH）。
+function ceilingOwnerAtLocalX(face, room, graph, localX, field) {
+  const [px, py] = probePointAtLocalX(face, localX);
+  const cell = worldToCell(px, py, graph);
+  const owner = cell ? (roomOwnerByCell(room, graph).get(cell.key) ?? null) : null;
+  if (!owner) return null;
+  const surface = field?.surfaceAt(px, py) ?? null;
+  const own = surface && surface.roomId === owner.id ? surface : null;
+  if (own && own.shape !== 'flat') return null;
+  const zone = own && own.zoneId != null ? (owner.ceilingZones ?? []).find(z => z.id === own.zoneId) ?? null : null;
+  if (own && own.zoneId != null && !zone) return null;
+  return { owner, zone, ch: own ? own.chMm : roomCeilingHeight(graph, owner).mm };
+}
+
+/**
+ * 壁面上の天井の段差の縦線（appendCeilingLines の段差の縦線）を、低い側の天井面の持ち主（区画 CeilingZone.detailRefs か部屋 Room.detailRefs）の
+ * ceilingStep（天井の段差の部位図）の輪郭（CUT・source=detail）へ差し替える（S8b-4a・後段処理）。帯の部屋 room の床区間（floorSegments）の隣り合う 2 区間で
+ * 天井の絶対高さ（floorDeltaMm＋chMm）が GAP_EPS 超で違う境ごとに、低い側の区間の持ち主の割当てを段差高で fit した包絡線を引く。形状差 maxDeviationMm が
+ * DETAIL_SECTION_SWAP_MIN_DIFF_MM を超えるものだけ。区画から部屋への継承はしない（区画の割当てが無ければ描き方は従来のまま）。
+ * 差し替えない境（ガード）: G1 両側が水平な自階の天井でない（傾斜・円弧・上階の天井）／G2 区画の境界でない縦線で、境界の CL の上に壁が立つ（垂れ壁の管轄）／
+ * G3 低い側の chMm が持ち主の天井高と違う（階段の裏面で割った合成区間）／持ち主の面が平面でない。
+ * frame: 原点＝縦線の描画 x（drawnCeilingRiserX）・低い側の天井の y、s＝高い側へ（高い側が右なら sx=+1）、t＝下向き（上が負）。
+ * 差し引く線: 縦線（CUT）の [低い側の天井＋輪郭の上端, 低い側の天井]。輪郭の末尾が縦線の面に付かない（出がある）ときは低い側の天井面を出の先まで延ばす（末尾に原点を補う）。
+ * 持ち主の探査点は低い側の区間の縦線側の端から CORNER_PROBE_INTO_ROOM_MM 入った点（区間幅の半分を上限。区間の中点だと同じ高さの隣の面が連結された区間で誤る）。
+ * primitives を直接書き換える（帯の座標系。finalizeBand の前）。
+ * @param {object[]} primitives
+ * @param {{faceRuns:{face:object, xCursor:number, floorSegments?:object[]}[]}} layout
+ * @param {{graph:object, room:object, materialMap?:object|null, segCeilAbsAt:(s:object,x:number)=>number, includeFace?:(face:object)=>boolean}} opts
+ */
+export function applyCeilingStepSectionSwap(primitives, layout, { graph, room, materialMap = null, segCeilAbsAt, includeFace = () => true }) {
+  const assigned = (graph?.rooms ?? []).some(r => r.detailRefs?.[DetailSlot.CEILING_STEP]
+    || (r.ceilingZones ?? []).some(z => z.detailRefs?.[DetailSlot.CEILING_STEP]));
+  if (!room || !assigned) return;
+  const field = zoneCeilingFieldOf(graph);
+  const envCache = new Map();
+  layout.faceRuns.forEach(({ face, xCursor, floorSegments: segs }) => {
+    if (face.kind === 'step' || !includeFace(face) || !(segs?.length > 1)) return;
+    const half = halfWallThicknessMm(face);
+    for (let i = 0; i + 1 < segs.length; i++) {
+      const a = segs[i];
+      const b = segs[i + 1];
+      if (!isLevelOwnStoreyCeiling(a) || !isLevelOwnStoreyCeiling(b)) continue; // G1
+      const ceilA = segCeilAbsAt(a, a.hiX);
+      const ceilB = segCeilAbsAt(b, b.loX);
+      const stepHeightMm = Math.abs(ceilA - ceilB);
+      if (!(stepHeightMm > GAP_EPS_MM)) continue;
+      if (wallStandsOnBoundary(face, a, b, graph)) continue; // G2
+      const aLow = ceilA < ceilB;
+      const low = aLow ? a : b;
+      // 探査点は縦線に接する低い側の端から少し入った点
+      const inset = Math.min(CORNER_PROBE_INTO_ROOM_MM, (low.hiX - low.loX) / 2);
+      const hit = ceilingOwnerAtLocalX(face, room, graph, aLow ? low.hiX - inset : low.loX + inset, field);
+      if (!hit || Math.abs(low.chMm - hit.ch) > GAP_EPS_MM) continue; // G3
+      const holder = hit.zone ?? hit.owner;
+      if (!holder.detailRefs?.[DetailSlot.CEILING_STEP]) continue;
+      const cacheKey = `${holder.id}|${stepHeightMm}`;
+      if (!envCache.has(cacheKey)) envCache.set(cacheKey, ceilingStepEnvelope({ room: hit.owner, zone: hit.zone, stepHeightMm, materialMap }));
+      const env = envCache.get(cacheKey);
+      if (!env || !(env.maxDeviationMm > DETAIL_SECTION_SWAP_MIN_DIFF_MM) || env.outline.length < 2) continue;
+      const x = xCursor + drawnCeilingRiserX(segs, i, half);
+      const y = 0 - Math.min(ceilA, ceilB); // 0 − で −0 を作らない
+      const sx = aLow ? 1 : -1; // 高い側が右（a が低い・b が高い）なら +1
+      const top = Math.max(env.outline[0][1], -stepHeightMm);
+      placeStepOutline(primitives, { outline: env.outline, x, y, sx, lo: y + top, hi: y, closeAt: 'last' });
+    }
+  });
+}
+
+/**
+ * 段差の部位図（床の段差・天井の段差）の輪郭を壁面に置く共通部（8b-3 から切り出し）。riser の縦線 [lo, hi] を差し引き、
+ * 輪郭（CUT・source=detail）を原点 (x, y)・s 方向 sx・t 下向きで置く。輪郭の closeAt の端が riser 面（s≈0）に付かないとき（出・鼻がある）は
+ * その端に原点 (x, y)（面の続き）を補う。primitives を直接書き換える。
+ * @param {object[]} primitives
+ * @param {{outline:number[][], x:number, y:number, sx:1|-1, lo:number, hi:number, closeAt:'first'|'last'}} p
+ */
+function placeStepOutline(primitives, { outline, x, y, sx, lo, hi, closeAt }) {
+  const cutWeight = weightForRole(ElevationLineRole.CUT);
+  const prims = subtractCollinearSpans(primitives, { axis: 'x', at: x, lo, hi, weight: cutWeight });
+  const pts = outline.map(([s, t]) => [x + s * sx, y + t]);
+  if (closeAt === 'first' && Math.abs(outline[0][0]) > DETAIL_FIT_EPS_MM) pts.unshift([x, y]);
+  if (closeAt === 'last' && Math.abs(outline[outline.length - 1][0]) > DETAIL_FIT_EPS_MM) pts.push([x, y]);
+  prims.push(polyline(pts, { weight: cutWeight, source: DETAIL_PRIM_SOURCE }));
+  replacePrimitives(primitives, prims);
 }

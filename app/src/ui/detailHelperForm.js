@@ -42,7 +42,7 @@ import {
 } from '../catalog/catalogMaintenance.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
 import { detailFrameTargets, detailElevationTargets } from '../openings/openingDetailFrame.js';
-import { junctionTargets, partTargets, floorStepTargets } from '../finish/roomDetailTargets.js';
+import { junctionTargets, partTargets, floorStepTargets, ceilingStepTargets } from '../finish/roomDetailTargets.js';
 import { evalNumpadExpr } from './numpadUtils.js';
 import { polyline, text } from '../structural/sectionFigure/svgFigurePrimitives.js';
 
@@ -197,9 +197,14 @@ export function isFloorStepForm(form) {
   const t = DETAIL_SLOT_TARGETS[DetailSlot.FLOOR_STEP];
   return form?.category === t.category && form?.view === t.view && form?.subject === t.subject;
 }
+/** 分類が天井の段差の部位（slot=ceilingStep の取り合わせ先: part/section/ceiling。S8b-4a。試し込みの欄は床の段差と同じ段差高）か。 */
+export function isCeilingStepForm(form) {
+  const t = DETAIL_SLOT_TARGETS[DetailSlot.CEILING_STEP];
+  return form?.category === t.category && form?.view === t.view && form?.subject === t.subject;
+}
 /** 現在の分類に合う試し込みの欄。 */
 export const fitDimFieldsFor = form => (isElevationFigureForm(form) ? ELEVATION_FIT_DIM_FIELDS
-  : isFloorStepForm(form) ? FLOOR_STEP_FIT_DIM_FIELDS
+  : isFloorStepForm(form) || isCeilingStepForm(form) ? FLOOR_STEP_FIT_DIM_FIELDS
     : junctionSlotOf(form) || partSlotOf(form) ? JUNCTION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
 /** 保存・破棄・削除の確認の文言。 */
 export const DETAIL_HELPER_MESSAGES = Object.freeze({
@@ -339,6 +344,8 @@ export function defaultRoleFor(form, axis, kind) {
   }
   // 床の段差の部位（part/section/floor）: s は立ち上がり面・t は FL（高い側の床。end は低い側の床）
   if (isFloorStepForm(form)) return axis === DetailAxis.S ? DetailDatumRole.STEP_EDGE : DetailDatumRole.FL;
+  // 天井の段差の部位（part/section/ceiling）: s は立ち上がり面・t は CEILING_FACE（低い側の天井面。end は高い側の天井面）
+  if (isCeilingStepForm(form)) return axis === DetailAxis.S ? DetailDatumRole.STEP_EDGE : DetailDatumRole.CEILING_FACE;
   // 腰壁・垂れ壁の部位（part/section/wall）の t の origin は腰壁の天端の面（垂れ壁の下端にしたい図は基準の役割を選び直す）
   if (partSlotOf(form) && axis === DetailAxis.T && kind === DetailDatumKind.ORIGIN) return DetailDatumRole.WALL_TOP;
   return DEFAULT_ROLE_BY_AXIS[axis];
@@ -760,7 +767,7 @@ const ELEVATION_FIT_REPRESENTATIVE = Object.freeze({ category: 'fitting', subTyp
  * 代表種別がカタログに無いとき幅・高さは '' （tryFit が入力を促す error を返す）。
  */
 export function defaultFitDimsFor(form, wallThickness) {
-  if (isFloorStepForm(form)) return { stepHeight: String(DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM) };
+  if (isFloorStepForm(form) || isCeilingStepForm(form)) return { stepHeight: String(DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM) };
   if (!isElevationFigureForm(form)) return defaultFitDims(wallThickness);
   const entry = findCatalogEntry(ELEVATION_FIT_REPRESENTATIVE.category, ELEVATION_FIT_REPRESENTATIVE.subType);
   return {
@@ -800,11 +807,12 @@ function tryFitJunction(form, dims, slot, materialMap) {
 }
 
 // 床の段差の部位（floorStep）の試し込み: 段差高に合わせる。基準の対応は finish/roomDetailTargets.js floorStepTargets。
-function tryFitFloorStep(form, dims, materialMap) {
+// 天井の段差の部位（ceilingStep。S8b-4a）も同じ欄（段差高）。基準の対応は ceilingStepTargets（t の origin＝低い側の天井面・end＝−段差高）。
+function tryFitFloorStep(form, dims, materialMap, targetsOf = floorStepTargets) {
   const stepHeightMm = parseNumberText(dims.stepHeight);
   if (!Number.isFinite(stepHeightMm) || stepHeightMm <= 0) return badFitDim('段差高は正の数で入力してください');
   const fig = entryFromForm(form);
-  const t = floorStepTargets(fig, { stepHeightMm, materialMap });
+  const t = targetsOf(fig, { stepHeightMm, materialMap });
   if (t.error) return { error: t.error };
   return fitLocal(fig, t.targets);
 }
@@ -817,6 +825,7 @@ function tryFitFloorStep(form, dims, materialMap) {
 export function tryFit(form, dims, { materialMap = null } = {}) {
   if (isElevationFigureForm(form)) return tryFitElevation(form, dims);
   if (isFloorStepForm(form)) return tryFitFloorStep(form, dims, materialMap);
+  if (isCeilingStepForm(form)) return tryFitFloorStep(form, dims, materialMap, ceilingStepTargets);
   const junctionSlot = junctionSlotOf(form);
   if (junctionSlot) return tryFitJunction(form, dims, junctionSlot, materialMap);
   const partSlot = partSlotOf(form);

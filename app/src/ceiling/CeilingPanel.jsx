@@ -12,6 +12,7 @@ import { StairSoffitFinish } from '@core';
 import { SoffitRowKind } from '../core/constants.js';
 import { ceilingPanelTree, ceilingPanelLines, selectedNodeId, selectionSpanMm, stairSoffitChoice, writeStairSoffitFinish } from './ceilingPanelRows.js';
 import { updateZoneSpec, removeZone } from './ceilingZones.js';
+import { ceilingStepSelects, isCeilingStepEditable, zonesAfterCeilingStepSelect } from './ceilingStepRefs.js';
 import { roomCeilingShapeOf, setRoomCeilingShape, applyRoomCeilingHeightDraft } from './roomCeilingShape.js';
 import { roomHasCeiling } from './ceilingOwners.js';
 import { isExteriorCeilingRoom, exteriorCeilingEnabled, setExteriorCeilingEnabled } from './exteriorCeiling.js';
@@ -242,6 +243,11 @@ const CeilingZoneFields = observer(({ graph, room, zone, spanMm }) => {
     withFinishUndo(graph, () => room.setCeilingZones(removeZone(graph, room, zone.id)));
     markDirty();
   };
+  // 天井の段差の部分詳細図（detailRefs）の選択。値が変わるときだけ 1 エントリ（withFinishUndo は差分なしなら積まない）
+  const selectDetail = (slot, key) => {
+    withFinishUndo(graph, () => room.setCeilingZones(zonesAfterCeilingStepSelect(graph, room, zone.id, slot, key)));
+    markDirty();
+  };
   return (
     <div style={fieldsBoxStyle}>
       <ShapeFieldRows draft={draft} patch={patch} error={error} disabled={false} title={undefined} heightPlaceholder="天井高" heightType="number" onEnter={commit} />
@@ -250,6 +256,20 @@ const CeilingZoneFields = observer(({ graph, room, zone, spanMm }) => {
         <button onClick={clear} style={{ fontSize: 12 }}>区画を解除</button>
       </div>
       {error && <div style={{ color: '#dc2626' }}>{error}</div>}
+      {ceilingStepSelects(zone).map(sel => (
+        <label key={sel.slot} style={fieldLabelStyle}>
+          <span style={{ fontWeight: 700 }}>{sel.label}：</span>
+          <select
+            value={sel.value}
+            disabled={!isCeilingStepEditable(zone)}
+            title={isCeilingStepEditable(zone) ? undefined : '傾斜・円弧・ドームの区画には使えません'}
+            onChange={e => selectDetail(sel.slot, e.target.value)}
+            style={{ fontSize: 12 }}
+          >
+            {sel.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </label>
+      ))}
     </div>
   );
 });

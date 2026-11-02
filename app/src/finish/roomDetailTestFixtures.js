@@ -115,6 +115,42 @@ export function floorStepFigure(key, moves, { closed = true, endVertex = moves.l
   };
 }
 
+/**
+ * 天井の段差の見切り（ceilingStep。part/section/ceiling。S8b-4a。閉）。頂点 (0,0)=低い側の天井の立ち上がり面 → (出,0) → (出,−厚) → (出−見切り幅,−厚) →
+ * (出−見切り幅,−厚−見切り高) → (0,−厚−見切り高) → (0, −厚−見切り高−伸縮)。s の origin＝立ち上がり面（頂点 0。高い側が正）・t の origin＝低い側の天井面（頂点 0）・
+ * t の end＝高い側の天井面（最終頂点。t は下向き正なので −段差高）。形状差＝出。stepNoseFigure の上下反転。
+ * 既定（出 120・厚 40・見切り 30×30）の包絡線: t −40〜0 が s=120・−70〜−40 が s=30・以降 0。
+ */
+export function ceilingNoseFigure(key, { overhang = 120, thickness = 40, trimWidth = 30, trimHeight = 30 } = {}) {
+  return ceilingStepFigure(key, [
+    move(PenDir.RIGHT, fixedLen(overhang)), move(PenDir.UP, fixedLen(thickness)), move(PenDir.LEFT, fixedLen(overhang - trimWidth)),
+    move(PenDir.UP, fixedLen(trimHeight)), move(PenDir.LEFT, fixedLen(trimWidth)), move(PenDir.UP, stretchLen(100)),
+  ]);
+}
+
+/**
+ * 天井の段差の部位図の組み立て（part/section/ceiling）。ストローク 1 本（id 'a'）。s の origin＝立ち上がり面（頂点 0）・
+ * t の origin＝低い側の天井面（頂点 0。role は tRole）・t の end＝高い側の天井面（頂点 endVertex。省略は最終頂点）。
+ */
+export function ceilingStepFigure(key, moves, { closed = true, endVertex = moves.length, tRole = DetailDatumRole.CEILING_FACE } = {}) {
+  return {
+    key, version: DETAIL_FIGURE_VERSION, label: `テスト${key}`,
+    category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.CEILING,
+    strokes: [{ id: 'a', closed, line: LINE, moves }],
+    datums: [
+      { id: 'ds0', role: DetailDatumRole.STEP_EDGE, axis: DetailAxis.S, kind: DetailDatumKind.ORIGIN, offsetMm: 0 },
+      { id: 'dt0', role: tRole, axis: DetailAxis.T, kind: DetailDatumKind.ORIGIN, offsetMm: 0 },
+      { id: 'dt1', role: tRole, axis: DetailAxis.T, kind: DetailDatumKind.END, offsetMm: 0 },
+    ],
+    anchors: [
+      { datumId: 'ds0', strokeId: 'a', vertexIndex: 0 },
+      { datumId: 'dt0', strokeId: 'a', vertexIndex: 0 },
+      { datumId: 'dt1', strokeId: 'a', vertexIndex: endVertex },
+    ],
+    provenance: null, note: null,
+  };
+}
+
 /** 矩形の巾木（floorWall。閉）。頂点 (0,0) → (0,−h) → (d,−h) → (d,0)。 */
 export function baseboardFigure(key, depth = 12, height = 60) {
   return junctionFigure(key, DetailSlot.FLOOR_WALL, [

@@ -598,6 +598,55 @@ test('walker（S8b-1）: rewrite は kneeDropWalls[].detailRefs の値も alias 
   assert.deepEqual(dropped.unresolved, [{ code: 'df-old', location: 'kneeDrop', key: 'a:s:e', slot: 'kneeTop' }]);
 });
 
+test('walker（S8b-4a）: enumerate は rooms[].ceilingZones[].detailRefs の値も {location:ceilingZone, roomId, zoneId, slot} で列挙し、使用キー収集に合流する。部屋に detailRefs が無くても区画は拾う。空・空文字・非文字列は無視', () => {
+  const walker = SNAPSHOT_REF_WALKERS[DF];
+  const snapshot = {
+    rooms: [
+      { id: 'r1', detailRefs: { floorWall: 'df-fw' }, ceilingZones: [{ id: 'z1', detailRefs: { ceilingStep: 'df-cs' } }, { id: 'z2', detailRefs: null }, { id: 'z3' }] },
+      { id: 'r2', detailRefs: null, ceilingZones: [{ id: 'z4', detailRefs: { ceilingStep: 'df-cs2' } }, { id: 'z5', detailRefs: { ceilingStep: '', other: 3 } }] },
+      { id: 'r3', ceilingZones: 'x' },
+    ],
+  };
+  assert.deepEqual([...walker.enumerate(snapshot)], [
+    { code: 'df-fw', location: 'room', roomId: 'r1', slot: 'floorWall' },
+    { code: 'df-cs', location: 'ceilingZone', roomId: 'r1', zoneId: 'z1', slot: 'ceilingStep' },
+    { code: 'df-cs2', location: 'ceilingZone', roomId: 'r2', zoneId: 'z4', slot: 'ceilingStep' },
+  ]);
+  assert.deepEqual([...collectUsedKeys(snapshot).detailFigure].sort(), ['df-cs', 'df-cs2', 'df-fw']);
+});
+
+test('walker（S8b-4a）: rewrite は区画の detailRefs も alias 表で書き換える。表に無い部屋・区画は同一参照・元は変えず、他の項目を保つ。to=null は据え置きで unresolved（location ceilingZone）へ', () => {
+  const walker = SNAPSHOT_REF_WALKERS[DF];
+  const snapshot = {
+    rooms: [
+      { id: 'r1', name: 'LDK', detailRefs: { floorWall: 'df-old' }, ceilingZones: [
+        { id: 'z1', heightMm: 2100, detailRefs: { ceilingStep: 'df-old' } },
+        { id: 'z2', heightMm: 2200, detailRefs: { ceilingStep: 'df-keep' } },
+      ] },
+      { id: 'r2', name: '寝室', detailRefs: null, ceilingZones: [{ id: 'z3', detailRefs: { ceilingStep: 'df-old' } }] },
+      { id: 'r3', name: '納戸', detailRefs: null, ceilingZones: [{ id: 'z4', detailRefs: { ceilingStep: 'df-keep' } }] },
+    ],
+  };
+  const before = JSON.stringify(snapshot);
+  const { snapshot: next, unresolved } = walker.rewrite(snapshot, new Map([['df-old', 'df-new']]));
+  assert.deepEqual(next.rooms[0].ceilingZones[0], { id: 'z1', heightMm: 2100, detailRefs: { ceilingStep: 'df-new' } }, '他の項目を保つ');
+  assert.equal(next.rooms[0].ceilingZones[1], snapshot.rooms[0].ceilingZones[1], '表に無い区画は同一参照');
+  assert.equal(next.rooms[0].name, 'LDK');
+  assert.deepEqual(next.rooms[0].detailRefs, { floorWall: 'df-new' }, '部屋の割当てと両立する');
+  assert.deepEqual(next.rooms[1].ceilingZones[0].detailRefs, { ceilingStep: 'df-new' }, '部屋に detailRefs が無くても区画は書き換わる');
+  assert.equal(next.rooms[2], snapshot.rooms[2], '表に無い部屋は同一参照');
+  assert.deepEqual(unresolved, []);
+  assert.equal(JSON.stringify(snapshot), before, '元のスナップショットを書き換えない');
+  assert.equal(walker.rewrite(snapshot, new Map([['df-x', 'df-y']])).snapshot, snapshot);
+  const dropped = walker.rewrite({ rooms: snapshot.rooms }, new Map([['df-old', null]]));
+  assert.deepEqual(dropped.snapshot.rooms[1].ceilingZones[0].detailRefs, { ceilingStep: 'df-old' });
+  assert.deepEqual(dropped.unresolved, [
+    { code: 'df-old', location: 'room', roomId: 'r1', slot: 'floorWall' },
+    { code: 'df-old', location: 'ceilingZone', roomId: 'r1', zoneId: 'z1', slot: 'ceilingStep' },
+    { code: 'df-old', location: 'ceilingZone', roomId: 'r2', zoneId: 'z3', slot: 'ceilingStep' },
+  ]);
+});
+
 test('【失敗系】walker（S6a）: detailFigure への alias は積める（rewrite がある）。循環は従来どおり例外。applyDocumentCodeNormalization が detailRefs を書き換える', () => {
   assert.doesNotThrow(() => setDocumentAliases(DF, { 'df-1': 'df-2' }));
   const snap = { openings: [{ id: 'o1', fixtureType: 'WF', detailRefs: { jamb: 'df-1' } }] };

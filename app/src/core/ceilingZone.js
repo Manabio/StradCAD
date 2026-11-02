@@ -13,9 +13,10 @@
  *   Z3: heightMm＝部屋の FL からの天井高（null＝部屋の CH）。部屋の CH 欄（仕上げ表）には書かない。
  */
 import { CeilingShape } from './constants.js';
+import { normalizeDetailRefs } from './detailRefs.js';
 
 /** CeilingZone の項目集合（toData() のキーと一致する。唯一の定義）。 */
-export const CEILING_ZONE_KEYS = Object.freeze(['id', 'cells', 'heightMm', 'shape', 'dims']);
+export const CEILING_ZONE_KEYS = Object.freeze(['id', 'cells', 'heightMm', 'shape', 'dims', 'detailRefs']);
 
 const finite = v => typeof v === 'number' && Number.isFinite(v);
 
@@ -64,20 +65,21 @@ function normalizeCells(cells) {
 
 export class CeilingZone {
   /**
-   * @param {{id: string, cells?: Iterable<string>, heightMm?: number|null, shape?: string, dims?: number[]}} init
+   * @param {{id: string, cells?: Iterable<string>, heightMm?: number|null, shape?: string, dims?: number[], detailRefs?: object|null}} init
    */
-  constructor({ id, cells = [], heightMm = null, shape = CeilingShape.FLAT, dims = [] }) {
+  constructor({ id, cells = [], heightMm = null, shape = CeilingShape.FLAT, dims = [], detailRefs = null }) {
     this.id = id;                              // 区画 id（部屋の中で一意。uuid）
     this.cells = normalizeCells(cells);        // セルキー（重複なし・昇順）
     this.heightMm = heightMm;                  // 部屋の FL からの天井高 mm | null（null＝部屋の CH）
     this.shape = shape;                        // CeilingShape
     this.dims = Object.freeze([...dims]);      // 形状の寸法（個数・意味は CEILING_SHAPE_DIM_COUNT）
+    this.detailRefs = normalizeDetailRefs(detailRefs); // 部分詳細図の割当て {[slot]: キー}|null（天井の段差 ceilingStep。区画どうしは低い側が持つ）
     Object.freeze(this);
   }
 
-  /** 直列化・undo・FBS が共通して使う plain object 表現。項目集合の定義をここへ集約する。 */
+  /** 直列化・undo・FBS が共通して使う plain object 表現。項目集合の定義をここへ集約する（detailRefs は null でも常に入れる）。 */
   toData() {
-    return { id: this.id, cells: [...this.cells], heightMm: this.heightMm, shape: this.shape, dims: [...this.dims] };
+    return { id: this.id, cells: [...this.cells], heightMm: this.heightMm, shape: this.shape, dims: [...this.dims], detailRefs: this.detailRefs };
   }
 
   /**
@@ -95,6 +97,7 @@ export class CeilingZone {
       heightMm: finite(d.heightMm) && d.heightMm > 0 ? d.heightMm : null,
       shape,
       dims,
+      detailRefs: d.detailRefs,
     });
   }
 

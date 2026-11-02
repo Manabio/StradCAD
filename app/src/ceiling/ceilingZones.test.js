@@ -224,3 +224,22 @@ test('【失敗系】天井芯を削除すると、天井 key の区画は解け
   assert.deepEqual(normalizeZones(graph, room), [], '解けた key が無く区画が消える');
   assert.deepEqual(assignZoneHeight(graph, room, [left], 3000).length, 0, '解けない key へは区画を足さない');
 });
+
+// ---- 区画の detailRefs（天井の段差。S8b-4a）: 区画の書込みの口が割当てを運ぶ ----
+test('detailRefs（S8b-4a）: updateZoneSpec／normalizeZones（withCells）／createZone による他区画の差し引きは、区画の割当てを保つ。createZone の新しい区画は割当て無し', () => {
+  const { graph, room, c0, c1, c2 } = setup();
+  const created = createZone(graph, room, [c0, c1], { heightMm: 2100, shape: 'flat', dims: [] });
+  const withRefs = created.zones.map(z => new CeilingZone({ ...z.toData(), detailRefs: { ceilingStep: 'df-cs' } }));
+  room.setCeilingZones(withRefs);
+  const id = withRefs[0].id;
+  const updated = updateZoneSpec(graph, room, id, { heightMm: 2300, shape: 'flat', dims: [] });
+  assert.deepEqual(updated[0].detailRefs, { ceilingStep: 'df-cs' }, '高さの確定で保つ');
+  assert.equal(updated[0].heightMm, 2300);
+  assert.deepEqual(normalizeZones(graph, room)[0].detailRefs, { ceilingStep: 'df-cs' }, '正規化（withCells）で保つ');
+  const next = createZone(graph, room, [c1, c2], { heightMm: 1900, shape: 'flat', dims: [] }); // c1 を奪う（subtractKeys の withCells）
+  const old = next.zones.find(z => z.id === id);
+  assert.deepEqual([old.cells, old.detailRefs], [[c0], { ceilingStep: 'df-cs' }], 'セルを奪われても割当ては残る');
+  assert.equal(next.zones.find(z => z.id === next.zoneId).detailRefs, null, '新しい区画は割当て無し');
+  const spec = updateZoneSpec(graph, room, id, { heightMm: null, shape: 'flat', dims: [] });
+  assert.deepEqual(spec[0].detailRefs, { ceilingStep: 'df-cs' }, '【失敗系】更新を弾く入力（平面で高さ null）は元のまま');
+});

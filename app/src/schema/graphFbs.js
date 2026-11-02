@@ -156,10 +156,11 @@ const RS = {
 // SPEC は RS テーブルの入れ子（下屋・主屋根と共用の writeRoofSpec/readRoofSpec）。正規化は復元側の restoreRoofZones。
 const RZ = { ID: 0, CELLS: 1, SPEC: 2 };
 
-// CeilingZone（天井区画。Room.ceilingZones）: 6 フィールド。項目集合は core/ceilingZone.js の CEILING_ZONE_KEYS が唯一の定義。
+// CeilingZone（天井区画。Room.ceilingZones）: 8 フィールド。項目集合は core/ceilingZone.js の CEILING_ZONE_KEYS が唯一の定義。
 // HAS_HEIGHT/HEIGHT は floorLevel と同じ HAS 方式（heightMm null＝部屋の CH）。SHAPE は 'flat' 以外のときだけ書く（無ければ読みは 'flat'）。
 // DIMS（f64 vector）は空でないときだけ書く。正規化は復元側の restoreCeilingZones。
-const CZ = { ID: 0, CELLS: 1, HAS_HEIGHT: 2, HEIGHT: 3, SHAPE: 4, DIMS: 5 };
+// DETAIL_KEYS/DETAIL_VALS（部分詳細図の割当て。天井の段差 ceilingStep。S8b-4a）は割当てがあるときだけ書く（旧ビルドで開いて保存すると消える片方向互換）。
+const CZ = { ID: 0, CELLS: 1, HAS_HEIGHT: 2, HEIGHT: 3, SHAPE: 4, DIMS: 5, DETAIL_KEYS: 6, DETAIL_VALS: 7 };
 
 // Room: 34 フィールド
 const RM = {
@@ -789,13 +790,18 @@ function writeCeilingZone(b, z) {
   const cellsVec  = writeStrVec(b, z.cells ?? []);
   const sShape    = z.shape && z.shape !== 'flat' ? b.createString(z.shape) : 0; // flat は書かない
   const dimsVec   = z.dims?.length ? writeF64Vec(b, z.dims) : 0;                  // 空は書かない
-  b.startObject(6);
+  const detailEntries = Object.entries(normalizeDetailRefs(z.detailRefs) ?? {});
+  const detailKeysVec = detailEntries.length > 0 ? writeStrVec(b, detailEntries.map(([slot]) => slot)) : 0;
+  const detailValsVec = detailEntries.length > 0 ? writeStrVec(b, detailEntries.map(([, key]) => key)) : 0;
+  b.startObject(8);
   b.addFieldOffset(CZ.ID,         sId,      0);
   b.addFieldOffset(CZ.CELLS,      cellsVec, 0);
   b.addFieldInt8(CZ.HAS_HEIGHT,   z.heightMm != null ? 1 : 0, 0);
   b.addFieldFloat64(CZ.HEIGHT,    z.heightMm ?? 0.0, 0.0);
   b.addFieldOffset(CZ.SHAPE,      sShape,   0);
   b.addFieldOffset(CZ.DIMS,       dimsVec,  0);
+  b.addFieldOffset(CZ.DETAIL_KEYS, detailKeysVec, 0);
+  b.addFieldOffset(CZ.DETAIL_VALS, detailValsVec, 0);
   return b.endObject();
 }
 
@@ -1620,6 +1626,7 @@ function readCeilingZone(bb, tablePos) {
     heightMm: r.i8(CZ.HAS_HEIGHT) ? r.f64(CZ.HEIGHT) : null,
     shape:    r.str(CZ.SHAPE) || 'flat',
     dims:     r.f64Vec(CZ.DIMS),
+    detailRefs: readDetailRefs(r.strVec(CZ.DETAIL_KEYS), r.strVec(CZ.DETAIL_VALS)),
   };
 }
 

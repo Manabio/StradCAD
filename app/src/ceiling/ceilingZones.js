@@ -11,6 +11,8 @@
 import { CeilingZone, CeilingShape } from '@core';
 import { ceilingRefreshCells } from './ceilingGrid.js';
 import { isEmptyCeilingZone, normalizeCeilingShape } from '../core/ceilingZone.js';
+import { CEILING_ZONE_DETAIL_SLOTS } from '../core/constants.js';
+import { withDetailRef } from '../core/detailRefs.js';
 
 const isValidHeight = mm => typeof mm === 'number' && Number.isFinite(mm) && mm > 0;
 
@@ -78,7 +80,13 @@ export function updateZoneSpec(graph, room, zoneId, { heightMm, shape, dims }) {
   if (!zones.some(z => z.id === zoneId) || (heightMm !== null && !isValidHeight(heightMm))) return zones;
   const spec = normalizeCeilingShape(shape, dims);
   if (heightMm === null && spec.shape === CeilingShape.FLAT) return zones;
-  return zones.map(z => (z.id === zoneId ? new CeilingZone({ ...z.toData(), heightMm, shape: spec.shape, dims: spec.dims }) : z));
+  // 平面以外には天井の段差が定義できない＝割当てを落とす（腰壁・垂れ壁を外すと対応 slot を落とす前例と同じ）
+  const detailRefsFor = z => (spec.shape === CeilingShape.FLAT
+    ? z.detailRefs
+    : CEILING_ZONE_DETAIL_SLOTS.reduce((refs, slot) => withDetailRef(refs, slot, null), z.detailRefs));
+  return zones.map(z => (z.id === zoneId
+    ? new CeilingZone({ ...z.toData(), heightMm, shape: spec.shape, dims: spec.dims, detailRefs: detailRefsFor(z) })
+    : z));
 }
 
 /** 区画 zoneId を消した後の、部屋の区画配列（セルは部屋の残りへ戻る）。部屋 null は []。未知の zoneId は変更なし。 */

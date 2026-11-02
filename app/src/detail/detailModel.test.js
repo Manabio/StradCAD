@@ -227,7 +227,7 @@ test('列挙: DETAIL_SLOT_TARGETS の全エントリが DETAIL_VIEW_COMBOS に�
   for (const [slot, t] of Object.entries(DETAIL_SLOT_TARGETS)) {
     assert.ok(DETAIL_VIEW_COMBOS.some(c => c.category === t.category && c.view === t.view && c.subject === t.subject), `${slot} が組合せ表に無い`);
   }
-  assert.equal(Object.keys(DETAIL_SLOT_TARGETS).length, 12); // jamb/head/sill/sashSection/nageshi/shikii + figure（S6b）+ floorWall/wallCeiling（S8a）+ kneeTop/dropBottom（S8b-1）+ floorStep（S8b-3）
+  assert.equal(Object.keys(DETAIL_SLOT_TARGETS).length, 13); // jamb/head/sill/sashSection/nageshi/shikii + figure（S6b）+ floorWall/wallCeiling（S8a）+ kneeTop/dropBottom（S8b-1）+ floorStep（S8b-3）+ ceilingStep（S8b-4a）
 });
 
 test('列挙: DETAIL_VIEW_COMBOS は 27 組・重複なし・全要素が既知の語彙', () => {

@@ -605,9 +605,18 @@ function enumerateDetailFigureRefs(snapshot) {
   // 部屋の取り合い（rooms[].detailRefs。S8a）
   for (const room of snapshot.rooms ?? []) {
     const detailRefs = room?.detailRefs;
-    if (detailRefs === null || typeof detailRefs !== 'object') continue;
-    for (const [slot, key] of Object.entries(detailRefs)) {
-      if (typeof key === 'string' && key !== '') refs.push({ code: key, location: 'room', roomId: room.id, slot });
+    if (detailRefs !== null && typeof detailRefs === 'object') {
+      for (const [slot, key] of Object.entries(detailRefs)) {
+        if (typeof key === 'string' && key !== '') refs.push({ code: key, location: 'room', roomId: room.id, slot });
+      }
+    }
+    // 天井区画の割当て（rooms[].ceilingZones[].detailRefs。S8b-4a。location 'ceilingZone'・roomId・zoneId・slot）
+    for (const zone of Array.isArray(room?.ceilingZones) ? room.ceilingZones : []) {
+      const zoneRefs = zone?.detailRefs;
+      if (zoneRefs === null || typeof zoneRefs !== 'object') continue;
+      for (const [slot, key] of Object.entries(zoneRefs)) {
+        if (typeof key === 'string' && key !== '') refs.push({ code: key, location: 'ceilingZone', roomId: room.id, zoneId: zone.id, slot });
+      }
     }
   }
   // 腰壁・垂れ壁の記録（kneeDropWalls[].detailRefs。S8b-1。location 'kneeDrop'・key＝区間のキー・slot）
@@ -645,20 +654,31 @@ function normalizeKneeDropDetailRefs(walls, table, unresolved) {
 function normalizeRoomDetailRefs(rooms, table, unresolved) {
   if (!Array.isArray(rooms)) return rooms;
   let changedAny = false;
-  const next = rooms.map(room => {
-    const detailRefs = room?.detailRefs;
-    if (detailRefs === null || typeof detailRefs !== 'object') return room;
+  // holder（部屋または区画）の detailRefs を読み替える。変わらなければ holder をそのまま返す
+  const mapHolder = (holder, where) => {
+    const detailRefs = holder?.detailRefs;
+    if (detailRefs === null || typeof detailRefs !== 'object') return holder;
     let changed = false;
     const mappedRefs = {};
     for (const [slot, key] of Object.entries(detailRefs)) {
       if (typeof key !== 'string' || key === '') { mappedRefs[slot] = key; continue; }
-      const mapped = normalizeCode(key, table, unresolved, { location: 'room', roomId: room.id, slot });
+      const mapped = normalizeCode(key, table, unresolved, { ...where, slot });
       mappedRefs[slot] = mapped;
       if (mapped !== key) changed = true;
     }
-    if (!changed) return room;
+    return changed ? { ...holder, detailRefs: mappedRefs } : holder;
+  };
+  const next = rooms.map(room => {
+    const mappedRoom = mapHolder(room, { location: 'room', roomId: room?.id });
+    // 天井区画（rooms[].ceilingZones[].detailRefs。S8b-4a。location 'ceilingZone'・roomId・zoneId）
+    let zones = mappedRoom?.ceilingZones;
+    if (Array.isArray(zones)) {
+      const mappedZones = zones.map(zone => mapHolder(zone, { location: 'ceilingZone', roomId: room?.id, zoneId: zone?.id }));
+      if (mappedZones.some((z, i) => z !== zones[i])) zones = mappedZones;
+    }
+    if (mappedRoom === room && zones === room?.ceilingZones) return room;
     changedAny = true;
-    return { ...room, detailRefs: mappedRefs };
+    return zones === mappedRoom?.ceilingZones ? mappedRoom : { ...mappedRoom, ceilingZones: zones };
   });
   return changedAny ? next : rooms;
 }

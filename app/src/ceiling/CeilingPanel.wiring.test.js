@@ -18,9 +18,16 @@ test('【配線】区画の確定は withFinishUndo で room.setCeilingZones(upd
 
 test('【配線】区画の解除は withFinishUndo で room.setCeilingZones(removeZone(...)) を包み、markDirty する。区画の書込みは withFinishUndo の中だけ', () => {
   assert.match(src, /^\s*withFinishUndo\(graph, \(\) => room\.setCeilingZones\(removeZone\(graph, room, zone\.id\)\)\);\s*$/m);
-  assert.equal(count(/^\s*markDirty\(\);\s*$/gm), 4, '区画の確定・解除と部屋の確定と屋外の天井チェックでそれぞれ markDirty（行の材の書込み・階段裏の仕上げは onChange 内の1行で markDirty）');
-  assert.equal(count(/room\.setCeilingZones\(/g), 2, '区画の書込みは確定と解除の2か所だけで、どちらも withFinishUndo の中');
-  assert.equal(count(/withFinishUndo\(/g), 5, '書込みは 区画の確定・解除・部屋の確定・行の材・屋外の天井チェック の5か所の withFinishUndo だけ');
+  assert.equal(count(/^\s*markDirty\(\);\s*$/gm), 5, '区画の確定・解除・天井の段差の選択と部屋の確定と屋外の天井チェックでそれぞれ markDirty（行の材の書込み・階段裏の仕上げは onChange 内の1行で markDirty）');
+  assert.equal(count(/room\.setCeilingZones\(/g), 3, '区画の書込みは確定・解除・天井の段差の選択の3か所だけで、どれも withFinishUndo の中');
+  assert.equal(count(/withFinishUndo\(/g), 6, '書込みは 区画の確定・解除・天井の段差の選択・部屋の確定・行の材・屋外の天井チェック の6か所の withFinishUndo だけ');
+});
+
+test('【配線】S8b-4a: 区画欄の「天井の段差」は ceilingStepSelects の select で、確定は zonesAfterCeilingStepSelect を withFinishUndo で包み markDirty。平面でない区画は disabled', () => {
+  assert.match(src, /^\s*withFinishUndo\(graph, \(\) => room\.setCeilingZones\(zonesAfterCeilingStepSelect\(graph, room, zone\.id, slot, key\)\)\);\s*$/m);
+  assert.match(src, /ceilingStepSelects\(zone\)\.map\(sel => \(/);
+  assert.match(src, /disabled=\{!isCeilingStepEditable\(zone\)\}/);
+  assert.match(src, /onChange=\{e => selectDetail\(sel\.slot, e\.target\.value\)\}/);
 });
 
 test('【配線】S10: 材の書込み（setOverride／clearOverride）は行の onChange の1か所だけで、withFinishUndo の中。部屋を直引きしない', () => {

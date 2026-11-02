@@ -6,15 +6,16 @@
 //   kneeDropPartEnvelope         fit → 見る側の向きに合わせた包絡線（表の側と反対から見るときは壁の中心で鏡像）
 //   collectKneeDropPartFailures  未解決キー・fit 失敗の集計（仕上げ init・展開 init の通知）
 // 床の段差（Room.detailRefs の floorStep。S8b-3）: resolveRoomPartFigure／fitFloorStepPart／floorStepEnvelope／collectFloorStepFailures。
+// 天井の段差（CeilingZone／Room.detailRefs の ceilingStep。S8b-4a）: resolveCeilingStepFigure／fitCeilingStepPart／ceilingStepEnvelope／collectCeilingStepFailures。
 // 失敗は例外にしない（{error}・null・集計の行）。
 // ================================================================
 
 import { KNEE_DROP_DETAIL_SLOTS, DetailSlot } from '../core/constants.js';
 import { kneeDropFrontSideOf } from '../core/kneeDropRecord.js';
-import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, detailOwnerKneeDrop, detailOwnerRoom } from '../error.js';
+import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, detailOwnerKneeDrop, detailOwnerRoom, detailOwnerCeilingZone } from '../error.js';
 import { detailFigureEntry, detailFitKey, fitDetailLocalMemo } from '../openings/openingCatalog.js';
 import { computeEnvelope } from '../detail/detailPlacement.js';
-import { partTargets, floorStepTargets } from './roomDetailTargets.js';
+import { partTargets, floorStepTargets, ceilingStepTargets } from './roomDetailTargets.js';
 import { wallAssemblyThicknessMm } from './roomDetailJunction.js';
 import { kneeDropWallGeometry } from './kneeDropWall.js';
 import { buildCellToRoom } from './edgeClassify.js';
@@ -138,6 +139,83 @@ export function collectFloorStepFailures(graph, seen = new Set(), { materialMap 
       if (fitted.error) {
         push(`${detailFitKey({ figureKey: r.key, slot, dims: { stepHeight: stepHeightMm } })}|room|${room.id}`,
           r.entry.label || r.key, fitted.error.message, { stepHeightMm });
+      }
+    }
+  }
+  return failures;
+}
+
+// ---- 天井の段差（ceilingStep。S8b-4a。持ち主は低い側の天井面＝区画 CeilingZone.detailRefs か部屋 Room.detailRefs）----
+
+/**
+ * 天井の段差の割当てを図のエントリへ解決する。持ち主は zone があれば区画、無ければ部屋（区画から部屋への継承はしない）。
+ * @param {{room?:object|null, zone?:object|null, entryOf?:(key:string)=>object|null}} p
+ * @returns {null | {key:string, slot:string, entry:object|null}} null＝割当て無し。entry が null＝参照切れ（カタログに無い）
+ */
+export function resolveCeilingStepFigure({ room = null, zone = null, entryOf = detailFigureEntry }) {
+  return resolveRoomPartFigure({ room: zone ?? room, slot: DetailSlot.CEILING_STEP, entryOf });
+}
+
+/**
+ * 天井の段差の図を段差高に合わせた局所座標のストローク列（fitLocal の結果）。失敗は {error:{code,message}}（例外にしない）。
+ * メモは fitDetailLocalMemo と共有（鍵は図のキー・slot・段差高）。材未解決の結果はメモしない。
+ * @param {{figureKey:string, stepHeightMm:number, materialMap?:object|null}} p
+ */
+export function fitCeilingStepPart({ figureKey, stepHeightMm, materialMap = null }) {
+  return fitDetailLocalMemo({
+    figureKey, slot: DetailSlot.CEILING_STEP, dims: { stepHeight: stepHeightMm },
+    targetsOf: (entry, dims) => ceilingStepTargets(entry, { stepHeightMm: dims.stepHeight, materialMap }),
+  });
+}
+
+/**
+ * 段差高 stepHeightMm の天井の段差の包絡線。参照切れ・fit 失敗は null（従来の描き方）。
+ * @param {{room?:object|null, zone?:object|null, stepHeightMm:number, materialMap?:object|null, entryOf?:(key:string)=>object|null}} p
+ *   zone があれば区画の割当て・無ければ room（低い側の持ち主）
+ * @returns {null | {steps:{t:number, weight:string}[], outline:number[][], maxDeviationMm:number}}
+ */
+export function ceilingStepEnvelope({ room = null, zone = null, stepHeightMm, materialMap = null, entryOf = detailFigureEntry }) {
+  const r = resolveCeilingStepFigure({ room, zone, entryOf });
+  if (!r?.entry) return null;
+  const fitted = fitCeilingStepPart({ figureKey: r.key, stepHeightMm, materialMap });
+  if (fitted.error) return null;
+  return computeEnvelope(fitted.strokes, DetailSlot.CEILING_STEP, { tMinMm: -stepHeightMm }); // 高い側の天井面より上は定義域の外
+}
+
+/**
+ * graph の部屋・区画の ceilingStep について、図が見つからない・段差高に合わせられない組を集める。floorStep と同形の行
+ * （部屋単位の主語は部屋・区画の主語は「部屋「X」の区画n」。roomId・zoneId を持つ）。試す段差高は stepHeightsOf(部屋, 区画|null)＝その持ち主が低い側に
+ * なる段差の高さ（呼び出し側が ceiling/ceilingSurfaces.js ceilingStepHeightsByOwner で供給。finish/ は ceiling/ を引かない）。
+ * 重複排除の鍵 seen は階をまたいで共有できる（破壊的に更新する）。
+ * @param {object|null} graph
+ * @param {Set<string>} [seen]
+ * @param {{materialMap?:object|null, entryOf?:(key:string)=>object|null, stepHeightsOf?:(room:object, zone:object|null)=>number[]}} [opts]
+ */
+export function collectCeilingStepFailures(graph, seen = new Set(), { materialMap = null, entryOf = detailFigureEntry, stepHeightsOf = () => [] } = {}) {
+  const failures = [];
+  const slot = DetailSlot.CEILING_STEP;
+  for (const room of graph?.rooms ?? []) {
+    const holders = [{ zone: null, owner: detailOwnerRoom(room.name) }]
+      .concat((room.ceilingZones ?? []).map((zone, i) => ({ zone, owner: detailOwnerCeilingZone(room.name, i + 1) })));
+    for (const { zone, owner } of holders) {
+      const r = resolveCeilingStepFigure({ room, zone, entryOf });
+      if (!r) continue;
+      const holderKey = zone ? `zone|${room.id}|${zone.id}` : `room|${room.id}`;
+      const push = (key, label, reason, extra) => {
+        if (seen.has(key)) return;
+        seen.add(key);
+        failures.push({ key, symbolKey: owner, slot, label, reason, message: ERR_DETAIL_FIT_FAILED(label, owner, reason, slot), roomId: room.id, zoneId: zone?.id ?? null, ...extra });
+      };
+      if (!r.entry) {
+        push(`notFound|${holderKey}|${slot}|${r.key}`, r.key, ERR_DETAIL_FIGURE_NOT_FOUND(owner, slot));
+        continue;
+      }
+      for (const stepHeightMm of stepHeightsOf(room, zone)) {
+        const fitted = fitCeilingStepPart({ figureKey: r.key, stepHeightMm, materialMap });
+        if (fitted.error) {
+          push(`${detailFitKey({ figureKey: r.key, slot, dims: { stepHeight: stepHeightMm } })}|${holderKey}`,
+            r.entry.label || r.key, fitted.error.message, { stepHeightMm });
+        }
       }
     }
   }

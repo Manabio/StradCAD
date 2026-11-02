@@ -9,9 +9,10 @@ import { makeRoomUndefined } from '../finish/roomUndefined.js';
 import { normalizePartialDominance } from '../finish/roomReinterpret.js';
 import { createZone, updateZoneSpec, removeZone } from './ceilingZones.js';
 import { ceilingSurfacesOf } from './ceilingSurfaces.js';
+import { zonesAfterCeilingStepSelect } from './ceilingStepRefs.js';
 import { makeGrid, ARCH, rect, assignZoneHeight } from '../plan/planTestFixtures.js';
 
-const FULL = { id: 'z1', heightMm: 2700, shape: 'slope', dims: [1200, 270] };
+const FULL = { id: 'z1', heightMm: 2700, shape: 'slope', dims: [1200, 270], detailRefs: { ceilingStep: 'df-cs' } };
 
 test('不変条件: 仕上げ undo の snapshot の room.ceilingZones[0] のキー集合は CEILING_ZONE_KEYS と一致する', () => {
   const g = makeGrid([0, 1000], [0, 1000]);
@@ -163,4 +164,27 @@ test('normalizePartialDominance の前後で、セルごとの天井の高さは
   normalizePartialDominance(g.graph);
   assert.equal(partial.referenceRoomIds.size, 0, '前提: 親子が入れ替わった');
   assert.deepEqual(zByRect(), before);
+});
+
+test('【S8b-4a】区画の天井の段差の選択（detailRefs）は withFinishUndo で 1 エントリ。undo で外れ、redo で戻る。差分が無い選択はエントリを積まない', () => {
+  const g = makeGrid([0, 1000, 2000], [0, 1000]);
+  const room = g.interior([[0, 0], [1, 0]]);
+  withFinishUndo(g.graph, () => room.setCeilingZones(assignZoneHeight(g.graph, room, [g.cell(0, 0)], 2100)));
+  const id = room.ceilingZones[0].id;
+  const base = undoManager._undoStack.length;
+  const select = key => withFinishUndo(g.graph, () => {
+    const live = g.graph.roomMap.get(room.id);
+    live.setCeilingZones(zonesAfterCeilingStepSelect(g.graph, live, id, 'ceilingStep', key));
+  });
+  select('df-cs');
+  assert.equal(undoManager._undoStack.length, base + 1);
+  assert.deepEqual(g.graph.roomMap.get(room.id).ceilingZones[0].detailRefs, { ceilingStep: 'df-cs' });
+  select('df-cs');
+  assert.equal(undoManager._undoStack.length, base + 1, '同じ値の選択は積まない');
+  undoManager.undo();
+  assert.equal(g.graph.roomMap.get(room.id).ceilingZones[0].detailRefs, null);
+  undoManager.redo();
+  assert.deepEqual(g.graph.roomMap.get(room.id).ceilingZones[0].detailRefs, { ceilingStep: 'df-cs' });
+  assert.equal(g.graph.roomMap.get(room.id).ceilingZones[0].heightMm, 2100, '高さは保つ');
+  undoManager.undo(); undoManager.undo(); // 後始末
 });

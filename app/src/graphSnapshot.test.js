@@ -4,7 +4,7 @@ import {
   Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, RoomFeature, ExteriorLevelRef,
   DEFAULT_SHAFT_WALL_MATERIAL, DEFAULT_SHAFT_SOUNDPROOF, ShaftSoundproof, StairType,
   ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE, StructuralMaterialType, edgeKey,
-  RoofSpec, ROOF_SPEC_KEYS, isDefaultRoofSpec, CEILING_ZONE_KEYS, restoreCeilingZones,
+  RoofSpec, ROOF_SPEC_KEYS, isDefaultRoofSpec, CEILING_ZONE_KEYS, restoreCeilingZones, CeilingZone,
 } from './core.js';
 import { NON_DEFAULT_ROOF_SPEC } from './finish/roofTestFixtures.js';
 import { setExteriorCeilingEnabled, exteriorCeilingEnabled, EXTERIOR_CEILING_KEY } from './ceiling/exteriorCeiling.js';
@@ -3043,8 +3043,8 @@ test('【S5・S6a】FlatBuffers encode→decode: 区画（高さ null と有限�
   const restored = makeGraph();
   restoreGraph(restored, serializeGraph(graph));
   assert.deepEqual(restored.roomMap.get(living.id).ceilingZones.map(z => z.toData()), [
-    { id: 'za', cells: [cellA], heightMm: null, shape: 'dome', dims: [1200] },
-    { id: 'zb', cells: [cellB], heightMm: 2750.5, shape: 'slope', dims: [1500.5, 270] },
+    { id: 'za', cells: [cellA], heightMm: null, shape: 'dome', dims: [1200], detailRefs: null },
+    { id: 'zb', cells: [cellB], heightMm: 2750.5, shape: 'slope', dims: [1500.5, 270], detailRefs: null },
   ]);
   assert.deepEqual([...restored.roomMap.get(bed.id).ceilingZones], []);
   assert.ok(Object.isFrozen(restored.roomMap.get(living.id).ceilingZones));
@@ -3080,7 +3080,7 @@ test('【S8a】天井芯（discipline ceiling）の CL と、天井芯 id 入り
   assert.equal(back.labeled, false);
   assert.deepEqual([back.value, back.extentLo, back.extentHi], [500, 0, 1000]);
   assert.deepEqual(restored.roomMap.get(living.id).ceilingZones.map(z => z.toData()),
-    [{ id: 'zc', cells: [halfKey], heightMm: 2700, shape: 'slope', dims: [500, 90] }]);
+    [{ id: 'zc', cells: [halfKey], heightMm: 2700, shape: 'slope', dims: [500, 90], detailRefs: null }]);
   // 復元先のグラフは寸法線などを自動で足すため、全体のバイト列は元と一致しない（天井芯に限らない既存の性質）。
   // 比較は CL と部屋の部分（天井芯・区画が入る所）と、復元→書き出しの冪等性（2周目から先は変わらない）で行う。
   const snapBefore = decodeFloorSnapshot(bytes);
@@ -3149,13 +3149,69 @@ test('【S5・失敗系】旧データ（ceilingZones が無い snapshot）は [
   const restored = makeGraph();
   restoreGraph(restored, snapshot);
   assert.deepEqual(restored.roomMap.get(living.id).ceilingZones.map(z => z.toData()), [
-    { id: 'ok', cells: [cellA, cellB].sort(), heightMm: 2600, shape: 'flat', dims: [] },
+    { id: 'ok', cells: [cellA, cellB].sort(), heightMm: 2600, shape: 'flat', dims: [], detailRefs: null },
   ], '壊れた傾斜（ライズ 0・向き 45）は区画を捨てずセルと高さを残して flat・[] へ落ちる。id なしと指定なし（先の区画にセルも取られた）は捨てる');
 
   delete snapshot.rooms.find(r => r.id === living.id).ceilingZones; // 旧データ（キー自体が無い）
   const old = makeGraph();
   restoreGraph(old, snapshot);
   assert.deepEqual([...old.roomMap.get(living.id).ceilingZones], []);
+});
+
+// 居間（部屋 roomIdx）の 0 番目の区画テーブルの {vtable のバイト長, フィールド fieldNo の有無}。RM.CEILING_ZONES=31 の vector の先頭要素を直接読む。
+function zoneTableInfo(bytes, roomIdx, fieldNo) {
+  const bb = new ByteBuffer(bytes);
+  const root = bb.readInt32(bb.position()) + bb.position();
+  const roomsVec = root + bb.__offset(root, 4 + 9 * 2); // GS.ROOMS=9
+  const room = bb.__indirect(bb.__vector(roomsVec) + roomIdx * 4);
+  const zonesVec = room + bb.__offset(room, 4 + 31 * 2);
+  const zone = bb.__indirect(bb.__vector(zonesVec));
+  const vtable = zone - bb.readInt32(zone);
+  return { vtableBytes: bb.readInt16(vtable), has: bb.__offset(zone, 4 + fieldNo * 2) !== 0 };
+}
+
+test('【S8b-4a】区画の detailRefs（CZ 6/7）: 往復する。割当てが無い区画は書かず（vtable に 6・7 の枠が無い＝区画ありの既存文書のバイト列は不変）、割当てがあるときだけ書く', () => {
+  const noRefs = makeGraphWithZones(ZONES_FULL);
+  const idx = noRefs.graph.roomOrder.indexOf(noRefs.living.id);
+  const plainBytes = serializeGraph(noRefs.graph);
+  const none = zoneTableInfo(plainBytes, idx, 6);
+  assert.equal(none.has, false);
+  assert.equal(none.vtableBytes, 4 + 6 * 2, '割当て無しは従来どおりフィールド 0〜5 までの vtable（旧ビルドと同じバイト列）');
+  // 旧形式（detailRefs のキーが無い plain）の encode と一致する
+  const snap = decodeFloorSnapshot(plainBytes);
+  const withNull = [...encodeFloorSnapshot(snap)];
+  for (const r of snap.rooms) for (const z of r.ceilingZones ?? []) delete z.detailRefs;
+  assert.deepEqual([...encodeFloorSnapshot(snap)], withNull, 'detailRefs が null でもキー無しでも同じバイト列');
+
+  const withRefs = makeGraphWithZones(ZONES_FULL);
+  const [za, zb] = withRefs.living.ceilingZones;
+  const baseBytes = serializeGraph(withRefs.graph);
+  withRefs.living.setCeilingZones([new CeilingZone({ ...za.toData(), detailRefs: { ceilingStep: 'df-cs' } }), zb]);
+  const bytes = serializeGraph(withRefs.graph);
+  const some = zoneTableInfo(bytes, withRefs.graph.roomOrder.indexOf(withRefs.living.id), 6);
+  assert.equal(some.has, true, '対照: 割当てのある区画は書く（読み取りヘルパーが効いている）');
+  assert.ok(bytes.length > baseBytes.length);
+  const restored = makeGraph();
+  restoreGraph(restored, bytes);
+  assert.deepEqual(restored.roomMap.get(withRefs.living.id).ceilingZones.map(z => z.detailRefs), [{ ceilingStep: 'df-cs' }, null]);
+  // plain 経路（decode→JSON→restore）でも往復する
+  const viaPlain = makeGraph();
+  restoreGraph(viaPlain, JSON.parse(JSON.stringify(decodeFloorSnapshot(bytes))));
+  assert.deepEqual(viaPlain.roomMap.get(withRefs.living.id).ceilingZones.map(z => z.toData()), withRefs.living.ceilingZones.map(z => z.toData()));
+  // 割当てを外すと元のバイト列に戻る
+  withRefs.living.setCeilingZones([za, zb]);
+  assert.deepEqual([...serializeGraph(withRefs.graph)], [...baseBytes]);
+});
+
+test('【S8b-4a・失敗系】区画の detailRefs の壊れた値（空文字・非文字列）は復元で捨てられ、区画は残る', () => {
+  const { graph, living } = makeGraphWithZones(ZONES_FULL);
+  const snapshot = decodeFloorSnapshot(serializeGraph(graph));
+  const plain = snapshot.rooms.find(r => r.id === living.id);
+  plain.ceilingZones[0].detailRefs = { ceilingStep: '', other: 5 };
+  plain.ceilingZones[1].detailRefs = 'x';
+  const restored = makeGraph();
+  restoreGraph(restored, snapshot);
+  assert.deepEqual(restored.roomMap.get(living.id).ceilingZones.map(z => [z.id, z.detailRefs]), [['za', null], ['zb', null]]);
 });
 
 test('【S5】階の複製・検討案のコピー（serializeGraphWithFreshLineIds）では区画のセルの線 id も振り直され、部屋のセルと同じ新 id を指す', () => {
