@@ -16,7 +16,7 @@
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { composeCatalog, composeList, overlayGeneration } from '../catalog/catalogRegistry.js';
 import { DetailSlot, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
-import { fitLocal, DetailFitError } from '../detail/detailPlacement.js';
+import { fitLocal, DetailFitError, detailBuiltinFigures } from '../detail/detailPlacement.js';
 import { ERR_DETAIL_FIGURE_NOT_FOUND } from '../error.js';
 import { detailFrameTargets, detailElevationTargets, detailFrameFail, DetailFrameError } from './openingDetailFrame.js';
 
@@ -290,12 +290,15 @@ export function frameProfileFor(symbol) {
 let _detailFigureMap = null;
 let _detailFigureGen = -1;
 
-function detailFigureMap() {
+/**
+ * 詳細図の三層合成後の Map（本体の組込み＋ライブラリ＋文書同梱。読み取り専用）。detailFigure を同期で引く
+ * 全ての口（仕上げ・建具の割当て select・保守パネル・通知）がここを通す＝組込み層の供給は 1 箇所。
+ * @returns {Map<string, object>}
+ */
+export function detailFigureCatalog() {
   const gen = overlayGeneration();
   if (_detailFigureMap === null || _detailFigureGen !== gen) {
-    // 本体（builtin）は空＝detail/detailBuiltins.js が空である S1 の設計が前提。本体に標準の図が入ったら、
-    // [] ではなく kindDef(CatalogKind.DETAIL_FIGURE).loadBuiltin() の結果を渡す口に変えること。
-    _detailFigureMap = composeCatalog(CatalogKind.DETAIL_FIGURE, []);
+    _detailFigureMap = composeCatalog(CatalogKind.DETAIL_FIGURE, detailBuiltinFigures);
     _detailFigureGen = gen;
   }
   return _detailFigureMap;
@@ -304,7 +307,7 @@ function detailFigureMap() {
 /** 詳細図キー → エントリ（三層合成後。無ければnull）。 */
 export function detailFigureEntry(key) {
   if (typeof key !== 'string' || key === '') return null;
-  return detailFigureMap().get(key) ?? null;
+  return detailFigureCatalog().get(key) ?? null;
 }
 
 /**

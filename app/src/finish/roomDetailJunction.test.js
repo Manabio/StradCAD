@@ -59,7 +59,7 @@ test('roomWallThicknessesMm: 部屋が生成した壁の materialRange の幅を
 });
 
 test('wallAssemblyThicknessMm: 下地オーナー壁＋仕上げ薄壁は合併幅・単独壁は従来どおり・別軸や重ならない壁は混ぜない・空隙は全幅', () => {
-  const axis = { id: 'cl1' };
+  const axis = { id: 'cl1', centerLineType: CenterLineType.HORIZONTAL, effectiveValue: 0 };
   const wall = (c1, c2, mr, br = null, ax = axis) => ({ axisCL: ax, coord1: c1, coord2: c2, materialRange: mr, backingRange: br });
   const owner = wall(0, 4000, { lo: 0, hi: 72.5 }, { lo: -60, hi: 60 });
   const thin = wall(0, 4000, { lo: 60, hi: 72.5 }); // 仕上げ薄壁（下地なし・片側 12.5）
@@ -68,7 +68,9 @@ test('wallAssemblyThicknessMm: 下地オーナー壁＋仕上げ薄壁は合併�
   assert.equal(wallAssemblyThicknessMm(g([owner, thin]), owner), 132.5);
   assert.equal(wallAssemblyThicknessMm(g([thin]), thin), 12.5, '単独は従来どおり');
   assert.equal(wallAssemblyThicknessMm(g([wall(0, 4000, { lo: 0, hi: 90 })]), { ...thin, materialRange: { lo: 0, hi: 90 } }), 90);
-  assert.equal(wallAssemblyThicknessMm(g([owner, wall(0, 4000, { lo: 500, hi: 600 }, null, { id: 'cl2' })]), thin), 132.5, '別軸の壁は混ぜない');
+  assert.equal(wallAssemblyThicknessMm(g([owner, wall(0, 4000, { lo: 500, hi: 600 }, null, { id: 'cl2', centerLineType: CenterLineType.HORIZONTAL, effectiveValue: 500 })]), thin), 132.5, '別軸の壁は混ぜない');
+  const sameLineOtherId = { id: 'cl1b', centerLineType: CenterLineType.HORIZONTAL, effectiveValue: 0 };
+  assert.equal(wallAssemblyThicknessMm(g([owner, wall(0, 4000, { lo: 100, hi: 200 }, null, sameLineOtherId)]), thin), 200 + 60, '別 id でも同じ通りなら同じ組（座標で見る）');
   assert.equal(wallAssemblyThicknessMm(g([owner, wall(4000, 5000, { lo: 500, hi: 600 })]), thin), 132.5, 'スパンが重ならない壁は混ぜない（端が接するだけ）');
   const gap = wall(1000, 2000, { lo: 200, hi: 300 });
   assert.equal(wallAssemblyThicknessMm(g([thin, gap]), thin), 300 - 60, '空隙があっても lo〜hi の全幅');

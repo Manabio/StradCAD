@@ -21,7 +21,8 @@ import { loadDocument } from './loadDoc.mjs';
 import { dumpFloorBands, moveCenterLine, stripStructuralMembers } from './elevBandDump.mjs';
 
 const allArgs = process.argv.slice(2);
-const unknownOption = allArgs.find(a => a.startsWith('-') && a !== '--regen' && a !== '--strip-struct' && a !== '--struct' && !a.startsWith('--move='));
+const unknownOption = allArgs.find(a => a.startsWith('-') && a !== '--regen' && a !== '--strip-struct' && a !== '--struct'
+  && !a.startsWith('--move=') && !a.startsWith('--assign-floorwall='));
 if (unknownOption) {
   console.error(`unknown option: ${unknownOption}`);
   process.exit(1);
@@ -34,6 +35,7 @@ if (recomputeStruct && !allArgs.includes('--regen')) {
   process.exit(1);
 }
 const moveSpec = allArgs.find(a => a.startsWith('--move='))?.slice('--move='.length) ?? null;
+const assignFloorWall = allArgs.find(a => a.startsWith('--assign-floorwall='))?.slice('--assign-floorwall='.length) ?? null;
 const rawArgs = allArgs.filter(a => !a.startsWith('-'));
 const outDir = rawArgs[0] ?? path.join(import.meta.dirname, 'golden');
 const src = rawArgs[1] ?? 'D:/tatsuya/Download/11.stq';
@@ -76,6 +78,21 @@ if (recomputeStruct) {
   if (sweeps == null) console.error('[struct] 8 回で収束しなかった');
 }
 if (stripStruct) for (const g of project.graphMap.values()) stripStructuralMembers(g);
+if (assignFloorWall) {
+  // 全部屋の床と壁の取り合い（detailRefs.floorWall）へ組込みの詳細図を割り当てる（巾木 10×60 と既存の巾木線の一致検証用）。
+  const { runInAction } = await import('mobx');
+  const { setOverlay } = await import('../../src/catalog/catalogRegistry.js');
+  const { CatalogKind } = await import('../../src/catalog/catalogKinds.js');
+  const builtins = (await import('../../src/detail/detailBuiltins.js')).default;
+  const entry = builtins.find(e => e.key === assignFloorWall);
+  if (!entry) { console.error(`組込みの詳細図がありません: ${assignFloorWall}`); process.exit(1); }
+  setOverlay(CatalogKind.DETAIL_FIGURE, { user: [entry] });
+  let n = 0;
+  for (const g of project.graphMap.values()) {
+    for (const room of g.rooms) { runInAction(() => room.setDetailRefs({ floorWall: assignFloorWall })); n++; }
+  }
+  console.error(`[assign] floorWall=${assignFloorWall} を ${n} 部屋へ割当て`);
+}
 const tabs = project.orderedTabs;
 const summary = [];
 for (let i = 0; i < tabs.length; i++) {

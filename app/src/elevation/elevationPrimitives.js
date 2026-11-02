@@ -10,7 +10,7 @@
 import { CenterLineType, isGridCenterLine } from '@core';
 import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import {
-  ElevationLineRole, weightForRole, DEFAULT_NAME_GAP_MM, GAP_EPS_MM as PRIM_GAP_EPS, FLOAT_EPS,
+  ElevationLineRole, weightForRole, DEFAULT_NAME_GAP_MM, GAP_EPS_MM as PRIM_GAP_EPS, FLOAT_EPS, COORD_EPS_MM,
 } from './elevationStyle.js';
 import { graphList } from '../graphReadScope.js';
 
@@ -529,6 +529,34 @@ export function subtractRectsFromPrimitives(prims, rects) {
       continue;
     }
     out.push(p);
+  }
+  return out;
+}
+
+/**
+ * 同じ直線上の線分から区間 [lo, hi] を差し引く（subtractYRanges の一般化。取り合いの断面形の差し替えが使う）。
+ * axis='x' は垂直線 x=at（区間は y）・axis='y' は水平線 y=at（区間は x）。対象は type 'line' で、両端が at の COORD_EPS_MM 以内の線だけ
+ * （斜めの線・別の位置の線は触らない）。weight を渡すとその線種だけ。残りが無ければ線ごと消え、残りが2片なら2本になる。
+ * 元の配列は変えない。
+ * @param {object[]} prims
+ * @param {{axis:'x'|'y', at:number, lo:number, hi:number, weight?:string}} span
+ * @returns {object[]}
+ */
+export function subtractCollinearSpans(prims, { axis, at, lo, hi, weight }) {
+  const [a1, a2, c1, c2] = axis === 'x' ? ['x1', 'x2', 'y1', 'y2'] : ['y1', 'y2', 'x1', 'x2'];
+  const cut = [Math.min(lo, hi), Math.max(lo, hi)];
+  if (cut[1] - cut[0] <= COORD_EPS_MM) return prims.slice();
+  const out = [];
+  for (const p of prims) {
+    const onLine = p.type === 'line' && Math.abs(p[a1] - at) <= COORD_EPS_MM && Math.abs(p[a2] - at) <= COORD_EPS_MM
+      && (weight === undefined || p.weight === weight);
+    if (!onLine) { out.push(p); continue; }
+    const from = Math.min(p[c1], p[c2]), to = Math.max(p[c1], p[c2]);
+    const forward = p[c1] <= p[c2];
+    const piece = (s, e) => ({ ...p, [c1]: forward ? s : e, [c2]: forward ? e : s });
+    if (cut[1] <= from + COORD_EPS_MM || cut[0] >= to - COORD_EPS_MM) { out.push(p); continue; }
+    if (cut[0] > from + COORD_EPS_MM) out.push(piece(from, cut[0]));
+    if (cut[1] < to - COORD_EPS_MM) out.push(piece(cut[1], to));
   }
   return out;
 }

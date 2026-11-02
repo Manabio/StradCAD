@@ -17,6 +17,9 @@ import { moveParts } from './detailModel.js';
 
 export { fitDetailFigure as fitLocal, DetailFitError };
 export { computeEnvelope, EnvelopeWeight } from './detailEnvelope.js';
+// 本体標準の図（組込み層）。同期で組込みを要る読み出し口（openings/openingCatalog.js detailFigureCatalog）がここから引く。
+// catalogKinds.js の loadBuiltin は従来どおり detailBuiltins.js を動的 import する（catalog/ は静的に引かない）。
+export { default as detailBuiltinFigures } from './detailBuiltins.js';
 
 /**
  * 図の material 束縛（LenSpec.mode='material'）が指す材コード（空でない文字列のみ）の集合。部屋の取り合いの基準供給

@@ -103,8 +103,14 @@ test('登録表: 照合・比較・重複禁止の項目', () => {
   assert.deepEqual(def.overrideLockedFields, []);
 });
 
-test('登録表: loadBuiltin は空配列（本体に標準の詳細図は無い）', async () => {
-  assert.deepEqual(await kindDef(DF).loadBuiltin(), []);
+test('登録表: loadBuiltin は組込み 1 件（巾木 10×60・床と壁）で、validate と isSupported を通る', async () => {
+  const def = kindDef(DF);
+  const list = await def.loadBuiltin();
+  assert.deepEqual(list.map(e => [e.key, e.category, e.subject]), [['df-builtin-baseboard-10x60', 'junction', 'floorWall']]);
+  for (const entry of list) {
+    assert.doesNotThrow(() => def.validate(entry));
+    assert.equal(def.isSupported(entry), true);
+  }
 });
 
 test('validate: 有効な図は通る。浅い型検査の違反（必須欠落・型違い）は例外', () => {

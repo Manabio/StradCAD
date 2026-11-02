@@ -15,7 +15,7 @@
  */
 import { CenterLineType } from '@core';
 import { parseBaseboardHeightMm } from '../core/room.js';
-import { openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallContinuationBeyondFaceEnd, wallLessEndAt, openingsReachingCorner, cornerOpeningZRanges } from './elevationFaces.js';
+import { localXOf, openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallContinuationBeyondFaceEnd, wallLessEndAt, openingsReachingCorner, cornerOpeningZRanges } from './elevationFaces.js';
 import { openingSectionPrimitives, openingSectionWallRange, openingSectionOverhangMm } from '../openings/openingSection.js';
 import { openingTagPartsOf, effectiveHeight, effectiveSillHeight } from '../openings/openingNumbering.js';
 import { findCatalogEntry, isDoorlessMechanism } from '../openings/openingCatalog.js';
@@ -29,6 +29,8 @@ import {
   drawnRiserX, drawnCeilingRiserX, halfWallThicknessMm, drawnFloorProfileZAt, drawnFloorDeltaAt,
 } from './elevationFloorProfile.js';
 import { kneeDropRecordsOnAxis } from '../finish/kneeDropWall.js';
+import { DetailSlot, DETAIL_PRIM_SOURCE } from '../core/constants.js';
+import { junctionPlanForFace, junctionLineSpecs } from './elevationJunction.js';
 import { formatMaterialLabel } from '../finish/materials/materialLabel.js';
 import {
   ElevationLineRole, weightForRole, faceGapLimitMm,
@@ -88,10 +90,8 @@ export { formatMaterialLabel };
 // section/ からも引くため。既存の import 先（Band・Void・StairSequence・テスト）を変えず同名で再公開する。
 export { parseBaseboardHeightMm };
 
-/** face のローカルx座標（世界座標→面基準の変換。openingsOnFace等の結果に対して使う）。 */
-export function localXOf(face, worldCoord) {
-  return (worldCoord - face.originWorld) * face.dirSign;
-}
+// localXOf（世界座標→面基準のローカルx）は elevationFaces.js へ移した（elevationJunction.js と共用）。
+export { localXOf };
 
 /**
  * 面の区間端（先頭 or 末尾）の「床・天井の起点」を返す（問題修正2026-08その4改）。
@@ -775,10 +775,29 @@ export function buildFaceFigure(face, ctx) {
   // その面の平面に壁の実体が無い区間（巾木・壁2段書きの共通の述語）。
   const wallLessRuns = wallLessRunsOnFace(
     spans, drawnSpans, face.voidAbove?.selfLocal, wallCoverageGapsOnFace(face, graph), run);
+  // 部屋の取り合い（Room.detailRefs の floorWall・wallCeiling）の断面図から派生する水平線（S8a-2）。巾木を引かない帯
+  // （階段帯等＝skipBaseboard）では引かない。floorWall の fit が成った面は既存の巾木線を引かない（図が巾木を担う）。
+  const junctionPlan = skipBaseboard ? null : junctionPlanForFace(face, { graph, room, materialMap });
   appendBaseboard(prims, {
-    face, graph, room, run, segs, CH, skipBaseboard, openings, wallLessRuns, drawnX0, drawnXRun, floorYOf,
-    riserXAt, detailWeight,
+    face, graph, room, run, segs, CH, skipBaseboard: skipBaseboard || !!junctionPlan?.[DetailSlot.FLOOR_WALL],
+    openings, wallLessRuns, drawnX0, drawnXRun, floorYOf, riserXAt, detailWeight,
   });
+  if (junctionPlan) {
+    const specs = junctionLineSpecs(junctionPlan, {
+      face, graph, run, segs, openings, wallLessRuns, segCeilAbsAt,
+      ceilRiserXAt: i => drawnCeilingRiserX(segs, i, halfWallMm, CH),
+      hasCeilingProfile: Array.isArray(ceilingProfile) && ceilingProfile.length >= 2,
+    });
+    for (const sp of specs.floorWall) {
+      appendFloorOffsetLine(prims, {
+        face, graph, run, segs, heightMm: sp.heightMm, weight: weightForRole(sp.role), gaps: sp.gaps,
+        drawnX0, drawnXRun, floorYOf, riserXAt, source: DETAIL_PRIM_SOURCE,
+      });
+    }
+    for (const sp of specs.wallCeiling) {
+      for (const p of sp.pieces) prims.push(line(p.x0, p.y0, p.x1, p.y1, { weight: weightForRole(sp.role), source: DETAIL_PRIM_SOURCE }));
+    }
+  }
   appendWallLabels(prims, {
     face, graph, room, segs, CH, materialMap, skipWallLabel, scale, boundary, wallLessRuns, openings,
     floorYOf, riserXAt,
@@ -961,7 +980,7 @@ function appendFloorLines(prims, { segs, floorX0, floorXRun, riserXAt, floorYOf,
 /**
  * 区間（segs[i]）ごとの天井の絶対高さの解決関数群（円弧・傾斜・水平）。帯のCH以外には依存しない。
  */
-function ceilingResolversOf(CH) {
+export function ceilingResolversOf(CH) {
   // 天井断面線（問題修正2026-08）: 帯のCH1本の水平線ではなく、区間（エリア）ごとに
   // 「その区間の床断面（描画エリアFL）から、その区間の天井高さ(chMm)の距離」に描く。
   // CLをまたいで天井の絶対高さが異なる境界は段差＝縦線になり、その描画xは
@@ -1549,44 +1568,58 @@ function appendBaseboard(prims, {
       // （riser）の抑止の両方が自動的に効く。
       ...wallLessRuns.map(r => [r.lo, r.hi]),
     ].sort((a, b) => a[0] - b[0]);
-    // **巾木は壁面に沿う部材**（ユーザー指示2026-10-15）: 壁のない端部（hasWallAtLocal0/Run===false）では、面の壁が
-    // 面の端の外へ実際に続く範囲だけ、はね出しへ伸ばす（上限は端部の延長量＝drawnX0/Run が面の外へ出ている量）。
-    // 壁が面の端で終わる（続かない）端は従来どおり面の端で止める（2026-09「11'」B1）。壁のある端は従来どおり。
-    const baseboardBeyond0 = face.hasWallAtLocal0 === false
-      ? wallContinuationBeyondFaceEnd(face, graph, '0', Math.max(0, -drawnX0)) : 0;
-    const baseboardBeyondRun = face.hasWallAtLocalRun === false
-      ? wallContinuationBeyondFaceEnd(face, graph, 'Run', Math.max(0, drawnXRun - run)) : 0;
-    for (const [i, s] of segs.entries()) {
-      const y = floorYOf(s) - baseboardH;
-      // 新仕様「段差位置のCLオフセット」: 内部境界はriserXAt（床が低い側へ半壁厚ずらした位置）を使う。
-      // **面の端は床線と同じ描画基準（drawnX0/drawnXRun）を使う**——壁のない端部では床線・
-      // 天井線と同じだけ図の外へはね出す（ユーザー実機指摘2026-08「「5」D1・B1: 1階巾木、
-      // CLで終わらず、開いている壁にはね出し」）。s.loX/s.hiX は論理境界（CL）なので、
-      // そのまま使うと巾木だけがCLで止まり、はね出した床線との間に段が付く。
-      // **巾木は面自身の範囲(0..run)で止める**（ユーザー実機指摘2026-09「「11'」B1: 1000CL右の
-      // 壁エッジ外に巾木の線が出ている。巾木は壁のある所にしかない」）——壁のない端部のはね出し
-      // （床線・天井線が図の外へ続くことを示す表現）には壁が無いので巾木も無い。
-      // **CL（segs[i].loX/hiX）へ戻してはいけない**——巾木がCLで止まり、はね出した床線との間に
-      // 段が付く旧不具合の再発（2026-08の指摘）。否定されたのは「はね出しへ伸ばす」部分だけ。
-      // Math.max/minなのは階段帯のfloorSpanXクランプ（狭める方向）を壊さないため。
-      const segLo = i === 0 ? Math.max(drawnX0, -baseboardBeyond0 || 0) : riserXAt(i - 1);
-      const segHi = i === segs.length - 1 ? Math.min(drawnXRun, run + baseboardBeyondRun) : riserXAt(i);
-      let cursor = segLo;
-      for (const [gLo, gHi] of floorGaps) {
-        const cgLo = Math.max(gLo, segLo), cgHi = Math.min(gHi, segHi);
-        if (cgHi <= cgLo) continue; // この区間に重ならない開口
-        if (cgLo > cursor) prims.push(line(cursor, y, cgLo, y, { weight: detailWeight }));
-        cursor = Math.max(cursor, cgHi);
-      }
-      if (cursor < segHi) prims.push(line(cursor, y, segHi, y, { weight: detailWeight }));
+    appendFloorOffsetLine(prims, {
+      face, graph, run, segs, heightMm: baseboardH, weight: detailWeight, gaps: floorGaps,
+      drawnX0, drawnXRun, floorYOf, riserXAt,
+    });
+  }
+}
+
+/**
+ * 床断面線を heightMm だけ上へ平行移動した連続線（区間水平線＋段差の縦線）をprimsへ積む。gaps（[lo,hi]昇順）は途切れさせる区間。
+ * 巾木と取り合いの派生線（elevationJunction.js）が共有する。
+ */
+export function appendFloorOffsetLine(prims, {
+  face, graph, run, segs, heightMm, weight, gaps, drawnX0, drawnXRun, floorYOf, riserXAt, source,
+}) {
+  const extra = source ? { source } : {};
+  // **巾木は壁面に沿う部材**（ユーザー指示2026-10-15）: 壁のない端部（hasWallAtLocal0/Run===false）では、面の壁が
+  // 面の端の外へ実際に続く範囲だけ、はね出しへ伸ばす（上限は端部の延長量＝drawnX0/Run が面の外へ出ている量）。
+  // 壁が面の端で終わる（続かない）端は従来どおり面の端で止める（2026-09「11'」B1）。壁のある端は従来どおり。
+  const beyond0 = face.hasWallAtLocal0 === false
+    ? wallContinuationBeyondFaceEnd(face, graph, '0', Math.max(0, -drawnX0)) : 0;
+  const beyondRun = face.hasWallAtLocalRun === false
+    ? wallContinuationBeyondFaceEnd(face, graph, 'Run', Math.max(0, drawnXRun - run)) : 0;
+  for (const [i, s] of segs.entries()) {
+    const y = floorYOf(s) - heightMm;
+    // 新仕様「段差位置のCLオフセット」: 内部境界はriserXAt（床が低い側へ半壁厚ずらした位置）を使う。
+    // **面の端は床線と同じ描画基準（drawnX0/drawnXRun）を使う**——壁のない端部では床線・
+    // 天井線と同じだけ図の外へはね出す（ユーザー実機指摘2026-08「「5」D1・B1: 1階巾木、
+    // CLで終わらず、開いている壁にはね出し」）。s.loX/s.hiX は論理境界（CL）なので、
+    // そのまま使うと巾木だけがCLで止まり、はね出した床線との間に段が付く。
+    // **巾木は面自身の範囲(0..run)で止める**（ユーザー実機指摘2026-09「「11'」B1: 1000CL右の
+    // 壁エッジ外に巾木の線が出ている。巾木は壁のある所にしかない」）——壁のない端部のはね出し
+    // （床線・天井線が図の外へ続くことを示す表現）には壁が無いので巾木も無い。
+    // **CL（segs[i].loX/hiX）へ戻してはいけない**——巾木がCLで止まり、はね出した床線との間に
+    // 段が付く旧不具合の再発（2026-08の指摘）。否定されたのは「はね出しへ伸ばす」部分だけ。
+    // Math.max/minなのは階段帯のfloorSpanXクランプ（狭める方向）を壊さないため。
+    const segLo = i === 0 ? Math.max(drawnX0, -beyond0 || 0) : riserXAt(i - 1);
+    const segHi = i === segs.length - 1 ? Math.min(drawnXRun, run + beyondRun) : riserXAt(i);
+    let cursor = segLo;
+    for (const [gLo, gHi] of gaps) {
+      const cgLo = Math.max(gLo, segLo), cgHi = Math.min(gHi, segHi);
+      if (cgHi <= cgLo) continue; // この区間に重ならない開口
+      if (cgLo > cursor) prims.push(line(cursor, y, cgLo, y, { weight, ...extra }));
+      cursor = Math.max(cursor, cgHi);
     }
-    for (let i = 0; i + 1 < segs.length; i++) {
-      if (floorYOf(segs[i]) === floorYOf(segs[i + 1])) continue; // 天井高さ違いだけの境界に床段差は無い
-      const riserX = riserXAt(i);
-      if (floorGaps.some(([gLo, gHi]) => riserX > gLo && riserX < gHi)) continue; // 開口がまたぐ段差は途切れさせる
-      prims.push(line(riserX, floorYOf(segs[i]) - baseboardH, riserX, floorYOf(segs[i + 1]) - baseboardH,
-        { weight: detailWeight }));
-    }
+    if (cursor < segHi) prims.push(line(cursor, y, segHi, y, { weight, ...extra }));
+  }
+  for (let i = 0; i + 1 < segs.length; i++) {
+    if (floorYOf(segs[i]) === floorYOf(segs[i + 1])) continue; // 天井高さ違いだけの境界に床段差は無い
+    const riserX = riserXAt(i);
+    if (gaps.some(([gLo, gHi]) => riserX > gLo && riserX < gHi)) continue; // 開口がまたぐ段差は途切れさせる
+    prims.push(line(riserX, floorYOf(segs[i]) - heightMm, riserX, floorYOf(segs[i + 1]) - heightMm,
+      { weight, ...extra }));
   }
 }
 

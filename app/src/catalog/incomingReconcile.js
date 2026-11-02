@@ -214,8 +214,8 @@ export async function applyReconcilePlan(plan, {
   const skipped = [];
   for (const entry of plan.adds) {
     try {
-      // nextUser（ライブラリ）としか比べない。本体（builtin）とは比べない: detailFigure の本体は空
-      // （detailBuiltins.js = []）が前提。本体を持つ rewrite:null 種別を足すときは builtin とも比べること。
+      // nextUser（ライブラリ）としか比べない。本体（builtin）とは比べない: detailFigure の本体は固定キー（df-builtin-…）の組込みだけで、
+      // 取り込む図とキーが衝突しない前提。本体を持つ rewrite:null 種別を足すときは builtin とも比べること。
       assertNoDuplicate(kind, entry, nextUser);
     } catch (e) {
       skipped.push({ entry, reason: e.message });

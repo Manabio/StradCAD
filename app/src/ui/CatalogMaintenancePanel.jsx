@@ -5,8 +5,9 @@ import {
 } from '../catalog/catalogKinds.js';
 import { DetailSlot } from '../core/constants.js';
 import { parseMaterialCode } from '../catalog/materialCode.js';
-import { composeCatalog, docDiffMap, overlayFor, removeDocEntry } from '../catalog/catalogRegistry.js';
+import { docDiffMap, overlayFor, removeDocEntry } from '../catalog/catalogRegistry.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip, fieldLabel } from '../catalog/catalogDiffView.js';
+import { detailFigureCatalog } from '../openings/openingCatalog.js';
 import { saveUserCatalog } from '../storage/db.js';
 import { markDirty } from '../dirtyState.js';
 import { collectCurrentCatalogUsage } from '../store.js';
@@ -1660,9 +1661,8 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
     : new Set();
   const disabledReason = form ? fixtureSymbolRowDisabledReason({ isAdding, editState }) : null;
   const { showProfile } = fixtureSymbolFormFieldsFor(form);
-  // 詳細図の割当て先候補（三層合成後。overlayは毎レンダー取り直す＝上の行合成と同じ理由）。本体は空
-  // （openings/openingCatalog.js detailFigureMap と同じ前提）。
-  const detailFigureList = [...composeCatalog(CatalogKind.DETAIL_FIGURE, []).values()];
+  // 詳細図の割当て先候補（三層合成後＝組込み＋ライブラリ＋同梱。overlay は世代キーのメモで毎レンダー最新）。
+  const detailFigureList = [...detailFigureCatalog().values()];
 
   // QA指摘m5（2026-09-24再報告）: 材料タブと同じ2種類の併記——同梱差分（doc起源が本体と不一致。
   // オレンジ）と、標準を編集した行の本体値参考併記（非オレンジ）。
@@ -2907,8 +2907,8 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
     : new Set();
   const disabledReason = form ? openingSubTypeRowDisabledReason({ isAdding, editState }) : null;
   const { showChildRatio, showFireLeaves, showFireAngle, showSlideLayout } = openingSubTypeFormFieldsFor(form);
-  // 姿図の詳細図の割当て先候補（三層合成後。建具記号タブと同じく毎レンダー取り直す。本体は空）
-  const detailFigureList = [...composeCatalog(CatalogKind.DETAIL_FIGURE, []).values()];
+  // 姿図の詳細図の割当て先候補（三層合成後。建具記号タブと同じ）
+  const detailFigureList = [...detailFigureCatalog().values()];
 
   const docDiffByField = (selectedRow?.origin === 'doc' && selectedRow?.diff)
     ? new Map(diffPairs(

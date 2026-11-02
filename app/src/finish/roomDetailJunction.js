@@ -14,6 +14,7 @@ import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, detailOwnerRoom } f
 import { detailFigureEntry, detailFitKey, fitDetailLocalMemo } from '../openings/openingCatalog.js';
 import { junctionTargets } from './roomDetailTargets.js';
 import { wallConcealRange } from './columnWrap.js';
+import { sameAxisLine } from './kneeDropWall.js';
 
 const refOf = (room, slot) => {
   const refs = room?.detailRefs;
@@ -62,7 +63,7 @@ export function wallAssemblyThicknessMm(graph, wall) {
   let hi = -Infinity;
   for (const w of [wall, ...(graph?.walls ?? [])]) {
     if (w !== wall) {
-      if (w.axisCL !== wall.axisCL) continue;
+      if (!sameAxisLine(w.axisCL, wall.axisCL)) continue; // 通り一致は座標で見る規約（kneeDropWall.sameAxisLine。参照同一性・id 比較にしない）
       const sp = spanOf(w);
       if (!(Math.min(sp.hi, own.hi) > Math.max(sp.lo, own.lo))) continue;
     }
@@ -74,16 +75,21 @@ export function wallAssemblyThicknessMm(graph, wall) {
 
 /**
  * 部屋が生成した壁（room.generatedWallIds）の組の厚み（wallAssemblyThicknessMm）の、重複を除いた昇順の列。
- * 壁が無い・引けない部屋は空（fit を試さない）。
+ * 壁が無い・引けない部屋は空（fit を試さない）。extraWalls＝展開図が面ごとに実際に使う壁（隣室が生成した壁を含む。
+ * elevationJunction.junctionFaceWallsOf）。描画と通知の壁厚の取り方を合わせる。
  * @param {{shapeMap?:{get:(id:string)=>object|undefined}, walls?:object[]}|null} graph
  * @param {{generatedWallIds?:Iterable<string>}|null} room
+ * @param {object[]} [extraWalls]
  * @returns {number[]}
  */
-export function roomWallThicknessesMm(graph, room) {
+export function roomWallThicknessesMm(graph, room, extraWalls = []) {
   const out = new Set();
+  const walls = [...extraWalls];
   for (const id of room?.generatedWallIds ?? []) {
     const wall = graph?.shapeMap?.get(id);
-    if (!wall) continue;
+    if (wall) walls.push(wall);
+  }
+  for (const wall of walls) {
     const mm = wallAssemblyThicknessMm(graph, wall);
     if (mm !== null) out.add(mm);
   }
@@ -96,9 +102,10 @@ export function roomWallThicknessesMm(graph, room) {
  * symbolKey は通知文の主語（部屋名）。重複排除の鍵 seen は階をまたいで共有できる（破壊的に更新する）。
  * @param {object|null} graph
  * @param {Set<string>} [seen]
- * @param {{materialMap?:object|null, entryOf?:(key:string)=>object|null}} [opts]
+ * @param {{materialMap?:object|null, entryOf?:(key:string)=>object|null, faceWallsOf?:(room:object)=>object[]}} [opts]
+ *   faceWallsOf＝展開 init が渡す「部屋の面ごとの壁」（仕上げ init は渡さない＝生成壁のみ）
  */
-export function collectRoomJunctionFailures(graph, seen = new Set(), { materialMap = null, entryOf = detailFigureEntry } = {}) {
+export function collectRoomJunctionFailures(graph, seen = new Set(), { materialMap = null, entryOf = detailFigureEntry, faceWallsOf = null } = {}) {
   const failures = [];
   for (const room of graph?.rooms ?? []) {
     const owner = detailOwnerRoom(room.name);
@@ -117,7 +124,7 @@ export function collectRoomJunctionFailures(graph, seen = new Set(), { materialM
         push(`notFound|room|${room.id}|${slot}|${r.key}`, r.key, ERR_DETAIL_FIGURE_NOT_FOUND(owner, slot));
         continue;
       }
-      for (const wallThickness of roomWallThicknessesMm(graph, room)) {
+      for (const wallThickness of roomWallThicknessesMm(graph, room, faceWallsOf?.(room) ?? [])) {
         const fitted = fitRoomJunction({ figureKey: r.key, slot, wallThicknessMm: wallThickness, materialMap });
         if (fitted.error) {
           push(`${detailFitKey({ figureKey: r.key, slot, dims: { wallThickness } })}|room|${room.id}`,

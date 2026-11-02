@@ -1378,7 +1378,7 @@ const FIXTURE_SYMBOL_DETAIL_SLOTS = Object.freeze(Object.keys(FIXTURE_SYMBOL_DET
  * （jamb＝平面の方立・head＝断面の上枠。sill 等の図は出ない）。currentKey が一覧に無ければ末尾に
  * 「見つかりません」の行を足す（参照切れの割当てを select が黙って「なし」に見せない）。
  * @param {string} slot DetailSlot（FIXTURE_SYMBOL_DETAIL_FORM_FIELDS のキー）
- * @param {object[]} list 詳細図エントリ（三層合成後。composeCatalog(DETAIL_FIGURE, []) の値）
+ * @param {object[]} list 詳細図エントリ（三層合成後。openingCatalog.detailFigureCatalog() の値）
  * @param {string} [currentKey]
  * @returns {Array<{ value: string, label: string }>}
  */

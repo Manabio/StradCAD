@@ -25,6 +25,12 @@ test('select は床と壁・壁と天井の 2 つで、先頭は「なし」。�
   assert.deepEqual(sels.map(s => s.value), ['', '']);
 });
 
+test('figureList 省略時（三層合成後）は組込み「巾木 10×60」が床と壁の選択肢に出る（壁と天井には出ない）', () => {
+  const [fw, wc] = roomDetailRefSelects(new Room('r1', 'LDK'));
+  assert.ok(fw.options.some(o => o.value === 'df-builtin-baseboard-10x60'), JSON.stringify(fw.options));
+  assert.ok(!wc.options.some(o => o.value === 'df-builtin-baseboard-10x60'));
+});
+
 test('現在値は detailRefs のキー。参照切れ・分類違いの現在値は選択肢の末尾に「見つかりません」「この枠には使えません」として残る', () => {
   const room = new Room('r1', 'LDK');
   room.setDetailRefs({ [FLOOR_WALL]: 'df-gone', [WALL_CEILING]: 'df-fw1' });

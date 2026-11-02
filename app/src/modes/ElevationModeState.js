@@ -3,6 +3,7 @@ import { RoomFeature } from '@core';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { selectElevationRooms, elevationRoomDisplayName } from '../elevation/elevationFaces.js';
 import { buildRoomBand } from '../elevation/elevationBand.js';
+import { junctionFaceWallsOf } from '../elevation/elevationJunction.js';
 import { memberLayersOf, underStairSoffitsOf } from '../elevation/elevationSolids.js';
 import { buildStairBand } from '../elevation/elevationStair.js';
 import { buildVoidBand, buildRoomBandWithVoidAbove, findOverlappingRoom } from '../elevation/elevationVoid.js';
@@ -27,10 +28,11 @@ import {
 // DEFAULT_PX_PER_MMはviewport.js（appViewport.jsとは別。window依存を持たない純モジュール
 // ——appViewport.jsのヘッダコメント参照）からのみ取得する。ElevationModeState.js自体は
 // node:testから単体importできる状態を保つ（ElevationModeState.test.js参照）。
-import { DEFAULT_PX_PER_MM as DEFAULT_SCREEN_PX_PER_MM, resolveLineWeightsPx } from '../viewport.js';
+import { DEFAULT_PX_PER_MM as DEFAULT_SCREEN_PX_PER_MM, resolveLineWeightsPx, LOD_DETAIL_DENOM } from '../viewport.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { composeCatalog } from '../catalog/catalogRegistry.js';
 import { collectDetailFitFailures } from '../openings/openingDetailFitCheck.js';
+import { collectRoomJunctionFailures } from '../finish/roomDetailJunction.js';
 import { ERR_DETAIL_FIT_FAILED_MORE } from '../error.js';
 import { DetailSlot } from '../core/constants.js';
 
@@ -195,7 +197,14 @@ export class ElevationModeState {
     try {
       // 展開の断面が実際に使う上枠（head の図があれば head、無ければ jamb の流用。平面の方立は対象外）と、
       // 建具の姿図（S6b）の分だけ試す。
-      const failures = collectDetailFitFailures(this.graph, undefined, { slots: [DetailSlot.HEAD, DetailSlot.FIGURE] });
+      // 部屋の取り合い（Room.detailRefs の floorWall・wallCeiling。S8a-2）の参照切れ・壁厚に合わない図も同じ 1 回の通知へ合流する。
+      const failures = [
+        ...collectDetailFitFailures(this.graph, undefined, { slots: [DetailSlot.HEAD, DetailSlot.FIGURE] }),
+        // 壁厚は描画と同じ「面ごとの壁」（隣室が生成した壁を含む）でも試す
+        ...collectRoomJunctionFailures(this.graph, new Set(), {
+          materialMap: this._materialMap ?? null, faceWallsOf: room => junctionFaceWallsOf(room, this.graph),
+        }),
+      ];
       if (failures.length === 0) return null;
       return failures.length === 1
         ? failures[0].message
@@ -391,6 +400,9 @@ export class ElevationModeState {
         // （renderer/ElevationLayer.jsx→figurePrimitivesKonva.jsx の viewport.lineWeightsPx）と
         // 同じ表を同じ校正値から引いて渡す。
         dimFootGapModelMm, scale, lineWeightsPx: resolveLineWeightsPx(screenPxPerMm),
+        // 部屋の取り合い（Room.detailRefs）の断面形への差し替えは、表示倍率が詳細（分母 ≤ LOD_DETAIL_DENOM）の 2 パス目だけ。
+        // 展開図に拡大縮小は無く、画面の高さ（帯が収まる倍率）で決まる。画面サイズ変更後の再判定はしない（既知の限界）
+        junctionSectionSwap: Math.round(screenPxPerMm / scale) <= LOD_DETAIL_DENOM,
       }),
       (err, room) => console.error(`[elevation] 部屋「${elevationRoomDisplayName(room) || room.id}」の帯構築に失敗:`, err),
     );

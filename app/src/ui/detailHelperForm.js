@@ -228,7 +228,8 @@ export function confirmPairsMessage(pairs) {
  */
 export function saveContextFor(prevEntry, { docKeys, diffMap }) {
   if (!prevEntry) return { rowState: null, blocked: null };
-  // 本体（builtin）は空（S2 の裁定）が前提。本体を同梱するようになったら rowEditState に builtinKeys、planSaveEntry に builtinList を渡す。
+  // ヘルパーが開くのはライブラリ（user 層）の図だけで、組込み（巾木 10×60 等）は一覧に出ずキーも DETAIL_FIGURE_KEY_PREFIX で
+  // 衝突しないため、ここでは builtin を渡さない（組込みをヘルパーで開けるようにしたら rowEditState に builtinKeys、planSaveEntry に builtinList）。
   const st = rowEditState(
     CatalogKind.DETAIL_FIGURE,
     { entry: prevEntry, origin: docKeys.has(prevEntry.key) ? 'doc' : 'user', diff: null },

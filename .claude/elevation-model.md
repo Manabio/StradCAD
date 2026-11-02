@@ -335,6 +335,10 @@ canvasのlineCapはbutt（未指定）のままにし、Konvaへ渡す直前のp
 - **巾木は床の段差にも追従する**: 床断面線（区間水平線＋段差縦線）をhだけ上へ平行移動した連続ポリライン（水平方向にはオフセットしない。段差縦線を開口がまたぐ場合は床側同様に途切れさせる）。床まで達する開口の区間は巾木線を途切れさせる。**巾木の途切れ区間は描画基準（`drawnSpanRanges`）**（CL基準だとCLと壁面の間に巾木の無い隙間ができる）。
 - 巾木初期値（`木製出幅木`/`h=60`）は**ユーザーがRoomを新規作成する経路でのみ**適用する（`applyDefaultBaseboard`）。`RoomFinish`コンストラクタでは設定しない（復元経路は「新しいRoomを作ってから空でないフィールドだけ上書き」なので、既定値を非空にするとクリア済み`''`が復元のたびに巻き戻る）。展開側は`parseBaseboardHeightMm`（`core/room.js`）が`"h=<数値>"`表記だけ解釈し、解釈不能なら非描画。
 
+### 部屋の取り合い（junction）の派生線と断面形の差し替え
+- `Room.detailRefs` の floorWall・wallCeiling が指す断面図から、面に水平線（細線＝自動の段差・中線＝「空気との境目」の印）を派生し、床の段差に沿う線は `appendFloorOffsetLine`（巾木と共有）で引く。floorWall の fit が成った面は巾木を引かない。
+- 帯の切断面の差し替えは**後段処理**（`appendBandCutContent` の後・`finalizeBand` の前。`applyJunctionSectionSwap`）で、図側とエンジン側の両方から単純断面の取り合い区間を `subtractCollinearSpans` で差し引く。断面の中を描かない原則の対象外ではなく、**輪郭だけ**を CUT で描いて内部は描かない。倍率ゲートは 2 パス目だけ（`junctionSectionSwap`）で、1 パス目・単体テスト・golden は常に単純断面。割当て無しは出力が byte 不変。
+
 ### 見付の1px保証
 見付（2本線の間隔）は実画面で潰れると1本に見える。表示倍率scale(px/mm)から**描画限界**を1つ定め（`elevationStyle.js`の`drawLimitMm`/`faceGapLimitMm`/`visibleFaceMm`。`MIN_FACE_PX`が唯一の「指定px」）、それ未満の見付だけ限界まで広げる（限界以上は自然縮尺）。**限界は中心間距離ではなく「2本の線の間の余白が1px」**（線幅ぶん重なって1本に見えるため）。限界px＝1＋(線A幅＋線B幅)/2で、線幅は描画側と同じ表（`viewport.lineWeightsPx`＝`resolveLineWeightsPx(校正px/mm)`）を`ElevationModeState`が2パス目に`lineWeightsPx`として`scale`と一緒に帯→面ctx／断面エンジン`emitCtx`へ渡す。scale不明（1パス目・単体テスト・ゴールデン）は限界0＝モデル寸法のまま。「どちらの線が寸法を守るか」は見付ごとに決める: 三方枠は**細線（外周＝指定寸法）を守り中線（内法）を内側へ**（`openingElevationFigure.js`の`frameOnlyInnerRect`の`minFaceMm`引数。アキ標記の範囲も同じ内法に追随）、腰壁天端は**中線（天端＝腰壁高さ）を守り細線を下へ**（`kneeCapFaceMm`/`kneeCapBottomMm`）。`KNEE_CAP_FACE_MM=50`は1px保証で不要になりうる特例だが承認済みなので据え置く（実厚30へ戻すかは別途裁定）。
 

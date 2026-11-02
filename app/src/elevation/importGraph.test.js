@@ -4,6 +4,7 @@
 //   (1) section/・space/ から親ディレクトリ（elevation/ 直下）へ引いてよいのは elevationStyle.js・elevationPrimitives.js だけ。
 //   (2) elevation/ 内（テスト除く）に import の循環が無い。
 //   (3) plan/planSolids.js が elevation/section/ を引かない（平面の立体モデルが展開図エンジンの内部に依存しない）。
+//   (4) elevation/ から detail/ を引くのは elevationJunction.js だけ・引き先は detailPlacement.js だけ（部分詳細図 S8a-2）。
 // catalog/catalogImports.test.js と同じ書き方（ソーステキストを正規表現で検査する不変条件テスト）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -107,6 +108,49 @@ test('【不変条件】elevation/ 内（テスト除く）に import の循環�
   };
   for (const f of elevFiles) if (!state.get(f)) dfs(f, []);
   assert.deepEqual(cycles, []);
+});
+
+// (4) elevation/ から部分詳細図（detail/）を引くのは elevationJunction.js だけ、引き先は detailPlacement.js だけ（部分詳細図 S8a-2。
+//     openings/importGraph.test.js と同じ形。動的 import も検査する＝遅延読込みを抜け道にしない）。
+const DETAIL_IMPORTER = 'elevation/elevationJunction.js';
+const ALLOWED_DETAIL_TARGETS = new Set(['detail/detailPlacement.js']);
+const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+
+/** relFile（src からの相対パス）のソースが引く detail/ への指定子のうち、規則に反するもの。 */
+function detailOffenders(relFile, srcText) {
+  const specs = [...srcText.matchAll(IMPORT_RE)].map(m => m[1] || m[2]);
+  for (const m of srcText.matchAll(DYNAMIC_IMPORT_RE)) specs.push(m[1]);
+  const offenders = [];
+  for (const spec of specs) {
+    if (!spec.startsWith('.')) continue;
+    const target = norm(path.relative(srcDir, path.resolve(srcDir, path.dirname(relFile), spec)));
+    if (!target.startsWith('detail/')) continue;
+    if (relFile !== DETAIL_IMPORTER || !ALLOWED_DETAIL_TARGETS.has(target)) offenders.push(`${relFile} -> ${target}`);
+  }
+  return offenders;
+}
+
+test('【不変条件】elevation/ で detail/ を引くのは elevationJunction.js だけ・引き先は detailPlacement.js だけ', () => {
+  const offenders = elevFiles.flatMap(f => detailOffenders(rel(f), fs.readFileSync(f, 'utf8')));
+  assert.deepEqual(offenders, []);
+  // 空振り防止: 実際に引いている集合を固定する（使われなくなった許可を放置しない）
+  const used = elevFiles.flatMap(f => relativeImportsOf(f).map(t => `${rel(f)} -> ${rel(t)}`).filter(s => s.includes(' -> detail/')));
+  assert.deepEqual(used, [`${DETAIL_IMPORTER} -> detail/detailPlacement.js`]);
+});
+
+test('【不変条件】検出力: elevationJunction.js 以外が detail/ を引く・detailPlacement.js 以外を引くソース文字列（静的・再輸出・動的）は offenders に出る', () => {
+  const bad = [
+    ['elevation/elevationFigure.js', "import { computeEnvelope } from '../detail/detailPlacement.js';"],
+    ['elevation/elevationJunction.js', "import { fitDetailFigure } from '../detail/detailFit.js';"],
+    ['elevation/elevationJunction.js', "export { x } from '../detail/detailModel.js';"],
+    ['elevation/elevationJunction.js', "import '../detail/detailFit.js';"],
+    ['elevation/elevationBand.js', "const m = await import('../detail/detailPlacement.js');"],
+    ['elevation/section/sectionEmit.js', "import { x } from '../../detail/detailPen.js';"],
+  ];
+  for (const [file, srcText] of bad) assert.ok(detailOffenders(file, srcText).length > 0, `検出できない: ${file} ${srcText}`);
+  // 許可される形は通る（elevationJunction.js → detailPlacement.js・detail/ 以外）
+  assert.deepEqual(detailOffenders('elevation/elevationJunction.js',
+    "import { computeEnvelope } from '../detail/detailPlacement.js';\nimport { A } from '../core/constants.js';"), []);
 });
 
 test('【不変条件】plan/planSolids.js は elevation/section/ を引かない', () => {

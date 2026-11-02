@@ -659,6 +659,11 @@ export function wallContinuationBeyondFaceEnd(face, graph, end, maxMm) {
   return Math.max(0, Math.min(beyond, maxMm));
 }
 
+/** face のローカルx座標（世界座標→面基準の変換）。elevationFigure.js・elevationJunction.js が共用。 */
+export function localXOf(face, worldCoord) {
+  return (worldCoord - face.originWorld) * face.dirSign;
+}
+
 /**
  * face の両端を挟む「壁中心線（CL）」のローカルx座標を返す。face.lo/hi（snapFaceEndsToCorners
  * 済みの壁仕上げ面位置）とは別に、face.startCLId/endCLId が指す実際のCL（壁厚のぶんだけ

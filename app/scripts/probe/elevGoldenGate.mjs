@@ -9,6 +9,8 @@
 //   --only  対象（golden ディレクトリ名）の部分文字列で絞る
 //   --jobs  子プロセスの並列数（1〜3。既定 2。メモリ制約）
 //   --test  最後に npm test も走らせ、合格数・失敗数を足す
+//   --assign-floorwall <key>  全部屋の detailRefs.floorWall へ組込みの詳細図 <key> を割り当ててダンプする（golden とは割当て無しの出力と
+//           一致するはずの図〔巾木 10×60 等〕の検証用。source 属性と巾木高さ未設定の部屋の分だけ差が出る＝幾何の確認用）
 // 終了コード: 全一致=0、差分・ダンプ失敗・テスト失敗あり=1、用法違反=2。
 //
 // 比較は elevGoldenDiff.mjs の diffRoomPrimitives を再利用する（diffElevGolden.mjs と同じ部屋の突き合わせ:
@@ -54,7 +56,7 @@ export const TARGETS = [
 export const labelOf = (target) => target.dir.replace(/\//g, '_');
 
 export function parseArgs(argv) {
-  const opts = { out: DEFAULT_OUT, base: null, only: null, jobs: 2, test: false };
+  const opts = { out: DEFAULT_OUT, base: null, only: null, jobs: 2, test: false, assignFloorWall: null };
   const value = (i, name) => {
     const v = argv[i];
     if (v === undefined || v.startsWith('--')) throw new UsageError(`${name} には値を指定してください`);
@@ -66,6 +68,7 @@ export function parseArgs(argv) {
     else if (a === '--out') opts.out = path.resolve(value(++i, '--out'));
     else if (a === '--base') opts.base = path.resolve(value(++i, '--base'));
     else if (a === '--only') opts.only = value(++i, '--only');
+    else if (a === '--assign-floorwall') opts.assignFloorWall = value(++i, '--assign-floorwall');
     else if (a === '--jobs') {
       const v = value(++i, '--jobs');
       const n = Number(v);
@@ -267,7 +270,8 @@ export async function runTarget(target, opts, { stqDir = STQ_DIR, dumpScript = D
   if (!fs.existsSync(refDir)) return { error: `基準ディレクトリがありません: ${refDir}`, sec: 0 };
   const outDir = path.join(opts.out, label);
   const r = await runChild(process.execPath,
-    ['--import', './scripts/testSetup.mjs', dumpScript, outDir, stq, ...target.flags],
+    ['--import', './scripts/testSetup.mjs', dumpScript, outDir, stq, ...target.flags,
+      ...(opts.assignFloorWall ? [`--assign-floorwall=${opts.assignFloorWall}`] : [])],
     { cwd: APP_DIR });
   if (r.code !== 0) return { error: `dump 失敗(exit ${r.code}): ${r.err.slice(-160).replace(/\s+/g, ' ')}`, sec: r.sec };
   try {

@@ -8,15 +8,13 @@
 // ================================================================
 
 import { DetailSlot, DetailParam } from '../core/constants.js';
-import { CatalogKind } from '../catalog/catalogKinds.js';
-import { composeCatalog } from '../catalog/catalogRegistry.js';
 import {
   detailFigureOptionsFor, FIXTURE_SYMBOL_DETAIL_SLOT_TEXT, OPENING_DETAIL_REF_TEXT,
 } from '../catalog/catalogMaintenance.js';
 import { withDetailRef } from '../core/detailRefs.js';
 import { paramMmOf } from '../detail/detailPlacement.js';
 import { resolveDetailFigure } from './openingDetailFit.js';
-import { detailFigureRefsFor, subTypeDetailFigureRefsFor } from './openingCatalog.js';
+import { detailFigureRefsFor, subTypeDetailFigureRefsFor, detailFigureCatalog } from './openingCatalog.js';
 import { fixtureSymbolOf } from './openingNumbering.js';
 
 /** 三方枠（FRAME_ONLY）だけに出す slot（方立・上枠）。 */
@@ -31,9 +29,9 @@ const PARAM_TO_OPENING_FIELD = Object.freeze({
   [DetailParam.FRAME_PROJECTION]: 'frameProjection',
 });
 
-/** 三層合成後の詳細図エントリ（本体は空＝builtin に [] を渡す。openingCatalog.js detailFigureMap と同じ前提）。 */
+/** 三層合成後の詳細図エントリ（組込み＋ライブラリ＋同梱。openingCatalog.js detailFigureCatalog）。 */
 function detailFigureEntries() {
-  return [...composeCatalog(CatalogKind.DETAIL_FIGURE, []).values()];
+  return [...detailFigureCatalog().values()];
 }
 
 /**

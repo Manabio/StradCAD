@@ -7,15 +7,14 @@
 // ================================================================
 
 import { ROOM_DETAIL_SLOTS } from '../core/constants.js';
-import { CatalogKind } from '../catalog/catalogKinds.js';
-import { composeCatalog } from '../catalog/catalogRegistry.js';
+import { detailFigureCatalog } from '../openings/openingCatalog.js';
 import { detailFigureOptionsFor } from '../catalog/catalogMaintenance.js';
 import { withDetailRef } from '../core/detailRefs.js';
 import { detailSlotLabel, ROOM_DETAIL_REF_TEXT } from '../error.js';
 
-/** 三層合成後の詳細図エントリ（本体は空＝builtin に [] を渡す。openings/openingCatalog.js detailFigureMap と同じ前提）。 */
+/** 三層合成後の詳細図エントリ（組込み＋ライブラリ＋同梱。openings/openingCatalog.js detailFigureCatalog）。 */
 function detailFigureEntries() {
-  return [...composeCatalog(CatalogKind.DETAIL_FIGURE, []).values()];
+  return [...detailFigureCatalog().values()];
 }
 
 /**

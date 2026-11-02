@@ -18,7 +18,8 @@ import { graphList } from '../graphReadScope.js';
 import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt, elevationRoomDisplayName } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
 import { beamBlockerRectsForFace, droppedMemberPrimitivesForFace, memberLayersOf } from './elevationSolids.js';
-import { buildFaceFigure, segEndProfile, hasRightChDim, parseBaseboardHeightMm } from './elevationFigure.js';
+import { buildFaceFigure, segEndProfile, hasRightChDim, parseBaseboardHeightMm, ceilingResolversOf } from './elevationFigure.js';
+import { applyJunctionSectionSwap } from './elevationJunction.js';
 import { ceilArcCircleOf, ceilArcChords } from './ceilArcSection.js';
 import { wallAdjacentFloorSegments, familyCeilingSegments, cornerOpeningZOfFace } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
@@ -1054,6 +1055,14 @@ export function buildRoomBand(room, graph, ctx = {}) {
         ? (face, pcut) => droppedMemberPrimitivesForFace(face, solidsOpts, droppedMemberKeysOf(pcut, { inZRange: true }))
         : undefined,
       stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm, ctx.solids?.upperGraph ?? null, soffitStairIds) });
+  // 部屋の取り合い（Room.detailRefs）の断面形への差し替え（S8a-2）。倍率が閾値以上の 2 パス目だけ（ctx.junctionSectionSwap）
+  if (ctx.junctionSectionSwap === true) {
+    const bandFaces = layout.faceRuns.map(r => r.face);
+    applyJunctionSectionSwap(primitives, layout, {
+      graph, room, materialMap: ctx.materialMap ?? null, segCeilAbsAt: ceilingResolversOf(layout.CH).segCeilAbsAt,
+      neighborOf: (i, dir) => neighborWallFace(bandFaces, i, dir),
+    });
+  }
   return finalizeBand(room, graph, primitives, {
     faceCount: faces.length, chDimX: layout.chDimX, prevBoundaryHi: layout.prevBoundaryHi,
     triOffsetMm: ctx.triangleOffsetModelMm, nameGapModelMm: ctx.nameGapModelMm,
