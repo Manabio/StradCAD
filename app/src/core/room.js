@@ -96,20 +96,8 @@ export class Edge {
 export const DEFAULT_BASEBOARD_MATERIAL = '木製出幅木';
 export const DEFAULT_BASEBOARD_HEIGHT   = 'h=60';
 
-/**
- * 巾木文字列（自由入力。RoomFinish.baseboardHeight）から高さ(mm)を解釈する。
- * "h=60"/"H=60mm" 等の "h=<数値>" 表記のみを対象とする——巾木は自由入力文字列のままで構わず
- * （既存構造は変えない）、展開側は解釈できた場合だけ巾木線を足す（解釈不能なら非描画。ユーザー仕様）。
- * @param {string} str
- * @returns {number|null}
- */
-export function parseBaseboardHeightMm(str) {
-  if (typeof str !== 'string') return null;
-  const m = str.match(/h\s*=\s*(\d+(?:\.\d+)?)/i);
-  if (!m) return null;
-  const v = Number(m[1]);
-  return Number.isFinite(v) && v > 0 ? v : null;
-}
+// 巾木高さの解釈（RoomFinish.baseboardHeight の "h=<mm>"）は葉モジュール core/baseboardHeight.js が定義元。従来の import 元のため再エクスポートする。
+export { parseBaseboardHeightMm } from './baseboardHeight.js';
 
 // 自由文字列の仕上げフィールド。
 // 壁材（wallMaterial）・壁仕上げ（wallFinish）・天井高さ（ceilingHeight）は

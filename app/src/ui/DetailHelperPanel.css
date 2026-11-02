@@ -120,3 +120,6 @@
 .dthlp-lib-row--active { background: #dbeafe; border-color: #93c5fd; }
 .dthlp-lib-label { font-size: 13px; color: #1e293b; }
 .dthlp-lib-meta { font-size: 11px; color: #64748b; }
+.dthlp-lib-badge { font-size: 10px; color: #475569; background: #e2e8f0; border-radius: 3px; padding: 0 4px; margin-right: 4px; }
+.dthlp-lib-badge--override { color: #92400e; background: #fef3c7; }
+.dthlp-lib-badge--doc { color: #9a3412; background: #ffedd5; }

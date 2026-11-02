@@ -101,7 +101,7 @@ test('【配線】DetailHelperPanel.jsx: 保存・削除は共通経路（planSa
   assert.ok(handle && save && del);
   assert.ok(savesThroughSharedPath(save), '保存が共通経路を runBusy の中で呼んでいない');
   assert.ok(savesThroughSharedPath(del), '削除が共通経路を runBusy の中で呼んでいない');
-  assert.ok(/planSave\(entry, prevEntry, docContextFor\(KIND, \{ overlayFor, docDiffMap \}\)\)/.test(handle), '行状態つきの planSave を通していない');
+  assert.ok(/planSave\(entry, prevEntry, docContextFor\(KIND, \{ overlayFor, docDiffMap, builtinList: detailBuiltinFigures \}\)\)/.test(handle), '行状態つきの planSave を通していない');
   assert.ok(!/planSaveEntry\(/.test(src), 'planSaveEntry を行状態なしで直接呼んでいる');
   assert.ok(/planRemoveUserEntry\(/.test(del));
   assert.ok(!/\b(upsertUserCatalogEntry|commitUserEntries)\b/.test(src), 'ライブラリ書込みの下位関数を直接呼んでいる');
@@ -113,7 +113,7 @@ test('【配線】DetailHelperPanel.jsx: 閉じる・新規・ライブラリ選
   const guard = extractBalancedBody(src, 'function guardDiscard(action) {');
   assert.ok(confirmsBeforeClose(src, guard));
   assert.ok(/<ConfirmDialog\b/.test(src));
-  assert.ok(/guardDiscard\(\(\) => replaceDoc\(freshDoc\(\)\)\)/.test(src) && /guardDiscard\(\(\) => replaceDoc\(docFromEntry\(entry\)\)\)/.test(src));
+  assert.ok(/guardDiscard\(\(\) => replaceDoc\(freshDoc\(\)\)\)/.test(src) && /guardDiscard\(\(\) => replaceDoc\(docForLibraryEntry\(entry, origin\)\)\)/.test(src));
   assert.ok(!/undoManager|planGraph|graphReadScope|floorOps/.test(src), 'グラフ・undo を引いている');
 });
 
@@ -124,6 +124,67 @@ test('【配線】DetailHelperPanel.jsx: guardDiscard は dirty のときだけ�
   assert.ok(closeButtonGuarded(src), '閉じるボタンが guardDiscard を通っていない');
   assert.ok(escapeIgnoresBusy(extractBalancedBody(src, 'function handleKeyDown(e) {')), 'Escape が busy 中も効く');
   assert.ok(closeButtonIgnoresBusy(src), '閉じるボタンが busy 中も効く');
+});
+
+test('【配線】DetailHelperPanel.jsx(S8d): 組込みに戻すは planRevert → applyCatalogEditPlan を runBusy(\'カタログ適用\' の中で呼び、失敗は握って画面に出す', () => {
+  const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
+  const rev = extractBalancedBody(src, 'async function performRevert() {');
+  assert.ok(rev, 'performRevert が見つからない');
+  assert.ok(savesThroughSharedPath(rev), '組込みに戻すが共通経路を runBusy の中で呼んでいない');
+  assert.ok(/planRevert\(key,/.test(rev) && /revertFailed/.test(rev));
+  assert.ok(!savesThroughSharedPath(rev.replace(/runBusy\('カタログ適用',\s*\(\)\s*=>\s*/, '')), 'runBusy の外でも通ってしまう');
+  // 削除は組込み・上書きでは動かない（上書きは戻すに置き換え）
+  const del = extractBalancedBody(src, 'async function handleDeleteClick() {');
+  assert.ok(/rowActions\?\.canDelete/.test(del));
+  // 一覧は組込み層込み
+  assert.ok(/helperLibraryRows\(\{\s*userEntries: overlayFor\(KIND\)\.user, builtinList: detailBuiltinFigures,\s*docContext: docContextFor\(/.test(src), '一覧が同梱の文脈（doc-diff の印）を渡していない');
+  // 読み取り専用の組込みは edit が弾く
+  assert.ok(/if \(d\.readOnly\) return d;/.test(extractBalancedBody(src, 'function edit(fn, { track = true } = {}) {')));
+});
+
+// 組込みに戻す: クリックも確定も guardDiscard を通り、確認中に別の操作（複製・編集解錠）をしたら確認は消える。
+const revertGuarded = (src, clickBody, confirmedBody) => !!clickBody && !!confirmedBody
+  && /guardDiscard\(\(\) => setRevertConfirm\(/.test(clickBody) && /guardDiscard\(performRevert\)/.test(confirmedBody)
+  && /\bperformRevert\b/.test(src);
+const clearsRevertConfirm = body => !!body && /setRevertConfirm\(null\)/.test(body);
+// 読み取り専用（組込みの図）で編集の入口が全部塞がっている。
+const readOnlyHandlersGuarded = src => {
+  const pen = extractBalancedBody(src, 'function handlePen(dir) {');
+  const undo = extractBalancedBody(src, 'function handleUndo() {');
+  return !!pen && !!undo && /d\.readOnly \? d : penStep\(/.test(pen) && /d\.readOnly \? null : undoDraft\(/.test(undo)
+    && /const canSave = saveEnabled\(form, result\) && !busy && !readOnly;/.test(src)
+    && /onEditDim=\{showDxf \|\| fitOn \|\| readOnly \? undefined :/.test(src);
+};
+const inertCount = src => (src.match(/inert=\{inertWhenReadOnly\}/g) ?? []).length;
+
+test('【配線】DetailHelperPanel.jsx(S8d): 組込みに戻すのクリックと確定は guardDiscard を通り、複製・編集解錠で確認は消える', () => {
+  const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
+  const click = extractBalancedBody(src, 'function handleRevertClick() {');
+  const confirmed = extractBalancedBody(src, 'function handleRevertConfirmed() {');
+  assert.ok(revertGuarded(src, click, confirmed), '戻すのクリックか確定が guardDiscard を通っていない');
+  assert.ok(clearsRevertConfirm(extractBalancedBody(src, 'function handleDuplicate() {')), '複製で確認が残る');
+  assert.ok(clearsRevertConfirm(extractBalancedBody(src, 'function handleEditOverride() {')), '編集解錠で確認が残る');
+  assert.ok(clearsRevertConfirm(extractBalancedBody(src, 'function replaceDoc(next) {')), 'replaceDoc で確認が残る');
+});
+
+test('【配線】DetailHelperPanel.jsx(S8d): 読み取り専用は handlePen・handleUndo・保存・寸法編集・ペン／手の一覧・右の 2 ブロックで塞がる', () => {
+  const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
+  assert.ok(readOnlyHandlersGuarded(src));
+  assert.equal(inertCount(src), 4, 'inert の入口数（ペン・手の一覧・右の 2 ブロック）');
+});
+
+test('【検出力】組込みに戻す・読み取り専用の配線を壊すと判定が落ちる', () => {
+  const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
+  const click = extractBalancedBody(src, 'function handleRevertClick() {');
+  const confirmed = extractBalancedBody(src, 'function handleRevertConfirmed() {');
+  assert.ok(!revertGuarded(src, click, confirmed.replace('guardDiscard(performRevert)', 'performRevert()')));
+  assert.ok(!revertGuarded(src, click.replace('guardDiscard(() => setRevertConfirm(', '(() => setRevertConfirm('), confirmed));
+  assert.ok(!clearsRevertConfirm(extractBalancedBody(src, 'function handleDuplicate() {').replace('setRevertConfirm(null)', '')));
+  assert.ok(!readOnlyHandlersGuarded(src.replace('d.readOnly ? d : penStep(', 'penStep(')));
+  assert.ok(!readOnlyHandlersGuarded(src.replace('d.readOnly ? null : undoDraft(', 'undoDraft(')));
+  assert.ok(!readOnlyHandlersGuarded(src.replace('!busy && !readOnly;', '!busy;')));
+  assert.ok(!readOnlyHandlersGuarded(src.replace('fitOn || readOnly ?', 'fitOn ?')));
+  assert.equal(inertCount(src.replace('inert={inertWhenReadOnly}', '')), 3);
 });
 
 test('【配線】DetailHelperPanel.jsx: 削除は collectCurrentCatalogUsage の結果を performDelete へ渡す', () => {

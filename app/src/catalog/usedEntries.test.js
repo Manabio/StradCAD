@@ -7,6 +7,8 @@ import {
 } from './usedEntries.js';
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { CatalogKind } from './catalogKinds.js';
+import { SNAPSHOT_REF_WALKERS } from './codeNormalization.js';
+import { DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY } from '../core/constants.js';
 
 function baseSnapshot(overrides) {
   return {
@@ -614,4 +616,27 @@ test('reexpandTransitiveMaterials: 既にmaterial束にあるコードは重複�
 
   const { bundle: result } = reexpandTransitiveMaterials(bundle, materialMap);
   assert.deepEqual(result.catalogs.material, [existingEntry]);
+});
+
+// ---- 暗黙の既定で使う組込みの詳細図キー（S8d。detailRefs に現れない参照） ----
+test('collectUsedKeys: 巾木高さが解析できる部屋が 1 つでもあれば組込みの巾木が detailFigure の使用キーに入る', () => {
+  const used = collectUsedKeys({ rooms: [{ id: 'r1', finish: { baseboardHeight: '' } }, { id: 'r2', finish: { baseboardHeight: 'h=60' } }] });
+  assert.deepEqual([...used.detailFigure], [DETAIL_BUILTIN_BASEBOARD_KEY]);
+});
+
+test('collectUsedKeys: 失敗系＝巾木高さが空・解析不能・部屋なしなら巾木は入らない', () => {
+  assert.equal(collectUsedKeys({ rooms: [{ id: 'r1', finish: { baseboardHeight: '' } }, { id: 'r2', finish: { baseboardHeight: '木製' } }, { id: 'r3' }] }).detailFigure.size, 0);
+  assert.equal(collectUsedKeys({ rooms: [] }).detailFigure.size, 0);
+});
+
+test('collectUsedKeys: 腰壁（hasKnee）の記録があれば組込みの天板が入る。垂れ壁だけ・記録なしなら入らない', () => {
+  assert.deepEqual([...collectUsedKeys({ kneeDropWalls: [{ key: 'k', hasKnee: true, hasDrop: false }] }).detailFigure], [DETAIL_BUILTIN_KNEE_CAP_KEY]);
+  assert.equal(collectUsedKeys({ kneeDropWalls: [{ key: 'k', hasKnee: false, hasDrop: true }] }).detailFigure.size, 0);
+  assert.equal(collectUsedKeys({ kneeDropWalls: [] }).detailFigure.size, 0);
+});
+
+test('collectUsedKeys: 暗黙の組込みキーは明示の detailRefs と併存し、alias の書換え対象（walker）には現れない', () => {
+  const snap = { rooms: [{ id: 'r1', finish: { baseboardHeight: 'h=60' }, detailRefs: { wallCeiling: 'df-x' } }] };
+  assert.deepEqual([...collectUsedKeys(snap).detailFigure].sort(), [DETAIL_BUILTIN_BASEBOARD_KEY, 'df-x'].sort());
+  assert.deepEqual(SNAPSHOT_REF_WALKERS.detailFigure.enumerate(snap).map(r => r.code), ['df-x']);
 });

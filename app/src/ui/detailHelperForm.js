@@ -38,7 +38,7 @@ import { fitLocal } from '../detail/detailPlacement.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import {
   formatDetailSubjectLabel, formatDetailViewLabel, formatCategoryLabel, categoryOptionsFor, rowEditState, planSaveEntry,
-  formatDetailProvenance, isImportedFigure, IMPORTED_SOURCES,
+  formatDetailProvenance, isImportedFigure, IMPORTED_SOURCES, planRevertToBuiltin,
 } from '../catalog/catalogMaintenance.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
 import { detailFrameTargets, detailElevationTargets } from '../openings/openingDetailFrame.js';
@@ -110,6 +110,13 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   fieldLabel: '呼称', fieldCategory: '分類', fieldView: '向き', fieldSubject: '主題',
   datumHeading: '基準と載せる頂点', noAnchor: '（なし）', validOk: '検証: 問題なし', blankValue: '—',
   approveButton: '承認する',
+  // 組込み層（S8d）。組込みは読み取り専用で出し、編集＝同キーのライブラリ項目（上書き）を作る。
+  editOverride: '編集（上書きを作る）', revertToBuiltin: '組込みに戻す',
+  revertTitle: '標準に戻しますか？', revertAlsoDoc: 'この文書の同梱も標準に合わせる',
+  builtinReadOnly: '組込みの図です（読み取り専用）。「編集（上書きを作る）」で同じキーの上書きを作れます',
+  originBadge: Object.freeze({ builtin: '組込み', user: 'ライブラリ', override: '上書き' }),
+  docDiffBadgeTitle: 'この文書の同梱に、同じキーで内容の違う図があります（そのままでは保存できません）',
+  docDiffBadge: '文書', // 同梱に同キーの別内容がある行（保存は止まる。保守パネルの doc-diff と同じ）
   airEdge: '空気との境目', // 手の印（Move.edge='air'）の切替。展開図で中線になる（S8a）
   // DXF 読込み（S7a）
   tabPen: 'ペン', tabDxf: '図面読込み（DXF／PDF）', dxfOpen: 'DXF／PDF を開く', dxfCopy: '下書きへ写す',
@@ -221,6 +228,10 @@ export const fitDimFieldsFor = form => (isElevationFigureForm(form) ? ELEVATION_
 /** 保存・破棄・削除の確認の文言。 */
 export const DETAIL_HELPER_MESSAGES = Object.freeze({
   saved: '保存しました',
+  reverted: '組込みに戻しました',
+  revertNotBuiltin: '組込みの図ではないため、組込みに戻せません',
+  revertNoOverride: '上書きがないため、組込みに戻せません',
+  revertFailed: '組込みに戻す処理に失敗しました: ',
   noop: '変更はありません',
   discard: '保存していない変更があります。破棄して続けますか？',
   discardButton: '破棄して続ける',
@@ -263,16 +274,22 @@ export function confirmPairsMessage(pairs) {
  * docKeys＝文書同梱に同じキーがあるキーの集合、diffMap＝docDiffMap(kind, [])（同梱とライブラリの差）。
  * 同梱にも同じキーがあって内容が同じ（doc-same）なら保存で同梱を外す（planSaveEntry が removeDocKey を返す）。
  * 編集できない状態（同梱の内容がライブラリと違う doc-diff）は blocked に理由を返す。新規（prevEntry なし）は rowState=null。
+ * 組込み層（S8d）: builtinList（組込みの図）を渡すと、組込みの図を開いて保存する行は rowState='builtin'、
+ * ライブラリの同キー（上書き）は 'override' になる。userKeys＝ライブラリに同キーがあるキーの集合
+ * （省略は「doc でなければライブラリ」＝従来どおり）。
  * @returns {{rowState: string|null, blocked: string|null}}
  */
-export function saveContextFor(prevEntry, { docKeys, diffMap }) {
+export function saveContextFor(prevEntry, { docKeys, diffMap, userKeys = null, builtinList = [] }) {
   if (!prevEntry) return { rowState: null, blocked: null };
-  // ヘルパーが開くのはライブラリ（user 層）の図だけで、組込み（巾木 出 10 等）は一覧に出ずキーも DETAIL_FIGURE_KEY_PREFIX で
-  // 衝突しないため、ここでは builtin を渡さない（組込みをヘルパーで開けるようにしたら rowEditState に builtinKeys、planSaveEntry に builtinList）。
+  const builtinKeys = new Set(builtinList.map(e => e.key));
+  const key = prevEntry.key;
+  let origin = 'user';
+  if (docKeys.has(key)) origin = 'doc';
+  else if (builtinKeys.has(key) && userKeys && !userKeys.has(key)) origin = 'builtin';
   const st = rowEditState(
     CatalogKind.DETAIL_FIGURE,
-    { entry: prevEntry, origin: docKeys.has(prevEntry.key) ? 'doc' : 'user', diff: null },
-    { diffMap },
+    { entry: prevEntry, origin, diff: null },
+    { diffMap, builtinKeys },
   );
   return { rowState: st.state, blocked: st.canEdit ? null : st.reason };
 }
@@ -281,17 +298,58 @@ export function saveContextFor(prevEntry, { docKeys, diffMap }) {
  * 保存プランを作る（planSaveEntry に行状態を添える唯一の入口）。編集できない行状態は { ok:false, message } にする。
  * @param {object} entry 保存するエントリ
  * @param {object|null} prevEntry 開いている図（新規は null）
- * @param {{docKeys: Set<string>, diffMap: Map}} docContext 文書同梱のキー集合と docDiffMap(kind, [])
+ * @param {{docKeys: Set<string>, diffMap: Map, userKeys?: Set<string>|null, builtinList?: object[]}} docContext 文書同梱のキー集合・docDiffMap・ライブラリのキー集合・組込みの図
  */
 export function planSave(entry, prevEntry, docContext) {
   const ctx = saveContextFor(prevEntry, docContext);
   if (ctx.blocked) return { ok: false, message: ctx.blocked };
-  return planSaveEntry(CatalogKind.DETAIL_FIGURE, entry, { prevEntry, rowState: ctx.rowState });
+  // 組込みと同キーなら planSaveEntry が overridesBuiltin:true を付ける（上書き）。同一内容は noop（変更なし）。
+  return planSaveEntry(CatalogKind.DETAIL_FIGURE, entry, { prevEntry, rowState: ctx.rowState, builtinList: docContext.builtinList ?? [] });
 }
 
-/** 文書同梱の文脈（planSave の第 3 引数）。overlayFor／docDiffMap は呼び出し側が注入する（この純モジュールは catalogRegistry を引かない）。 */
-export function docContextFor(kind, { overlayFor, docDiffMap }) {
-  return { docKeys: new Set(overlayFor(kind).doc.map(e => e.key)), diffMap: docDiffMap(kind, []) };
+/**
+ * 文書同梱・ライブラリ・組込みの文脈（planSave の第 3 引数）。overlayFor／docDiffMap は呼び出し側が注入する
+ * （この純モジュールは catalogRegistry を引かない）。builtinList は組込みの図（省略は組込みなし）。
+ */
+export function docContextFor(kind, { overlayFor, docDiffMap, builtinList = [] }) {
+  const overlay = overlayFor(kind);
+  return {
+    docKeys: new Set(overlay.doc.map(e => e.key)), diffMap: docDiffMap(kind, builtinList),
+    userKeys: new Set((overlay.user ?? []).map(e => e.key)), builtinList,
+  };
+}
+
+/** 一覧の出所（組込み層。S8d）。 */
+export const LIBRARY_ORIGIN = Object.freeze({ BUILTIN: 'builtin', USER: 'user', OVERRIDE: 'override' });
+/** キーの出所: ライブラリにあれば（組込みにも同キーなら上書き）、無くて組込みにあれば組込み、どちらも無ければ null。 */
+export function libraryOriginOf(key, { builtinKeys, userKeys }) {
+  if (userKeys.has(key)) return builtinKeys.has(key) ? LIBRARY_ORIGIN.OVERRIDE : LIBRARY_ORIGIN.USER;
+  return builtinKeys.has(key) ? LIBRARY_ORIGIN.BUILTIN : null;
+}
+/**
+ * 出所ごとに許す操作（保守パネルと同じ rowEditState から導く）。組込み＝読み取り専用で「編集」と「複製」だけ（needsUnlock）、
+ * 上書き＝編集・組込みに戻す・複製（削除は戻すに置き換え）、ライブラリ＝編集・削除・複製。
+ */
+export function libraryRowActions(origin, entry, builtinKeys) {
+  const st = rowEditState(
+    CatalogKind.DETAIL_FIGURE,
+    { entry, origin: origin === LIBRARY_ORIGIN.BUILTIN ? 'builtin' : 'user', diff: null },
+    { builtinKeys },
+  );
+  return {
+    state: st.state, needsUnlock: st.state === 'builtin',
+    canRevert: st.canRevert, canDelete: st.canDelete, canDuplicate: st.canDuplicate,
+  };
+}
+/** 一覧に出すエントリ: ライブラリの同キーがあればそれ、無ければ組込み。 */
+export function libraryEntryOf(key, { userEntries, builtinList }) {
+  return userEntries.find(e => e.key === key) ?? builtinList.find(e => e.key === key) ?? null;
+}
+/** 組込みに戻すプラン。組込みでない・上書きが無いキーは失敗文言（planRevertToBuiltin は黙って空振りするため先に検査する）。 */
+export function planRevert(key, { builtinKeys, userKeys, alsoRealignDoc = true }) {
+  if (!builtinKeys.has(key)) return { ok: false, message: DETAIL_HELPER_MESSAGES.revertNotBuiltin };
+  if (!userKeys.has(key)) return { ok: false, message: DETAIL_HELPER_MESSAGES.revertNoOverride };
+  return { ok: true, plan: planRevertToBuiltin(CatalogKind.DETAIL_FIGURE, key, { alsoRealignDoc }) };
 }
 
 // ---- doc（パネルが持つ { form, history, baseline, prevEntry, penError? }）の組み立て ----
@@ -300,9 +358,17 @@ export function freshDocOf(form) {
   return { form, history: [], baseline: form, prevEntry: null };
 }
 /** ライブラリの図を開いた doc（基準＝開いた直後のフォーム）。 */
-export function docFromEntry(entry) {
+export function docFromEntry(entry, { readOnly = false } = {}) {
   const form = formFromEntry(entry);
-  return { form, history: [], baseline: form, prevEntry: entry };
+  return { form, history: [], baseline: form, prevEntry: entry, ...(readOnly ? { readOnly: true } : {}) };
+}
+/** 組込みの図を読み取り専用で開いた doc を、編集できる状態にする（保存は同キーの上書きになる）。 */
+export function unlockDoc(doc) {
+  return doc.readOnly ? { ...doc, readOnly: false } : doc;
+}
+/** 一覧の行を開く doc: 組込み（ライブラリに同キーが無い）は読み取り専用、他は編集可。 */
+export function docForLibraryEntry(entry, origin) {
+  return docFromEntry(entry, { readOnly: origin === LIBRARY_ORIGIN.BUILTIN });
 }
 /** 複製の doc: 別キー・基準なし（baseline=null＝常に未保存）・ライブラリの図に紐づかない（prevEntry=null）。 */
 export function duplicateDoc(doc, { idFactory }) {
@@ -755,6 +821,27 @@ export function libraryRows(entries) {
       subjectLabel: formatDetailSubjectLabel(e.subject),
     }))
     .sort((a, b) => a.label.localeCompare(b.label, 'ja'));
+}
+
+/**
+ * ヘルパーの一覧の行（組込み層込み・呼称順）。組込みの図＋ライブラリの図を並べ、組込みと同キーのライブラリは上書き行
+ * （組込みの位置に出る＝1 行だけ）。各行に出所（origin）とバッジ（originLabel）を付ける。
+ * composeList（catalogRegistry）と同じ合成（上書きは 1 行）。表示は呼称順。この純モジュールは registry を引かないため entries を受け取る。
+ * docContext（docKeys・diffMap。saveContextFor と同じ）を渡すと、同梱に同キーの別内容（doc-diff）がある行に docDiff=true を付ける。
+ */
+export function helperLibraryRows({ userEntries, builtinList, docContext = null }) {
+  const builtinKeys = new Set(builtinList.map(e => e.key));
+  const userKeys = new Set(userEntries.map(e => e.key));
+  const userByKey = new Map(userEntries.map(e => [e.key, e]));
+  const shown = [
+    ...builtinList.map(b => userByKey.get(b.key) ?? b),
+    ...userEntries.filter(e => !builtinKeys.has(e.key)),
+  ];
+  return libraryRows(shown).map(r => {
+    const origin = libraryOriginOf(r.key, { builtinKeys, userKeys });
+    const docDiff = Boolean(docContext?.docKeys.has(r.key) && docContext.diffMap?.get(r.key));
+    return { ...r, origin, originLabel: DETAIL_HELPER_TEXT.originBadge[origin], docDiff };
+  });
 }
 
 // ================================================================

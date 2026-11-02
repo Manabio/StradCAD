@@ -17,7 +17,14 @@ const MASTER_PATHS = [/finish\/materials\//, /structural\/sectionCatalog/, /open
 // 許可される静的import specifier: 同ディレクトリの兄弟モジュール（'./xxx.js'）、'../error.js'、
 // および import を一切持たない葉の '../core/constants.js'（定数の置き場。2026-10-30 屋根区画の location 定数）のみ。
 // 加えて '../detail/detailModel.js'（部分詳細図の検証。S2 で catalog/ が引く。それ自身が constants だけを引く葉であることを下のテストで固定）。
-const ALLOWED_STATIC_SPECIFIERS = [/^\.\/[\w-]+\.js$/, /^\.\.\/error\.js$/, /^\.\.\/core\/constants\.js$/, /^\.\.\/detail\/detailModel\.js$/];
+// '../core/baseboardHeight.js'（巾木高さ文字列の解釈。暗黙の既定の組込みキーの使用判定に使う。S8d。import を持たない葉であることを下のテストで固定）。
+const ALLOWED_STATIC_SPECIFIERS = [/^\.\/[\w-]+\.js$/, /^\.\.\/error\.js$/, /^\.\.\/core\/constants\.js$/, /^\.\.\/detail\/detailModel\.js$/, /^\.\.\/core\/baseboardHeight\.js$/];
+
+test('【不変条件】core/baseboardHeight.js は import を持たない葉（catalog の許可リストに入れる前提）', () => {
+  const src = fs.readFileSync(path.join(dir, '..', 'core', 'baseboardHeight.js'), 'utf8');
+  assert.deepEqual(src.split(/\r?\n/).filter(l => /^\s*import\s/.test(l) || /^\s*export\s.*\sfrom\s/.test(l)), []);
+  assert.ok(!/\bimport\s*\(/.test(src), '動的 import も持たない');
+});
 
 test('【不変条件】detail/detailModel.js の静的importは ../core/constants.js だけ（catalog の許可リストに入れる前提の葉）', () => {
   const src = fs.readFileSync(path.join(dir, '..', 'detail', 'detailModel.js'), 'utf8');

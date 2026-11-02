@@ -13,7 +13,10 @@ import { enumerateMaterialCodeRefs, SNAPSHOT_REF_WALKERS } from './codeNormaliza
 import { isMaterialCode } from './materialCode.js';
 import { CatalogKind, kindDef } from './catalogKinds.js';
 import { emptyBundle, withEntries, bundleEntries } from './catalogBundle.js';
-import { DetailLenMode, DetailProvenanceSource, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
+import {
+  DetailLenMode, DetailProvenanceSource, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY,
+} from '../core/constants.js';
+import { parseBaseboardHeightMm } from '../core/baseboardHeight.js';
 import { moveParts } from '../detail/detailModel.js';
 
 // 読み込んだ外部ファイル（DXF・PDF）由来の出所。文書に同梱しない対象（R10）。
@@ -42,6 +45,22 @@ export function collectUsedMaterialCodes(snapshot) {
 }
 
 /**
+ * 暗黙の既定（S8c）で使う組込みの詳細図キー。detailRefs には現れない参照なので SNAPSHOT_REF_WALKERS（alias の書き換えと共有）には
+ * 足さず、使用キーの収集だけに数える（上書きがあれば同梱され、別環境でも同じ形で描かれる）。
+ * 巾木高さが解析できる部屋が 1 つでもあれば巾木、腰壁（hasKnee）の記録が 1 つでもあれば天板。
+ * @param {object|null|undefined} snapshot
+ * @returns {string[]}
+ */
+function implicitDetailFigureKeys(snapshot) {
+  const keys = [];
+  if ((snapshot?.rooms ?? []).some(room => parseBaseboardHeightMm(room?.finish?.baseboardHeight) !== null)) {
+    keys.push(DETAIL_BUILTIN_BASEBOARD_KEY);
+  }
+  if ((snapshot?.kneeDropWalls ?? []).some(kd => kd?.hasKnee)) keys.push(DETAIL_BUILTIN_KNEE_CAP_KEY);
+  return keys;
+}
+
+/**
  * snapshot（1階分）が参照するカタログキーを種別ごとに収集する。走査は
  * codeNormalization.js の SNAPSHOT_REF_WALKERS（kind → enumerate）を共有する——
  * 「どのフィールドが対象か」を二重実装しない（collectUsedMaterialCodesが
@@ -52,7 +71,8 @@ export function collectUsedMaterialCodes(snapshot) {
  * - openingSubType: openings[] の `${category}:${subType}`（catalogKinds.js の keyOf と同型）
  * - fixtureSymbol: openings[].fixtureType（空でない文字列のみ）
  * - detailFigure: openings[].detailRefs の値（建具個別の上書き。S6a）と rooms[].detailRefs の値（部屋の取り合い。S8a）と kneeDropWalls[].detailRefs の値（腰壁の天端・垂れ壁の下端。S8b-1）。
- *   建具記号経由の使用は expandUsedDetailFiguresTransitively が推移展開する
+ *   建具記号経由の使用は expandUsedDetailFiguresTransitively が推移展開する。
+ *   加えて暗黙の既定で使う組込みキー（巾木高さのある部屋→巾木／腰壁の記録→天板。S8d）も数える（implicitDetailFigureKeys）
  * @returns {{ interiorMaster: Set<string>, boundaryMaster: Set<string>, section: Set<string>,
  *             openingSubType: Set<string>, fixtureSymbol: Set<string>, detailFigure: Set<string> }}
  */
@@ -71,6 +91,7 @@ export function collectUsedKeys(snapshot) {
   for (const ref of SNAPSHOT_REF_WALKERS.openingSubType.enumerate(snapshot)) openingSubType.add(ref.code);
   for (const ref of SNAPSHOT_REF_WALKERS.fixtureSymbol.enumerate(snapshot)) fixtureSymbol.add(ref.code);
   for (const ref of SNAPSHOT_REF_WALKERS.detailFigure.enumerate(snapshot)) detailFigure.add(ref.code);
+  for (const key of implicitDetailFigureKeys(snapshot)) detailFigure.add(key);
 
   return { interiorMaster, boundaryMaster, section, openingSubType, fixtureSymbol, detailFigure };
 }

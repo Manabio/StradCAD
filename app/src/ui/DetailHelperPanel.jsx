@@ -4,6 +4,7 @@ import { CatalogKind } from '../catalog/catalogKinds.js';
 import { overlayFor, docDiffMap } from '../catalog/catalogRegistry.js';
 import { planRemoveUserEntry, applyCatalogEditPlan } from '../catalog/catalogMaintenance.js';
 import { DetailLenMode, DetailEdgeMark } from '../core/constants.js';
+import { detailBuiltinFigures } from '../detail/detailPlacement.js';
 import { saveUserCatalog } from '../storage/db.js';
 import { markDirty } from '../dirtyState.js';
 import { collectCurrentCatalogUsage } from '../store.js';
@@ -16,12 +17,13 @@ import { useScrollIntoViewWhenActive } from './useScrollIntoViewWhenActive.js';
 import {
   DETAIL_HELPER_TEXT, DETAIL_HELPER_MESSAGES, DETAIL_NUMPAD_LABELS, PEN_BUTTONS, PREVIEW_FRAME_PX,
   DETAIL_ROLE_LABELS, DETAIL_MODE_LABELS, DETAIL_PARAM_LABELS, DETAIL_MATERIAL_FIELD_LABELS, DETAIL_DATUM_KIND_LABELS, DETAIL_AXIS_LABELS,
-  newDraft, entryFromForm, freshDocOf, docFromEntry, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, isDraftDirty, undoDraft, penStep, penUp, setClosed,
+  newDraft, entryFromForm, freshDocOf, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, isDraftDirty, undoDraft, penStep, penUp, setClosed,
   setMoveLen, setMoveMode, setMoveEdge, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, saveDecision, planSave, afterSaveDoc,
-  deleteConfirmMessage, libraryRows, defaultFitDimsFor, fitDimFieldsFor, tryFit, previewPrimitivesOf, labelOptions, pushHistory,
+  deleteConfirmMessage, defaultFitDimsFor, fitDimFieldsFor, tryFit, previewPrimitivesOf, labelOptions, pushHistory,
   displayLen, strokeLabel, strokeTitle, moveSpanLabel, distanceButtonLabel, offsetButtonLabel, fitDimButtonLabel,
   libraryMetaLabel, wallThicknessNotice,
+  helperLibraryRows, libraryOriginOf, libraryRowActions, libraryEntryOf, planRevert, unlockDoc, docForLibraryEntry, LIBRARY_ORIGIN,
   loadDxf, setDxfUnit, toggleDxfComponent, setDxfProvenanceField, dxfComponentRows, dxfUnitHint, dxfWarningTexts,
   dxfPreviewPrimitives, draftFromDxf, draftDocOf, provenanceNoticeOf, DETAIL_HELPER_TABS, setProvenanceField,
 } from './detailHelperForm.js';
@@ -44,6 +46,8 @@ import { ERR_DXF_FILE_READ_FAILED, ERR_PDF_PAGE_FAILED } from '../error.js';
 const KIND = CatalogKind.DETAIL_FIGURE;
 // 旧い pdfjs 文書の破棄（待たない。破棄の失敗で画面の操作を止めない）。
 const discardPdfDoc = (loader, doc) => { if (doc) loader?.closePdf(doc).catch(() => undefined); };
+const BUILTIN_KEYS = new Set(detailBuiltinFigures.map(e => e.key)); // 組込みの図（読み取り専用で出す。編集＝同キーの上書き）
+const userKeysNow = () => new Set(overlayFor(KIND).user.map(e => e.key));
 const newKeyPart = () => crypto.randomUUID();
 const freshDoc = () => freshDocOf(newDraft({ idFactory: newKeyPart }));
 
@@ -68,7 +72,11 @@ function LibraryRow({ row, active, disabled, onSelect }) {
   return (
     <button ref={ref} disabled={disabled} className={`dthlp-lib-row${active ? ' dthlp-lib-row--active' : ''}`} onClick={() => onSelect(row.key)}>
       <span className="dthlp-lib-label">{row.label}</span>
-      <span className="dthlp-lib-meta">{libraryMetaLabel(row)}</span>
+      <span className="dthlp-lib-meta">
+        <span className={`dthlp-lib-badge${row.origin === LIBRARY_ORIGIN.OVERRIDE ? ' dthlp-lib-badge--override' : ''}`}>{row.originLabel}</span>
+        {row.docDiff && <span className="dthlp-lib-badge dthlp-lib-badge--doc" title={DETAIL_HELPER_TEXT.docDiffBadgeTitle}>{DETAIL_HELPER_TEXT.docDiffBadge}</span>}
+        {libraryMetaLabel(row)}
+      </span>
     </button>
   );
 }
@@ -211,6 +219,7 @@ export function DetailHelperPanel({ onClose }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null); // { text, isError }
   const [confirm, setConfirm] = useState(null); // { message, buttons, onSelect }
+  const [revertConfirm, setRevertConfirm] = useState(null); // { key, alsoRealignDoc }（組込みに戻す確認）
 
   // 試し込みの壁厚の既定は保守パネルのプレビューと同じ式（下地材＋面材×2）。材の一覧は保守パネルと同様に動的 import。
   useEffect(() => {
@@ -244,10 +253,18 @@ export function DetailHelperPanel({ onClose }) {
   const dirty = isDraftDirty(form, baseline);
   const options = comboOptions(form.category, form.view);
   // overlay は React が追跡しないモジュール状態。保存・削除の完了で setLibTick により再レンダーして毎回引き直す（一覧は小さい）。
-  const libItems = libraryRows(overlayFor(KIND).user);
+  const libItems = helperLibraryRows({
+    userEntries: overlayFor(KIND).user, builtinList: detailBuiltinFigures,
+    docContext: docContextFor(KIND, { overlayFor, docDiffMap, builtinList: detailBuiltinFigures }),
+  });
+  // 開いている図の出所と許す操作（組込み＝読み取り専用で「編集（上書きを作る）」「複製」だけ／上書き＝「組込みに戻す」／ライブラリ＝削除）。
+  const prevOrigin = prevEntry ? libraryOriginOf(prevEntry.key, { builtinKeys: BUILTIN_KEYS, userKeys: userKeysNow() }) : null;
+  const rowActions = prevOrigin ? libraryRowActions(prevOrigin, prevEntry, BUILTIN_KEYS) : null;
+  const readOnly = Boolean(doc.readOnly);
 
   function edit(fn, { track = true } = {}) {
     setDoc(d => {
+      if (d.readOnly) return d;
       const next = fn(d.form);
       if (next === d.form) return d;
       return clearPenError({ ...d, form: next, history: track ? pushHistory(d.history, d.form) : d.history });
@@ -256,6 +273,7 @@ export function DetailHelperPanel({ onClose }) {
   function replaceDoc(next) {
     setDoc(next);
     setMessage(null);
+    setRevertConfirm(null);
   }
   // 未保存の下書きがあれば確認してから action を実行する。
   function guardDiscard(action) {
@@ -272,13 +290,13 @@ export function DetailHelperPanel({ onClose }) {
 
   function handleUndo() {
     setDoc(d => {
-      const r = undoDraft(d.history);
+      const r = d.readOnly ? null : undoDraft(d.history);
       return r ? clearPenError({ ...d, form: r.form, history: r.history }) : d;
     });
   }
   // 計算は setDoc の関数の中（現在の doc から）。エラーは doc.penError に入る。
   function handlePen(dir) {
-    setDoc(d => penStep(d, dir, penText));
+    setDoc(d => (d.readOnly ? d : penStep(d, dir, penText)));
   }
 
   function openNumpad(target, value, label) {
@@ -373,9 +391,47 @@ export function DetailHelperPanel({ onClose }) {
   }
 
   function handleOpenEntry(key) {
-    const entry = overlayFor(KIND).user.find(e => e.key === key);
+    const userEntries = overlayFor(KIND).user;
+    const entry = libraryEntryOf(key, { userEntries, builtinList: detailBuiltinFigures });
     if (!entry) return;
-    guardDiscard(() => replaceDoc(docFromEntry(entry)));
+    const origin = libraryOriginOf(key, { builtinKeys: BUILTIN_KEYS, userKeys: userKeysNow() });
+    guardDiscard(() => replaceDoc(docForLibraryEntry(entry, origin)));
+  }
+  // 組込みの図の「編集（上書きを作る）」: 同キーのまま編集可にする（保存で overridesBuiltin の上書きが作られる）。
+  function handleEditOverride() {
+    setDoc(d => unlockDoc(d));
+    setMessage(null);
+    setRevertConfirm(null);
+  }
+  function handleRevertClick() {
+    if (busy || !prevEntry || !rowActions?.canRevert) return;
+    guardDiscard(() => setRevertConfirm({ key: prevEntry.key, alsoRealignDoc: true }));
+  }
+  // 組込みに戻す（保守パネルの標準に戻すと同じ planRevertToBuiltin → applyCatalogEditPlan を runBusy の中で）。使用中でも戻せる（組込みがあるので参照は切れない）。
+  // 確認中に下書きを編集していたら（dirty）、置き換える前に破棄の確認を通す。
+  function handleRevertConfirmed() {
+    if (!revertConfirm || busy) return;
+    guardDiscard(performRevert);
+  }
+  async function performRevert() {
+    const { key } = revertConfirm;
+    const r = planRevert(key, { builtinKeys: BUILTIN_KEYS, userKeys: userKeysNow(), alsoRealignDoc: revertConfirm.alsoRealignDoc });
+    if (!r.ok) { setRevertConfirm(null); setMessage({ text: r.message, isError: true }); return; }
+    setBusy(true);
+    try {
+      await runBusy('カタログ適用', () => applyCatalogEditPlan(KIND, r.plan, { saveFn: saveUserCatalog, markDirty }));
+    } catch (e) {
+      setRevertConfirm(null);
+      setMessage({ text: `${DETAIL_HELPER_MESSAGES.revertFailed}${e.message}`, isError: true });
+      return;
+    } finally {
+      setBusy(false);
+    }
+    setRevertConfirm(null);
+    setLibTick(t => t + 1);
+    const builtin = libraryEntryOf(key, { userEntries: overlayFor(KIND).user, builtinList: detailBuiltinFigures });
+    setDoc(d => (d.prevEntry?.key === key && builtin ? docForLibraryEntry(builtin, LIBRARY_ORIGIN.BUILTIN) : d));
+    setMessage({ text: DETAIL_HELPER_MESSAGES.reverted, isError: false });
   }
 
   // 保存・削除・busy・失敗文言は CatalogMaintenancePanel.jsx の useCatalogEditActions と同型。共有化は S5 後の整理課題。
@@ -383,7 +439,7 @@ export function DetailHelperPanel({ onClose }) {
     if (busy) return;
     const entry = entryFromForm(form);
     // 同梱にも同じキーがあるとき、保守パネルと同じ行状態（doc-same 等）で保存し、同梱を外して開いている文書へ即反映する。
-    const plan = planSave(entry, prevEntry, docContextFor(KIND, { overlayFor, docDiffMap }));
+    const plan = planSave(entry, prevEntry, docContextFor(KIND, { overlayFor, docDiffMap, builtinList: detailBuiltinFigures }));
     const decision = saveDecision(plan);
     if (!decision.apply) { setMessage({ text: decision.message, isError: decision.isError }); return; }
     if (decision.confirmMessage) {
@@ -416,7 +472,7 @@ export function DetailHelperPanel({ onClose }) {
   }
 
   async function handleDeleteClick() {
-    if (busy || !prevEntry) return;
+    if (busy || !prevEntry || !rowActions?.canDelete) return; // 組込み・上書きは削除できない（上書きは「組込みに戻す」）
     // 使用状況を集める await の間に別の図を開く・複製・編集が通らないよう、先に塞ぐ（確認を出す前に戻す）。
     setBusy(true);
     let used;
@@ -464,6 +520,7 @@ export function DetailHelperPanel({ onClose }) {
   function handleDuplicate() {
     setDoc(d => duplicateDoc(d, { idFactory: newKeyPart }));
     setMessage(null);
+    setRevertConfirm(null);
   }
 
   function handleKeyDown(e) {
@@ -474,7 +531,8 @@ export function DetailHelperPanel({ onClose }) {
 
   const rows = moveRows(form);
   const wallNotice = wallThicknessNotice(materialLoadFailed);
-  const canSave = saveEnabled(form, result) && !busy;
+  const canSave = saveEnabled(form, result) && !busy && !readOnly;
+  const inertWhenReadOnly = readOnly || undefined; // 組込みの図は編集の部品を押せなくする（edit／handlePen も doc.readOnly で弾く）
 
   return (
     <div className="dthlp-root" ref={rootRef} tabIndex={-1} onKeyDown={handleKeyDown}>
@@ -523,7 +581,7 @@ export function DetailHelperPanel({ onClose }) {
             />
           )}
           {!showDxf && (<>
-          <div className="dthlp-pen">
+          <div className="dthlp-pen" inert={inertWhenReadOnly}>
             <button className="dthlp-btn dthlp-distance" onClick={() => openNumpad({ kind: 'pen' }, penText, DETAIL_NUMPAD_LABELS.penDistance)}>
               {distanceButtonLabel(penText)}
             </button>
@@ -539,7 +597,7 @@ export function DetailHelperPanel({ onClose }) {
             {penError && <div className="dthlp-error">{penError}</div>}
           </div>
 
-          <div className="dthlp-moves">
+          <div className="dthlp-moves" inert={inertWhenReadOnly}>
             {rows.map(r => (
               <div key={r.strokeId} className="dthlp-stroke">
                 <div className="dthlp-stroke-head">
@@ -607,7 +665,7 @@ export function DetailHelperPanel({ onClose }) {
                 primitives={shownPrims}
                 maxWidth={PREVIEW_FRAME_PX.width}
                 maxHeight={PREVIEW_FRAME_PX.height}
-                onEditDim={showDxf || fitOn ? undefined : (dim, v) => edit(f => setMoveLen(f, dim.editKey, String(v)))}
+                onEditDim={showDxf || fitOn || readOnly ? undefined : (dim, v) => edit(f => setMoveLen(f, dim.editKey, String(v)))}
               />
             )}
           </div>
@@ -615,7 +673,7 @@ export function DetailHelperPanel({ onClose }) {
 
         {/* 右: 分類・基準・検証・保存・ライブラリ */}
         <section className="dthlp-pane dthlp-right">
-          <div className="dthlp-block">
+          <div className="dthlp-block" inert={inertWhenReadOnly}>
             <label className="dthlp-row">{DETAIL_HELPER_TEXT.fieldLabel}
               <input className="dthlp-input" value={form.label} onChange={e => edit(f => ({ ...f, label: e.target.value }), { track: false })} />
             </label>
@@ -630,7 +688,7 @@ export function DetailHelperPanel({ onClose }) {
             </label>
           </div>
 
-          <div className="dthlp-block">
+          <div className="dthlp-block" inert={inertWhenReadOnly}>
             <div className="dthlp-block-head">
               <span>{DETAIL_HELPER_TEXT.datumHeading}</span>
               <button className="dthlp-btn dthlp-btn--small" onClick={() => edit(f => addDatum(f))}>{DETAIL_HELPER_TEXT.addDatum}</button>
@@ -686,8 +744,26 @@ export function DetailHelperPanel({ onClose }) {
             <div className="dthlp-actions">
               <button className="dthlp-btn dthlp-btn--primary" disabled={!canSave} onClick={handleSave}>{DETAIL_HELPER_TEXT.save}</button>
               <button className="dthlp-btn" disabled={busy} onClick={handleDuplicate}>{DETAIL_HELPER_TEXT.duplicate}</button>
-              <button className="dthlp-btn" disabled={busy || !prevEntry} onClick={handleDeleteClick}>{DETAIL_HELPER_TEXT.remove}</button>
+              {readOnly && <button className="dthlp-btn dthlp-btn--primary" disabled={busy} onClick={handleEditOverride}>{DETAIL_HELPER_TEXT.editOverride}</button>}
+              {rowActions?.canRevert
+                ? <button className="dthlp-btn" disabled={busy} onClick={handleRevertClick}>{DETAIL_HELPER_TEXT.revertToBuiltin}</button>
+                : <button className="dthlp-btn" disabled={busy || !prevEntry || !rowActions?.canDelete} onClick={handleDeleteClick}>{DETAIL_HELPER_TEXT.remove}</button>}
             </div>
+            {readOnly && <div className="dthlp-ok">{DETAIL_HELPER_TEXT.builtinReadOnly}</div>}
+            {revertConfirm && (
+              <div className="dthlp-block">
+                <div>{DETAIL_HELPER_TEXT.revertTitle}</div>
+                <label className="dthlp-row">
+                  <input type="checkbox" checked={revertConfirm.alsoRealignDoc}
+                    onChange={e => setRevertConfirm(c => ({ ...c, alsoRealignDoc: e.target.checked }))} />
+                  {DETAIL_HELPER_TEXT.revertAlsoDoc}
+                </label>
+                <div className="dthlp-actions">
+                  <button className="dthlp-btn dthlp-btn--primary" disabled={busy} onClick={handleRevertConfirmed}>{DETAIL_HELPER_TEXT.approveButton}</button>
+                  <button className="dthlp-btn" disabled={busy} onClick={() => setRevertConfirm(null)}>{DETAIL_HELPER_MESSAGES.cancelButton}</button>
+                </div>
+              </div>
+            )}
             {message && <div className={message.isError ? 'dthlp-error' : 'dthlp-ok'}>{message.text}</div>}
           </div>
 
