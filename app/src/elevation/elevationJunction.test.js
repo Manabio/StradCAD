@@ -57,8 +57,8 @@ const ceilingTrimFigure = (key, h = 60) => junctionFigure(key, WALL_CEILING, [
 
 test('floorWall: 包絡線の段差の高さに細線（source=detail）が引かれ、既存の巾木線は引かれない（巾木は図が担う）', () => {
   install(baseboardFigure('k'));
-  const ref = buildFaceFigure(makeFace(), ctxOf({ room: makeRoom(null, 'h=45') }));
-  assert.equal(at(ref.filter(p => p.type === 'line'), -45).length, 1, '対照: 割当て無しは従来の巾木線');
+  const ref = buildFaceFigure(makeFace(), ctxOf({ room: makeRoom({ [FLOOR_WALL]: 'gone' }, 'h=45') }));
+  assert.equal(at(ref.filter(p => p.type === 'line'), -45).length, 1, '対照: 参照切れの割当ては従来の巾木線（フォールバック）');
   const prims = buildFaceFigure(makeFace(), ctxOf({ room: makeRoom({ [FLOOR_WALL]: 'k' }, 'h=45') }));
   assert.equal(at(prims.filter(p => p.type === 'line'), -45).length, 0, 'fit が成った面は巾木線を引かない');
   const lines = at(detailLines(prims), -60);
@@ -76,7 +76,7 @@ test('floorWall: 印（air）の段差は中線・自動の段差は細線（同
   assert.deepEqual(at(lines, -100).map(l => l.weight), [THIN]);
 });
 
-test('floorWall: 床まで達する戸・線の高さを含む窓・壁の無い区間・線の高さを覆わない腰壁で線が切れる', () => {
+test('floorWall: 床まで達する戸・線の高さを含む窓・壁の無い区間で線が切れる（腰壁では切れない）', () => {
   install(steppedFloorWall('k'));
   const door = { id: 'd', isVertical: false, axisCL: { id: 'axisY0' }, centerCoord: 500, width: 800, height: 2000, sillHeight: 0, category: OpeningCategory.FITTING, subType: 'singleSwing' };
   const win = { id: 'w', isVertical: false, axisCL: { id: 'axisY0' }, centerCoord: 3500, width: 400, height: 1000, sillHeight: 80, category: OpeningCategory.WINDOW, subType: 'fixed' };
@@ -91,13 +91,13 @@ test('floorWall: 床まで達する戸・線の高さを含む窓・壁の無い
   const l60 = at(detailLines(prims), -60);
   assert.deepEqual([50, 1000, 2000, 3500, 3900].map(x => drawnAt(l60, x)), [true, true, true, true, true]);
   assert.deepEqual([500, 3100].map(x => drawnAt(l60, x)), [false, false], '戸と開放スパンの中は途切れる');
-  // 高さ 100: 戸・窓（窓台 80〜1080 は 100 を含む）に加え、腰壁の高さ（80）を超える 1500〜2500 でも切れる
+  // 高さ 100: 戸・窓（窓台 80〜1080 は 100 を含む）・開放スパンで切れる。腰壁の区間（1500〜2500）は壁体があるので切れない
   const l100 = at(detailLines(prims), -100);
-  assert.deepEqual([50, 1000, 2800, 3900].map(x => drawnAt(l100, x)), [true, true, true, true]);
-  assert.deepEqual([500, 2000, 3500, 3100].map(x => drawnAt(l100, x)), [false, false, false, false], '戸・腰壁が覆わない区間・窓・開放スパンは途切れる');
+  assert.deepEqual([50, 1000, 2000, 2800, 3900].map(x => drawnAt(l100, x)), [true, true, true, true, true]);
+  assert.deepEqual([500, 3500, 3100].map(x => drawnAt(l100, x)), [false, false, false], '戸・窓・開放スパンは途切れる');
 });
 
-test('floorWall: 垂れ壁（天井から bottomHeight の寸法）の覆いは「天井高−bottomHeight」以上の高さだけ（8a の不良修正）', () => {
+test('floorWall: 垂れ壁の下も切れない（従来の巾木に合わせる・S8c 裁定。切るのは壁体の無い区間と開口だけ）', () => {
   // 段差の高さ 1000 と 2100。天井 2400・垂れ壁 400 → 垂れ壁の下端は床から 2000
   install(junctionFigure('k', FLOOR_WALL, [
     move(PenDir.RIGHT, fixedLen(20)), move(PenDir.UP, fixedLen(1000)), move(PenDir.LEFT, fixedLen(10)),
@@ -110,10 +110,57 @@ test('floorWall: 垂れ壁（天井から bottomHeight の寸法）の覆いは�
   }));
   const drawnAt = (lines, x) => lines.some(l => Math.min(l.x1, l.x2) <= x && x <= Math.max(l.x1, l.x2));
   const l1000 = at(detailLines(prims), -1000);
-  assert.deepEqual([500, 3500].map(x => drawnAt(l1000, x)), [true, true]);
-  assert.equal(drawnAt(l1000, 2000), false, '高さ 1000 は垂れ壁の下端（2000）より下＝垂れ壁の下には壁が無いので引かない');
+  assert.deepEqual([500, 2000, 3500].map(x => drawnAt(l1000, x)), [true, true, true], '高さ 1000 も垂れ壁の下で切れない');
   const l2100 = at(detailLines(prims), -2100);
   assert.deepEqual([500, 2000, 3500].map(x => drawnAt(l2100, x)), [true, true, true], '高さ 2100 は垂れ壁の中＝切れない');
+});
+
+/** floorWall（高さ 100 と 1000）と wallCeiling（60）の両方を持つ面を、記録だけ変えて描く。 */
+function drawWithRecords(kneeDropWalls, extra = {}) {
+  install(
+    junctionFigure('fw', FLOOR_WALL, [
+      move(PenDir.RIGHT, fixedLen(20)), move(PenDir.UP, fixedLen(100)), move(PenDir.LEFT, fixedLen(10)),
+      move(PenDir.UP, fixedLen(900)), move(PenDir.LEFT, fixedLen(10)),
+    ], { closed: true }),
+    ceilingTrimFigure('wc'),
+  );
+  const shapes = new Map([['s', { value: 1500 }], ['e', { value: 2500 }]]);
+  const { openings = [], ...faceOver } = extra;
+  return buildFaceFigure(makeFace(faceOver), ctxOf({
+    graph: makeGraph({ shapes, kneeDropWalls, openings }), room: makeRoom({ [FLOOR_WALL]: 'fw', [WALL_CEILING]: 'wc' }),
+  }));
+}
+const recMap = rec => new Map(rec ? [[edgeKey('axisY0', 's', 'e'), rec]] : []);
+
+test('【保証】派生線（floorWall・wallCeiling）は腰壁・垂れ壁の記録に左右されない（無し・腰壁だけ・垂れ壁だけ・両方で同一）', () => {
+  const none = detailLines(drawWithRecords(recMap(null)));
+  assert.ok(none.length >= 3, `対照: 記録が無くても派生線は出る（実際:${none.length}）`);
+  for (const rec of [{ knee: { topHeight: 80 }, drop: null }, { knee: null, drop: { bottomHeight: 400 } }, { knee: { topHeight: 1000 }, drop: { bottomHeight: 400 } }]) {
+    assert.deepEqual(detailLines(drawWithRecords(recMap(rec))), none, JSON.stringify(rec));
+  }
+});
+
+test('wallCeiling: 腰壁だけの区間の上でも途切れない（廻り縁は 1 本の連続）', () => {
+  const lines = detailLines(drawWithRecords(recMap({ knee: { topHeight: 80 }, drop: null }))).filter(p => p.y1 === -2340 && p.y2 === -2340);
+  assert.equal(lines.length, 1);
+  assert.deepEqual([lines[0].x1, lines[0].x2], [0, 4000]);
+});
+
+test('【失敗系】記録があっても、同じ区間の開放スパン・床まで達する戸は線を切る（切る理由は壁体の無さと開口だけ）', () => {
+  const rec = recMap({ knee: null, drop: { bottomHeight: 400 } });
+  const drawnAt = (lines, x) => lines.some(l => Math.min(l.x1, l.x2) <= x && x <= Math.max(l.x1, l.x2));
+  const spans = [{ loX: 0, hiX: 1800, kind: 'wall' }, { loX: 1800, hiX: 2200, kind: 'open', farFloorDeltaMm: 0, farCeilAbsMm: 2400 }, { loX: 2200, hiX: 4000, kind: 'wall' }];
+  const door = { id: 'd', isVertical: false, axisCL: { id: 'axisY0' }, centerCoord: 3000, width: 800, height: 2000, sillHeight: 0, category: OpeningCategory.FITTING, subType: 'singleSwing' };
+  const l100 = at(detailLines(drawWithRecords(rec, { spans, openings: [door] })), -100);
+  assert.deepEqual([1000, 3900].map(x => drawnAt(l100, x)), [true, true]);
+  assert.deepEqual([2000, 3000].map(x => drawnAt(l100, x)), [false, false], '開放スパンと戸の中は記録があっても切れる');
+});
+
+test('floorWall: 既定の巾木 60 は分母 300 で最小描画幅 150 へ引き上がる（受容を固定）', () => {
+  const heights = scaleDenom => [...new Set(detailLines(buildFaceFigure(makeFace(), ctxOf({ room: makeRoom(null, 'h=60'), scaleDenom })))
+    .filter(p => p.y1 === p.y2).map(p => -p.y1))];
+  assert.deepEqual(heights(100), [60], '対照: 分母 100 は 60');
+  assert.deepEqual(heights(300), [150]);
 });
 
 test('wallCeiling: 天井面から下へ t の線が区間ごとの天井高に追従する', () => {
@@ -181,7 +228,9 @@ test('junctionLineSpecs: 床〜天井の外の高さは引かない（天井よ�
 });
 
 test('【失敗系】存在しないキー・壁厚に合わない図・壁が引けない面: 線を出さず出力は割当て無しと byte 一致（巾木も従来どおり）', () => {
-  const base = buildFaceFigure(makeFace(), ctxOf({ room: makeRoom(null, 'h=45') }));
+  // 基準＝従来の巾木線（参照切れの割当てはフォールバック）。割当て無しは組込みが既定になるので基準にしない（S8c）
+  const base = buildFaceFigure(makeFace(), ctxOf({ room: makeRoom({ [FLOOR_WALL]: 'gone0' }, 'h=45') }));
+  assert.equal(at(base.filter(p => p.type === 'line'), -45).length, 1);
   install(wallBackedFigure('thick-only')); // 固定 5mm＋伸縮: 壁厚 4 では FIXED_EXCEEDS_TARGET
   const gone = buildFaceFigure(makeFace(), ctxOf({ room: makeRoom({ [FLOOR_WALL]: 'gone' }, 'h=45') }));
   assert.deepEqual(gone, base);

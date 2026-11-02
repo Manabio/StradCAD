@@ -10,7 +10,7 @@
 // 失敗は例外にしない（{error}・null・集計の行）。
 // ================================================================
 
-import { KNEE_DROP_DETAIL_SLOTS, DetailSlot } from '../core/constants.js';
+import { KNEE_DROP_DETAIL_SLOTS, DetailSlot, DetailFigureSource, DETAIL_BUILTIN_KNEE_CAP_KEY } from '../core/constants.js';
 import { kneeDropFrontSideOf } from '../core/kneeDropRecord.js';
 import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, detailOwnerKneeDrop, detailOwnerRoom, detailOwnerCeilingZone } from '../error.js';
 import { detailFigureEntry, detailFitKey, fitDetailLocalMemo } from '../openings/openingCatalog.js';
@@ -29,13 +29,18 @@ const refOf = (rec, slot) => {
 
 /**
  * 記録の slot の割当てを図のエントリへ解決する。
+ * 暗黙の既定（S8c）: kneeTop は割当てが無くても腰壁（rec.knee）があれば組込みの天板（source=default）。dropBottom に既定は無い。
+ * 利用者の割当てがあれば source=explicit（参照切れの通知はこちらだけ）。
  * @param {{rec:object, slot:string, entryOf?:(key:string)=>object|null}} p entryOf＝図のキー→エントリ（既定はカタログ）
- * @returns {null | {key:string, slot:string, entry:object|null}} null＝割当て無し。entry が null＝参照切れ（カタログに無い）
+ * @returns {null | {key:string, slot:string, entry:object|null, source:string}} null＝割当て無し（既定も無い）。entry が null＝参照切れ（カタログに無い）。source＝DetailFigureSource
  */
 export function resolveKneeDropDetailFigure({ rec, slot, entryOf = detailFigureEntry }) {
   const key = refOf(rec, slot);
-  if (key === undefined) return null;
-  return { key, slot, entry: entryOf(key) ?? null };
+  if (key !== undefined) return { key, slot, entry: entryOf(key) ?? null, source: DetailFigureSource.EXPLICIT };
+  if (slot === DetailSlot.KNEE_TOP && rec?.knee) {
+    return { key: DETAIL_BUILTIN_KNEE_CAP_KEY, slot, entry: entryOf(DETAIL_BUILTIN_KNEE_CAP_KEY) ?? null, source: DetailFigureSource.DEFAULT };
+  }
+  return null;
 }
 
 /**
@@ -238,7 +243,8 @@ export function collectKneeDropPartFailures(graph, seen = new Set(), { materialM
     if (!rec?.detailRefs) continue;
     for (const slot of KNEE_DROP_DETAIL_SLOTS) {
       const r = resolveKneeDropDetailFigure({ rec, slot, entryOf });
-      if (!r) continue;
+      // 暗黙の既定（組込みの天板）の失敗は通知しない: 展開は従来の天端下の細線へ黙って戻る（S8c）
+      if (!r || r.source === DetailFigureSource.DEFAULT) continue;
       cellToRoom ??= buildCellToRoom(graph);
       const geo = kneeDropWallGeometry(graph, recKey, cellToRoom);
       const owner = detailOwnerKneeDrop([geo?.roomNeg?.name, geo?.roomPos?.name]);

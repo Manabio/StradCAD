@@ -38,6 +38,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -150,6 +151,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2175,
@@ -252,6 +254,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4340,
@@ -373,6 +376,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6360,
@@ -499,6 +503,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 10200,
@@ -625,6 +630,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 14040,
@@ -778,6 +784,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -890,6 +897,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -968,6 +976,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3130,
@@ -1070,6 +1079,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 5150,
@@ -1199,6 +1209,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -1311,6 +1322,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -1413,6 +1425,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3130,
@@ -1515,6 +1528,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 5150,
@@ -1668,6 +1682,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -1804,6 +1819,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3840,
@@ -1949,6 +1965,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 9500,
@@ -2075,6 +2092,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 13340,
@@ -2263,6 +2281,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": -150,
@@ -2391,6 +2410,7 @@
     "y2": -2400
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2092.5,
@@ -2399,6 +2419,7 @@
     "y2": 290
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3767.5,
@@ -2407,6 +2428,7 @@
     "y2": -60
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3767.5,
@@ -5206,6 +5228,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5342,6 +5365,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3840,
@@ -5511,6 +5535,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 11320,
@@ -5637,6 +5662,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 15160,
@@ -5857,6 +5883,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5969,6 +5996,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1265,
@@ -6047,6 +6075,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2520,
@@ -6173,6 +6202,7 @@
     "y2": -2050
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4695,
@@ -6181,6 +6211,7 @@
     "y2": 290
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6515,
@@ -6364,6 +6395,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 9595,
@@ -6466,6 +6498,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 11760,
@@ -6576,6 +6609,7 @@
     "y2": -2050
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 12870,
@@ -6721,6 +6755,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 16715,
@@ -6823,6 +6858,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 18880,
@@ -6925,6 +6961,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 20900,
@@ -7051,6 +7088,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 24740,
@@ -7220,6 +7258,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 31310,
@@ -7365,6 +7404,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 36060,
@@ -7596,6 +7636,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -7732,6 +7773,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3840,
@@ -7858,6 +7900,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6770,
@@ -7984,6 +8027,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 10610,
@@ -8161,6 +8205,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -8297,6 +8342,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3840,
@@ -8399,6 +8445,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 5860,
@@ -8525,6 +8572,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 9700,
@@ -8678,6 +8726,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -8814,6 +8863,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3840,
@@ -8940,6 +8990,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 7680,
@@ -9066,6 +9117,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 11520,

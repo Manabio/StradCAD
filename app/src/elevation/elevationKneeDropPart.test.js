@@ -39,17 +39,20 @@ const band = (room, graph, ctx = CTX) => buildRoomBand(room, graph, ctx).primiti
 const derived = prims => prims.filter(p => p.type === 'line' && p.source === DETAIL_PRIM_SOURCE);
 const KNEE = { knee: { topHeight: 800 }, drop: null };
 
-test('厚 30 の天板（1/20）: 腰壁の面（LDK 側＝表の側）に天端から 30 下の細線（source=detail）。既存の天端の下の細線（20）も残る', () => {
+// source 属性（見た目に影響しない出どころの印）を除いた帯の出力
+const noSource = prims => prims.map(p => Object.fromEntries(Object.entries(p).filter(([k]) => k !== 'source')));
+
+test('厚 30 の天板（1/20）: 腰壁の面（LDK 側＝表の側）に天端から 30 下の細線（source=detail）。従来の天端の下の細線（20）は引かない（S8c: 図が担う）', () => {
   setOverlay(DF, { user: [frontOnlyCapFigure('df-cap30', 30)] });
   const { graph, ldk } = twoRooms({ ...KNEE, detailRefs: { [KNEE_TOP]: 'df-cap30' } });
   const prims = band(ldk, graph);
   const d = derived(prims);
   assert.ok(d.length >= 1, '派生線が引かれる');
   assert.ok(d.every(p => p.y1 === -770 && p.y2 === -770 && p.weight === 'thin'), JSON.stringify(d));
-  assert.ok(prims.some(p => p.type === 'line' && p.source === undefined && p.y1 === -780 && p.y2 === -780), '既存の kneeCapUnderline（20）は残る（両方引く）');
+  assert.ok(!prims.some(p => p.type === 'line' && p.y1 === -780 && p.y2 === -780 && p.weight === 'thin'), '従来の kneeCapUnderline（20）は図が解決したので引かない');
 });
 
-test('厚 30 の天板（分母未指定＝100）: 30 は最小描画幅 50 へ引き上がり、既存の天端の下の細線（50）に重なって派生線は別に残らない', () => {
+test('厚 30 の天板（分母未指定＝100）: 30 は最小描画幅 50 へ引き上がり、天端から 50 下の細線になる（30 下には線が無い）', () => {
   setOverlay(DF, { user: [frontOnlyCapFigure('df-cap30', 30)] });
   const { graph, ldk } = twoRooms({ ...KNEE, detailRefs: { [KNEE_TOP]: 'df-cap30' } });
   const prims = band(ldk, graph, CTX_DEFAULT);
@@ -57,14 +60,15 @@ test('厚 30 の天板（分母未指定＝100）: 30 は最小描画幅 50 へ�
   assert.ok(prims.some(p => p.type === 'line' && p.y1 === -750 && p.y2 === -750 && p.weight === 'thin'), '50 下の細線（既存と重なって 1 本）');
 });
 
-test('組込み天板（厚 20）: 分母 100 でも 20 でも既存の天端の下の細線と重なり、割当て無しの帯と同じ出力（線が 1 本に見える）', () => {
-  setOverlay(DF, { user: [KNEE_CAP] });
-  const none = twoRooms(KNEE);
-  const withRef = twoRooms({ ...KNEE, detailRefs: { [KNEE_TOP]: KNEE_CAP_20_KEY } });
-  for (const ctx of [CTX, CTX_DEFAULT]) {
-    const a = band(withRef.ldk, withRef.graph, ctx).filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2 && p.x1 !== p.x2);
-    const b = band(none.ldk, none.graph, ctx).filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2 && p.x1 !== p.x2);
-    assert.deepEqual(a.map(p => [p.y1, p.x1, p.x2]), b.map(p => [p.y1, p.x1, p.x2]), `scaleDenom=${ctx.scaleDenom}`);
+test('【S8c】組込み天板が暗黙の既定: 割当て無しの腰壁でも天端の下の細線が図の派生線（source=detail）で引かれ、位置は従来の細線（フォールバック）と同じ。分母 20 で 20 下・未指定で 50 下', () => {
+  const none = twoRooms(KNEE); // 割当て無し＝既定
+  const legacy = twoRooms({ ...KNEE, detailRefs: { [KNEE_TOP]: 'df-gone' } }); // 明示の参照切れ＝従来の細線へ戻る
+  for (const [ctx, drop] of [[CTX, 20], [CTX_DEFAULT, 50]]) {
+    const a = band(none.ldk, none.graph, ctx);
+    const underline = a.filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === -(800 - drop) && p.y2 === p.y1);
+    assert.ok(underline.length >= 1 && underline.every(p => p.source === DETAIL_PRIM_SOURCE), `scaleDenom=${ctx.scaleDenom}: ${JSON.stringify(underline)}`);
+    assert.deepEqual(noSource(a), noSource(band(legacy.ldk, legacy.graph, ctx)), `既定 ≡ 従来（source 除外）scaleDenom=${ctx.scaleDenom}`);
+    assert.ok(!band(legacy.ldk, legacy.graph, ctx).some(p => p.source === DETAIL_PRIM_SOURCE), '従来経路（フォールバック）は source を付けない');
   }
 });
 
@@ -103,22 +107,26 @@ test('垂れ壁の下端（分母未指定＝100）: 派生線の t=−20 は最
   assert.ok(d.every(p => p.y1 === -2050 && p.weight === 'thin'), JSON.stringify(d.map(p => [p.y1, p.weight])));
 });
 
-test('【失敗系】参照切れの割当て・割当て無しの記録・腰壁の値の無い記録の kneeTop: 線を出さず、出力は割当て無しとバイト一致', () => {
+test('【失敗系】参照切れの割当て・腰壁の値の無い記録の kneeTop: 図の線を出さず従来の細線へ戻り、出力は割当て無し（既定）と source 以外一致', () => {
   setOverlay(DF, { user: [KNEE_CAP] });
   const none = twoRooms(KNEE);
-  const base = JSON.stringify(band(none.ldk, none.graph));
+  const base = JSON.stringify(noSource(band(none.ldk, none.graph)));
   const gone = twoRooms({ ...KNEE, detailRefs: { [KNEE_TOP]: 'df-gone' } });
-  assert.equal(JSON.stringify(band(gone.ldk, gone.graph)), base);
+  assert.equal(JSON.stringify(noSource(band(gone.ldk, gone.graph))), base);
+  assert.equal(derived(band(gone.ldk, gone.graph)).length, 0, '参照切れ＝図の線は無い（従来の細線）');
   // 垂れ壁だけの記録に kneeTop の割当ては残らない（setKneeDropWall が落とす）＝割当て無しと同じ
   const dropOnly = twoRooms({ knee: null, drop: { bottomHeight: 400 }, detailRefs: { [KNEE_TOP]: KNEE_CAP_20_KEY } });
   assert.equal(Object.hasOwn(dropOnly.graph.kneeDropWalls.values().next().value, 'detailRefs'), false);
 });
 
-test('kneeDropPartStepsOf: 割当てが 1 つも無い graph は null（関数自体を渡さない）。割当てがあれば関数。自階（self）以外の層の壁・記録に掛からない列は null', () => {
+test('kneeDropPartStepsOf: 腰壁・垂れ壁の記録が無い graph は null（関数自体を渡さない）。記録があれば関数（割当て無しの腰壁は組込み天板が既定）。自階（self）以外の層の壁・記録に掛からない列は null', () => {
   setOverlay(DF, { user: [KNEE_CAP] });
   const none = twoRooms(KNEE);
-  assert.equal(kneeDropPartStepsOf({ graph: none.graph }), null);
+  assert.equal(typeof kneeDropPartStepsOf({ graph: none.graph }), 'function', '割当て無しの腰壁＝既定の天板');
+  assert.equal(kneeDropPartStepsOf({ graph: twoRooms({ knee: null, drop: null }).graph }), null, '記録が空');
   assert.equal(kneeDropPartStepsOf({ graph: null }), null);
+  assert.equal(kneeDropPartStepsOf({ graph: none.graph })({ wall: none.graph.walls.find(w => w.axisCL.effectiveValue === 3000 && !w.isVertical), layerRole: 'self' },
+    { worldLo: 1000, worldHi: 2000 }, { viewSign: 1 }).kneeTop[0].t, 50);
   const { graph } = twoRooms({ ...KNEE, detailRefs: { [KNEE_TOP]: KNEE_CAP_20_KEY } });
   const fn = kneeDropPartStepsOf({ graph, scaleDenom: 20 });
   assert.equal(typeof fn, 'function');

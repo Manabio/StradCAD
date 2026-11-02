@@ -97,6 +97,17 @@ test('compareDirs: 追加・削除・線種変更を帯単位で数える', () =
   assert.equal(r.chg, 1);
 });
 
+test('compareDirs: ignoreSource は source 属性だけの差を一致にする（幾何・線種の差は残す）。既定では差分', () => {
+  const g = makeDir({ 'elevfig-1階.json': [row([line(10), line(20)], 'a')] });
+  const n = makeDir({ 'elevfig-1階.json': [row([{ ...line(10), source: 'detail' }, line(20)], 'a')] });
+  assert.equal(compareDirs(g, n).ok, false, '既定は source も比べる');
+  assert.equal(compareDirs(g, n, { ignoreSource: true }).ok, true);
+  const moved = makeDir({ 'elevfig-1階.json': [row([{ ...line(11), source: 'detail' }, line(20)], 'a')] });
+  assert.equal(compareDirs(g, moved, { ignoreSource: true }).ok, false, '座標の差は除外されない');
+  assert.equal(parseArgs(['--ignore-source']).ignoreSource, true);
+  assert.equal(parseArgs([]).ignoreSource, false);
+});
+
 test('【失敗系】compareDirs: 新側に無いファイル・golden 側に無い elevfig は差分扱い', () => {
   const g = makeDir({ 'elevfig-1階.json': [row([line(10)])], 'elevfig-2階.json': [row([line(10)])] });
   const n = makeDir({ 'elevfig-1階.json': [row([line(10)])], 'elevfig-3階.json': [row([line(10), line(11)])] });

@@ -3,7 +3,7 @@
 // 局所座標: s＝壁の仕上げ面から室内側が正・t＝下向き正。
 //   s: WALL_FINISH_FACE の origin＝0（壁の仕上げ面）・end＝−壁厚（壁の反対の面。壁の中側が負）
 //   t: floorWall は FL の origin＝0（床仕上げ面）・wallCeiling は CEILING_FACE の origin＝0（天井面）
-//   param: wallThickness＝壁厚 / material: 図が引く材コードの寸法（thickness・x・y）
+//   param: wallThickness＝壁厚 / baseboardHeight＝部屋の巾木高さ（呼び出し側が渡したときだけ。S8c） / material: 図が引く材コードの寸法（thickness・x・y）
 // それ以外の（role・軸・種別）の組は UNSUPPORTED_DATUM（openings/openingDetailFrame.js と同型の失敗）。
 // 腰壁・垂れ壁の部位（part。S8b-1。partTargets）: s は同じ（表の側の仕上げ面が origin 0・end −壁厚）、
 //   t は kneeTop が WALL_TOP の origin＝0（腰壁の天端の面）・dropBottom が WALL_BOTTOM の origin＝0（垂れ壁の下端の面）。
@@ -59,7 +59,7 @@ function stepDatumBase(d, { tRole, tEndMm }) {
   return undefined;
 }
 
-function buildTargets(fig, { tOriginRole, wallThicknessMm, step, materialMap, targetName }) {
+function buildTargets(fig, { tOriginRole, wallThicknessMm, baseboardHeightMm, step, materialMap, targetName }) {
   const datums = {};
   for (const d of Array.isArray(fig?.datums) ? fig.datums : []) {
     if (d === null || typeof d !== 'object') continue; // 形の不正は fit の検証（INVALID）が理由つきで返す
@@ -76,21 +76,24 @@ function buildTargets(fig, { tOriginRole, wallThicknessMm, step, materialMap, ta
   }
   // 床・天井の段差は壁厚の param を持たない（段差高は t の end で吸う）
   const params = step === undefined ? { [DetailParam.WALL_THICKNESS]: wallThicknessMm } : {};
+  // 巾木高さは呼び出し側が部屋の設定（h=<mm>）から解析して渡したときだけ供給する（無ければ param 未解決＝この param を使う図は fit 失敗）
+  if (step === undefined && Number.isFinite(baseboardHeightMm) && baseboardHeightMm > 0) params[DetailParam.BASEBOARD_HEIGHT] = baseboardHeightMm;
   return { targets: { datums, params, materials } };
 }
 
 /**
  * fitLocal に渡す targets を作る。datums は図の Datum.id をキーにする（fit が id で引くため）。
  * @param {object} fig DetailFigure（カタログのエントリ。不正でも例外にせず fit の検証へ回す）
- * @param {{slot:string, wallThicknessMm:number, materialMap?:{get:(code:string)=>object|undefined}|null}} p
+ * @param {{slot:string, wallThicknessMm:number, baseboardHeightMm?:number, materialMap?:{get:(code:string)=>object|undefined}|null}} p
  *   materialMap＝材コード→材（{thickness, x, y}）。図が material 束縛で引くコードだけ targets.materials に載せる
  *   （材が無い・厚みが無いコードは載せない＝fit が UNRESOLVED_MATERIAL を返す）
+ *   baseboardHeightMm＝部屋の巾木高さ（params.baseboardHeight。S8c。未指定・正の有限数でなければ供給しない＝その param を使う図は UNRESOLVED_PARAM）
  * @returns {{targets:{datums:Object<string,number>, params:Object<string,number>, materials:Object<string,object>}}
  *   | {error:{code:string, message:string}}}
  */
-export function junctionTargets(fig, { slot, wallThicknessMm, materialMap = null }) {
+export function junctionTargets(fig, { slot, wallThicknessMm, baseboardHeightMm, materialMap = null }) {
   if (!Object.hasOwn(T_ORIGIN_ROLE, slot)) return fail(RoomDetailError.UNSUPPORTED_SLOT, `取り合いの slot ではありません: ${String(slot)}`);
-  return buildTargets(fig, { tOriginRole: T_ORIGIN_ROLE[slot], wallThicknessMm, materialMap, targetName: DETAIL_TARGET_JUNCTION });
+  return buildTargets(fig, { tOriginRole: T_ORIGIN_ROLE[slot], wallThicknessMm, baseboardHeightMm, materialMap, targetName: DETAIL_TARGET_JUNCTION });
 }
 
 /**

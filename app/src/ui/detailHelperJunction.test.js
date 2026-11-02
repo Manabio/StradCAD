@@ -3,10 +3,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { PenDir, DetailLenMode, DetailEdgeMark, DetailCategory, DetailView, DetailSubject, DetailMaterialField } from '../core/constants.js';
+import { PenDir, DetailLenMode, DetailEdgeMark, DetailCategory, DetailView, DetailSubject, DetailMaterialField, DetailParam } from '../core/constants.js';
 import {
   newDraft, applyPen, setClassification, setMoveMode, setMoveEdge, moveRows, entryFromForm, formFromEntry, validation,
-  tryFit, junctionSlotOf, fitDimFieldsFor, isElevationFigureForm, setAnchor, addDatum, setDatumField, previewPrimitivesOf,
+  tryFit, junctionSlotOf, fitDimFieldsFor, usesBaseboardHeightParam, defaultFitDimsFor, isElevationFigureForm, setAnchor, addDatum, setDatumField, previewPrimitivesOf,
   DETAIL_HELPER_TEXT, FIT_DIM_FIELDS,
 } from './detailHelperForm.js';
 import { PREVIEW_AIR_EDGE_WIDTH_PX } from '../detail/detailPreview.js';
@@ -78,6 +78,20 @@ test('【失敗系】tryFit(junction): 壁厚が正の数でない・基準の�
   assert.equal(tryFit(matForm, { wallThickness: '100' }).error.code, 'unresolvedMaterial');
   const ok = tryFit(matForm, { wallThickness: '100' }, { materialMap: new Map([[MAT, { thickness: 12, x: 0, y: 0 }]]) });
   assert.deepEqual(ok.strokes[0].points.map(p => p.s), [0, -12, -100]);
+});
+
+test('【S8c】巾木高さ param: 使う床と壁の図は試し込みに巾木高さの欄（既定 60）が出る。値に追従し、無ければ param 未解決・0 以下は badFitDim', () => {
+  const f = junctionDraft();
+  assert.equal(usesBaseboardHeightParam(f), false);
+  assert.deepEqual(fitDimFieldsFor(f).map(x => x.field), ['wallThickness'], '使わない図は壁厚だけ');
+  const bb = setMoveMode(f, { strokeId: 's1', moveIndex: 0 }, DetailLenMode.PARAM, { param: DetailParam.BASEBOARD_HEIGHT });
+  assert.equal(usesBaseboardHeightParam(bb), true);
+  assert.deepEqual(fitDimFieldsFor(bb).map(x => x.field), ['wallThickness', 'baseboardHeight']);
+  assert.equal(defaultFitDimsFor(bb, 100).baseboardHeight, '60');
+  assert.deepEqual(tryFit(bb, { wallThickness: '100', baseboardHeight: '70' }).strokes[0].points.map(p => p.s), [0, -70, -100]);
+  assert.deepEqual(tryFit(bb, { wallThickness: '100', baseboardHeight: '90' }).strokes[0].points.map(p => p.s), [0, -90, -100]);
+  assert.match(tryFit(bb, { wallThickness: '100' }).error.message, /baseboardHeight/, '欄なし＝param 未解決');
+  for (const bad of ['', 'x', '0', '-5']) assert.equal(tryFit(bb, { wallThickness: '100', baseboardHeight: bad }).error.code, 'badFitDim', bad);
 });
 
 test('setMoveEdge: 印を付けるとエントリの手に edge:air が載り、外すとキー自体が消える（印なしは byte 不変）。editKey の手だけが変わる', () => {

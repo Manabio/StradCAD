@@ -5,13 +5,13 @@ import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from './wallGeneration.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
-import { DetailSlot } from '../core/constants.js';
+import { DetailSlot, DetailParam, PenDir } from '../core/constants.js';
 import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, detailOwnerRoom } from '../error.js';
 import { DetailFitError } from '../detail/detailPlacement.js';
 import {
-  resolveRoomDetailFigure, fitRoomJunction, roomWallThicknessesMm, wallAssemblyThicknessMm, collectRoomJunctionFailures,
+  resolveRoomDetailFigure, fitRoomJunction, roomWallThicknessesMm, wallAssemblyThicknessMm, collectRoomJunctionFailures, baseboardOf,
 } from './roomDetailJunction.js';
-import { baseboardFigure, wallBackedFigure } from './roomDetailTestFixtures.js';
+import { baseboardFigure, wallBackedFigure, junctionFigure, move, fixedLen, paramLen } from './roomDetailTestFixtures.js';
 
 const DF = CatalogKind.DETAIL_FIGURE;
 const { FLOOR_WALL, WALL_CEILING } = DetailSlot;
@@ -38,10 +38,57 @@ test('resolveRoomDetailFigure: 割当て無しは null、割当て有りは図�
   const ok = resolveRoomDetailFigure({ room, slot: FLOOR_WALL });
   assert.equal(ok.key, 'df-ok');
   assert.equal(ok.entry.key, 'df-ok');
-  assert.deepEqual(resolveRoomDetailFigure({ room, slot: WALL_CEILING }), { key: 'df-gone', slot: WALL_CEILING, entry: null });
+  assert.deepEqual(resolveRoomDetailFigure({ room, slot: WALL_CEILING }), { key: 'df-gone', slot: WALL_CEILING, entry: null, source: 'explicit' });
+  assert.equal(ok.source, 'explicit');
   // 差し替え口 entryOf
   assert.equal(resolveRoomDetailFigure({ room, slot: FLOOR_WALL, entryOf: () => null }).entry, null);
   assert.equal(resolveRoomDetailFigure({ room: null, slot: FLOOR_WALL }), null);
+});
+
+test('【S8c】暗黙の既定: 割当て無しでも巾木高さがあれば floorWall は組込みの巾木（source=default）。高さ無し・wallCeiling は null。明示の割当てが勝つ', () => {
+  const { room } = graphWithRoom();
+  assert.equal(resolveRoomDetailFigure({ room, slot: FLOOR_WALL }), null, '巾木高さ無し＝描かない');
+  room.finish.setField('baseboardHeight', 'h=60');
+  const d = resolveRoomDetailFigure({ room, slot: FLOOR_WALL });
+  assert.deepEqual([d.key, d.source, d.entry?.key], ['df-builtin-baseboard-10', 'default', 'df-builtin-baseboard-10']);
+  assert.equal(resolveRoomDetailFigure({ room, slot: WALL_CEILING }), null, '既定は floorWall だけ');
+  room.finish.setField('baseboardHeight', '自由入力');
+  assert.equal(resolveRoomDetailFigure({ room, slot: FLOOR_WALL }), null, 'h=<mm> と解釈できなければ描かない');
+  room.finish.setField('baseboardHeight', 'h=60');
+  install(baseboardFigure('df-ok'));
+  room.setDetailRefs({ [FLOOR_WALL]: 'df-ok' });
+  assert.deepEqual(resolveRoomDetailFigure({ room, slot: FLOOR_WALL }).source, 'explicit');
+});
+
+test('【S8c】巾木高さ param: fit は部屋の h に追従する（h=60 と h=90 で矩形の高さが変わる）。h を渡さなければ param 未解決で fit 失敗', () => {
+  const top = h => fitRoomJunction({ figureKey: 'df-builtin-baseboard-10', slot: FLOOR_WALL, wallThicknessMm: 100, baseboardHeightMm: h })
+    .strokes[0].points.map(p => p.t).reduce((a, b) => Math.min(a, b));
+  assert.equal(top(60), -60);
+  assert.equal(top(90), -90);
+  const noH = fitRoomJunction({ figureKey: 'df-builtin-baseboard-10', slot: FLOOR_WALL, wallThicknessMm: 100 });
+  assert.match(noH.error?.message ?? '', /baseboardHeight/);
+});
+
+test('【S8c】通知は明示の割当てだけ: 暗黙の既定の fit 失敗は集計しない（巾木高さがあっても行は出ない）', () => {
+  const { graph, room } = graphWithRoom();
+  room.finish.setField('baseboardHeight', 'h=60');
+  assert.deepEqual(collectRoomJunctionFailures(graph, new Set(), { entryOf: () => null }), [], '既定は参照切れ相当でも通知しない');
+  room.setDetailRefs({ [FLOOR_WALL]: 'df-gone' });
+  assert.equal(collectRoomJunctionFailures(graph).length, 1, '明示の参照切れは通知する');
+});
+
+test('【S8c】巾木高さ param を使う図を wallCeiling に割り当てると param 未解決で fit 失敗: 明示として通知 1 件・包絡線は出ない（従来経路）', () => {
+  install(junctionFigure('df-bb-ceil', WALL_CEILING, [
+    move(PenDir.DOWN, paramLen(DetailParam.BASEBOARD_HEIGHT, 60)), move(PenDir.RIGHT, fixedLen(12)), move(PenDir.UP, paramLen(DetailParam.BASEBOARD_HEIGHT, 60)),
+  ], { closed: true }));
+  const { graph, room } = graphWithRoom();
+  room.finish.setField('baseboardHeight', 'h=60');
+  room.setDetailRefs({ [WALL_CEILING]: 'df-bb-ceil' });
+  const fitted = fitRoomJunction({ figureKey: 'df-bb-ceil', slot: WALL_CEILING, wallThicknessMm: 100, baseboardHeightMm: baseboardOf(room, WALL_CEILING) });
+  assert.match(fitted.error?.message ?? '', /baseboardHeight/, 'wallCeiling には巾木高さを供給しない');
+  const rows = collectRoomJunctionFailures(graph);
+  assert.equal(rows.length, 1, JSON.stringify(rows.map(r => r.message)));
+  assert.equal(rows[0].slot, WALL_CEILING);
 });
 
 test('roomWallThicknessesMm: 部屋が生成した壁の materialRange の幅を重複なし・昇順で返す。壁の無い部屋・引けない id は空', () => {

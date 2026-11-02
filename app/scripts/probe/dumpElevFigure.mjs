@@ -79,7 +79,7 @@ if (recomputeStruct) {
 }
 if (stripStruct) for (const g of project.graphMap.values()) stripStructuralMembers(g);
 if (assignFloorWall) {
-  // 全部屋の床と壁の取り合い（detailRefs.floorWall）へ組込みの詳細図を割り当てる（巾木 10×60 と既存の巾木線の一致検証用）。
+  // 全部屋の床と壁の取り合い（detailRefs.floorWall）へ組込みの詳細図を割り当てる（巾木 出 10 と既存の巾木線の一致検証用）。
   const { runInAction } = await import('mobx');
   const { setOverlay } = await import('../../src/catalog/catalogRegistry.js');
   const { CatalogKind } = await import('../../src/catalog/catalogKinds.js');

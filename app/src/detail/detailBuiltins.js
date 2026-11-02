@@ -1,14 +1,16 @@
 // 本体標準の部分詳細図（共通詳細）。カタログ種別 detailFigure の loadBuiltin 先（S2）。
 import {
   PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumRole, DetailDatumKind, DetailAxis,
-  DetailDash, DetailParam, DETAIL_FIGURE_VERSION, KNEE_CAP_THICKNESS_MM,
+  DetailDash, DetailParam, DETAIL_FIGURE_VERSION, KNEE_CAP_THICKNESS_MM, DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY,
 } from '../core/constants.js';
 
-/** 巾木 10×60 の詳細図キー（床と壁の取り合い）。 */
-export const BASEBOARD_10X60_KEY = 'df-builtin-baseboard-10x60';
+/** 巾木 出 10（高さは部屋の巾木設定）の詳細図キー（床と壁の取り合い）。部屋に巾木高さがあれば割当て無しでも既定で使う（S8c）。 */
+export const BASEBOARD_10_KEY = DETAIL_BUILTIN_BASEBOARD_KEY;
+/** 巾木高さ param のプレビュー値（mm。fit が解決する値ではない。LenSpec.mm は正が必須）。 */
+const BASEBOARD_PREVIEW_HEIGHT_MM = 60;
 
 /** 天板 厚 20×（12＋壁厚＋12）の詳細図キー（腰壁の天端）。 */
-export const KNEE_CAP_20_KEY = 'df-builtin-kneecap-20';
+export const KNEE_CAP_20_KEY = DETAIL_BUILTIN_KNEE_CAP_KEY;
 /** 天板の出幅（mm。壁の仕上げ面から両側）。平面の天端（finish/kneeDropWall.js CAP_OVERHANG）の出幅 12 と同値。厚は core/constants.js の KNEE_CAP_THICKNESS_MM。 */
 const KNEE_CAP_OVERHANG_MM = 12;
 /** 壁厚 param のプレビュー値（mm。fit が解決する値ではない。LenSpec.mm は正が必須）。 */
@@ -16,11 +18,13 @@ const KNEE_CAP_PREVIEW_WALL_MM = 100;
 
 const fixed = mm => ({ mm, mode: DetailLenMode.FIXED });
 
-// 巾木 10×60: 壁の仕上げ面 (s=0)・床仕上げ面 (t=0) の角から、上へ 60・室内側へ 10・下へ 60 の閉じた矩形（固定寸法）。
-const BASEBOARD_10X60 = Object.freeze({
-  key: BASEBOARD_10X60_KEY,
+const baseboardHeight = { mm: BASEBOARD_PREVIEW_HEIGHT_MM, mode: DetailLenMode.PARAM, param: DetailParam.BASEBOARD_HEIGHT };
+
+// 巾木 出 10: 壁の仕上げ面 (s=0)・床仕上げ面 (t=0) の角から、上へ 高さ（param＝部屋の巾木設定 h）・室内側へ 10・下へ 高さ の閉じた矩形。
+const BASEBOARD_10 = Object.freeze({
+  key: BASEBOARD_10_KEY,
   version: DETAIL_FIGURE_VERSION,
-  label: '巾木 10×60',
+  label: '巾木 出 10（高さは部屋の巾木設定）',
   category: DetailCategory.JUNCTION,
   view: DetailView.SECTION,
   subject: DetailSubject.FLOOR_WALL,
@@ -29,9 +33,9 @@ const BASEBOARD_10X60 = Object.freeze({
     closed: true,
     line: { weightRole: 'medium', dashRole: DetailDash.SOLID },
     moves: [
-      { dir: PenDir.UP, len: fixed(60) },
+      { dir: PenDir.UP, len: baseboardHeight },
       { dir: PenDir.RIGHT, len: fixed(10) },
-      { dir: PenDir.DOWN, len: fixed(60) },
+      { dir: PenDir.DOWN, len: baseboardHeight },
     ],
   }],
   datums: [
@@ -80,4 +84,4 @@ const KNEE_CAP_20 = Object.freeze({
   note: null,
 });
 
-export default [BASEBOARD_10X60, KNEE_CAP_20];
+export default [BASEBOARD_10, KNEE_CAP_20];

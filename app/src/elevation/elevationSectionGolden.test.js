@@ -64,8 +64,10 @@ function sortKeys(value) {
   return value;
 }
 
+// 部分詳細図の派生線の出どころの印（source:'detail'）は見た目に影響しない属性なので比較から除く
+// （S8c: 腰壁の天端下の細線が組込みの天板図の派生線になり、幾何・線種は同一で source だけが付く）。
 function normalize(primitives) {
-  return JSON.stringify(sortKeys(primitives));
+  return JSON.stringify(sortKeys(primitives.map(p => Object.fromEntries(Object.entries(p).filter(([k]) => k !== 'source')))));
 }
 
 // ---- ケース1: 通常矩形部屋（elevationBand.test.js:29相当） ----

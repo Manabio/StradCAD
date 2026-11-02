@@ -15,7 +15,7 @@
 同梱へ写すときは「標準を編集」の印（`overridesBuiltin`）を必ず外す——印付きで同梱すると別環境で衝突検出が黙り、旧文書が本体更新に追従できない。
 .stqの`catalogs`は省略可で版番号は据え置き。旧ビルドは無視する（片方向互換）。
 
-部分詳細図の本体（組込み）は空でなく、巾木 10×60（`detail/detailBuiltins.js`）を持つ。同期で引く口は `openings/openingCatalog.js detailFigureCatalog()` に一本化（`composeCatalog(DETAIL_FIGURE, [])` を直書きしない）。
+部分詳細図の本体（組込み）は空でなく、巾木 出 10（`detail/detailBuiltins.js`）を持つ。同期で引く口は `openings/openingCatalog.js detailFigureCatalog()` に一本化（`composeCatalog(DETAIL_FIGURE, [])` を直書きしない）。
 
 ## 読込み時の照合と未解決
 照合は「同梱」対「ライブラリ＋本体」（同梱自身を相手に含めると必ず一致する）。

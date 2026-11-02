@@ -38,6 +38,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -150,6 +151,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2700,
@@ -252,6 +254,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4900,
@@ -354,6 +357,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 7600,
@@ -523,6 +527,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -635,6 +640,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2000,
@@ -756,6 +762,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4200,
@@ -858,6 +865,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6200,
@@ -1027,6 +1035,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -1139,6 +1148,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1745,
@@ -1280,6 +1290,7 @@
     "type": "tag"
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4507.5,
@@ -1288,6 +1299,7 @@
     "y2": -60
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 5557.5,
@@ -1390,6 +1402,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6145,
@@ -1769,6 +1782,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -1857,6 +1871,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1800,
@@ -1954,6 +1969,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3000,
@@ -2032,6 +2048,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4800,
@@ -2161,6 +2178,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -2273,6 +2291,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2700,
@@ -2375,6 +2394,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4900,
@@ -2477,6 +2497,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 7600,
@@ -5130,6 +5151,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5218,6 +5240,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2200,
@@ -5320,6 +5343,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4400,
@@ -5398,6 +5422,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6600,
@@ -5551,6 +5576,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5639,6 +5665,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1600,
@@ -5741,6 +5768,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2800,
@@ -5819,6 +5847,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4400,
@@ -5988,6 +6017,7 @@
     "y2": 50
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5996,6 +6026,7 @@
     "y2": -60
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6200,
@@ -6004,6 +6035,7 @@
     "y2": -10
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6200,
@@ -6207,6 +6239,7 @@
     "y2": 50
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 7700,
@@ -6285,6 +6318,7 @@
     "y2": 50
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 9300,
@@ -6403,6 +6437,7 @@
     "y2": -2400
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 10300,
@@ -6516,6 +6551,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 11935,
@@ -6524,6 +6560,7 @@
     "y2": -60
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 11935,
@@ -6639,6 +6676,7 @@
     "y2": -2400
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 16585,
@@ -6760,6 +6798,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 20900,
@@ -6862,6 +6901,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 24500,
@@ -7091,6 +7131,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -7290,6 +7331,7 @@
     "type": "tag"
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 5200,
@@ -7298,6 +7340,7 @@
     "y2": -60
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 10049.5,
@@ -7438,6 +7481,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 10400,
@@ -7583,6 +7627,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 15600,
@@ -7768,6 +7813,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -7872,6 +7918,7 @@
     "y2": -100
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1400,
@@ -7880,6 +7927,7 @@
     "y2": -60
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2285,
@@ -7888,6 +7936,7 @@
     "y2": -160
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2285,
@@ -8143,6 +8192,7 @@
     "y2": -2500
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6735,
@@ -8293,6 +8343,7 @@
     "y2": -100
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 9485,
@@ -8371,6 +8422,7 @@
     "y2": -100
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 10400,
@@ -8473,6 +8525,7 @@
     "y2": -100
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 14200,
@@ -8591,6 +8644,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 18000,
@@ -8599,6 +8653,7 @@
     "y2": -160
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 21000,
@@ -8607,6 +8662,7 @@
     "y2": -60
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 21000,
@@ -9345,6 +9401,7 @@
     "type": "tag"
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 11100,
@@ -9353,6 +9410,7 @@
     "y2": -60
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 12127.5,
@@ -9797,6 +9855,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 21935,
@@ -9885,6 +9944,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 25050,
@@ -10882,6 +10942,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -10970,6 +11031,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1600,
@@ -11072,6 +11134,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2800,
@@ -11150,6 +11213,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4400,

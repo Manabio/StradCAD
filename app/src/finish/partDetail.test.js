@@ -91,10 +91,19 @@ test('組込み「天板 厚 20×（12＋壁厚＋12）」: 登録できる図�
 test('resolveKneeDropDetailFigure: 割当て無しは null・参照切れは entry=null・カタログにあれば entry', () => {
   setOverlay(DF, { user: [KNEE_CAP] });
   const rec = { knee: { topHeight: 800 }, drop: null, detailRefs: { [KNEE_TOP]: KNEE_CAP_20_KEY, [DROP_BOTTOM]: 'df-gone' } };
-  assert.equal(resolveKneeDropDetailFigure({ rec: { knee: { topHeight: 800 }, drop: null }, slot: KNEE_TOP }), null);
   assert.equal(resolveKneeDropDetailFigure({ rec: null, slot: KNEE_TOP }), null);
+  assert.equal(resolveKneeDropDetailFigure({ rec: { knee: null, drop: { bottomHeight: 400 } }, slot: KNEE_TOP }), null, '腰壁が無ければ天板の既定は無い');
+  assert.equal(resolveKneeDropDetailFigure({ rec: { knee: { topHeight: 800 }, drop: null }, slot: DROP_BOTTOM }), null, '垂れ壁の下端に既定は無い');
   assert.equal(resolveKneeDropDetailFigure({ rec, slot: KNEE_TOP }).entry.key, KNEE_CAP_20_KEY);
-  assert.deepEqual(resolveKneeDropDetailFigure({ rec, slot: DROP_BOTTOM }), { key: 'df-gone', slot: DROP_BOTTOM, entry: null });
+  assert.deepEqual(resolveKneeDropDetailFigure({ rec, slot: DROP_BOTTOM }), { key: 'df-gone', slot: DROP_BOTTOM, entry: null, source: 'explicit' });
+  assert.equal(resolveKneeDropDetailFigure({ rec, slot: KNEE_TOP }).source, 'explicit');
+});
+
+test('【S8c】暗黙の既定: 割当て無しの腰壁は組込みの天板（source=default）。明示の割当てが勝つ', () => {
+  const d = resolveKneeDropDetailFigure({ rec: { knee: { topHeight: 800 }, drop: null }, slot: KNEE_TOP });
+  assert.deepEqual([d.key, d.source, d.entry?.key], [KNEE_CAP_20_KEY, 'default', KNEE_CAP_20_KEY]);
+  const e = resolveKneeDropDetailFigure({ rec: { knee: { topHeight: 800 }, drop: null, detailRefs: { [KNEE_TOP]: 'df-x' } }, slot: KNEE_TOP });
+  assert.deepEqual([e.key, e.source], ['df-x', 'explicit']);
 });
 
 test('fitKneeDropPart: 壁厚で fit する。同じ図・slot・壁厚はメモを共有（同一オブジェクト）。図が無ければ error', () => {
@@ -155,11 +164,26 @@ test('【失敗系】kneeDropPartEnvelope: 割当て無し・参照切れ・fit 
   const { graph } = twoRooms(null);
   const wall = wallOnPartition(graph);
   const args = { graph, wall, slot: KNEE_TOP, viewedSide: KneeDropFrontSide.ROOM_NEG };
-  assert.equal(kneeDropPartEnvelope({ ...args, rec: { knee: { topHeight: 800 }, drop: null } }), null);
+  assert.equal(kneeDropPartEnvelope({ ...args, rec: { knee: null, drop: { bottomHeight: 400 } } }), null, '腰壁の無い記録＝既定も無い');
+  assert.notEqual(kneeDropPartEnvelope({ ...args, rec: { knee: { topHeight: 800 }, drop: null } }), null, '割当て無しの腰壁は組込みの天板で包絡線が出る（S8c）');
   assert.equal(kneeDropPartEnvelope({ ...args, rec: { knee: { topHeight: 800 }, drop: null, detailRefs: { [KNEE_TOP]: 'df-gone' } } }), null);
   assert.equal(kneeDropPartEnvelope({ ...args, rec: { knee: { topHeight: 800 }, drop: null, detailRefs: { [KNEE_TOP]: 'df-mat' } } }), null, '材マップ無し＝UNRESOLVED_MATERIAL');
   const noThickness = { axisCL: wall.axisCL, coord1: 0, coord2: 4000, materialRange: null, backingRange: null };
   assert.equal(kneeDropPartEnvelope({ ...args, graph: { walls: [] }, wall: noThickness, rec: { knee: { topHeight: 800 }, drop: null, detailRefs: { [KNEE_TOP]: KNEE_CAP_20_KEY } } }), null);
+});
+
+test('【S8c】巾木高さ param を使う図を kneeTop に割り当てると param 未解決で fit 失敗: 明示として通知 1 件・包絡線は出ない（従来の細線）', () => {
+  setOverlay(DF, { user: [partFigure('df-bb-knee', KNEE_TOP, [
+    move(PenDir.DOWN, paramLen(DetailParam.BASEBOARD_HEIGHT, 60)), move(PenDir.LEFT, paramLen(DetailParam.WALL_THICKNESS, 100)),
+    move(PenDir.UP, paramLen(DetailParam.BASEBOARD_HEIGHT, 60)),
+  ])] });
+  const { graph, key } = twoRooms({ knee: { topHeight: 800 }, drop: null, detailRefs: { [KNEE_TOP]: 'df-bb-knee' } });
+  const rows = collectKneeDropPartFailures(graph);
+  assert.equal(rows.length, 1, JSON.stringify(rows.map(r => r.message)));
+  assert.match(rows[0].reason, /baseboardHeight/);
+  assert.equal(rows[0].kneeDropKey, key);
+  const wall = wallOnPartition(graph);
+  assert.equal(kneeDropPartEnvelope({ graph, wall, slot: KNEE_TOP, viewedSide: KneeDropFrontSide.ROOM_NEG, rec: graph.kneeDropWalls.get(key) }), null);
 });
 
 test('collectKneeDropPartFailures: 参照切れ・fit 失敗を記録ごとに集める。主語は腰壁・垂れ壁（部屋名）。収まる図・割当て無しは行を作らない。seen で重複を省く', () => {
@@ -189,6 +213,10 @@ test('collectKneeDropPartFailures: 参照切れ・fit 失敗を記録ごとに�
   graph.setKneeDropWall(key, { knee: { topHeight: 800 }, drop: null });
   assert.deepEqual(collectKneeDropPartFailures(graph), []);
   assert.deepEqual(collectKneeDropPartFailures(null), []);
+  // 【S8c】暗黙の既定（組込みの天板）は参照切れ相当でも通知しない。明示の dropBottom の参照切れだけが行になる
+  graph.setKneeDropWall(key, { knee: { topHeight: 800 }, drop: { bottomHeight: 400 }, detailRefs: { [DROP_BOTTOM]: 'df-gone' } });
+  const onlyExplicit = collectKneeDropPartFailures(graph, new Set(), { entryOf: () => null });
+  assert.deepEqual(onlyExplicit.map(r => r.slot), [DROP_BOTTOM]);
   assert.equal(detailOwnerKneeDrop(['LDK']), '腰壁・垂れ壁（LDK）');
   assert.equal(detailOwnerKneeDrop([null, '']), '腰壁・垂れ壁（部屋なし）');
   assert.equal(KNEE_DROP_DETAIL_TEXT.none, 'なし');

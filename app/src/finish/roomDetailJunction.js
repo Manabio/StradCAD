@@ -9,7 +9,8 @@
 // 通知は init が自分で fit を試して集める。失敗は例外にしない（{error}・集計の行）。
 // ================================================================
 
-import { ROOM_DETAIL_SLOTS } from '../core/constants.js';
+import { ROOM_DETAIL_SLOTS, DetailSlot, DetailFigureSource, DETAIL_BUILTIN_BASEBOARD_KEY } from '../core/constants.js';
+import { parseBaseboardHeightMm } from '../core/room.js';
 import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, detailOwnerRoom } from '../error.js';
 import { detailFigureEntry, detailFitKey, fitDetailLocalMemo } from '../openings/openingCatalog.js';
 import { junctionTargets } from './roomDetailTargets.js';
@@ -23,26 +24,42 @@ const refOf = (room, slot) => {
   return typeof key === 'string' && key !== '' ? key : undefined;
 };
 
+/** 部屋の巾木高さ（mm。RoomFinish.baseboardHeight の "h=<mm>" を parseBaseboardHeightMm で解析）。解析できなければ null。 */
+export function roomBaseboardHeightMm(room) {
+  return parseBaseboardHeightMm(room?.finish?.baseboardHeight);
+}
+
+/** fit に渡す巾木高さ。floorWall だけが供給する（wallCeiling は使わない＝メモの鍵を増やさない）。 */
+export const baseboardOf = (room, slot) => (slot === DetailSlot.FLOOR_WALL ? roomBaseboardHeightMm(room) : null);
+
 /**
  * 部屋の slot の割当てを図のエントリへ解決する。
+ * 暗黙の既定（S8c）: floorWall は割当てが無くても部屋に巾木高さがあれば組込みの巾木（source=default）。巾木高さが無ければ null（巾木を描かない）。
+ * 利用者の割当てがあれば source=explicit（参照切れの通知はこちらだけ）。
  * @param {{room:object, slot:string, entryOf?:(key:string)=>object|null}} p entryOf＝図のキー→エントリ（既定はカタログ）
- * @returns {null | {key:string, slot:string, entry:object|null}} null＝割当て無し。entry が null＝参照切れ（カタログに無い）
+ * @returns {null | {key:string, slot:string, entry:object|null, source:string}} null＝割当て無し（既定も無い）。entry が null＝参照切れ（カタログに無い）。source＝DetailFigureSource
  */
 export function resolveRoomDetailFigure({ room, slot, entryOf = detailFigureEntry }) {
   const key = refOf(room, slot);
-  if (key === undefined) return null;
-  return { key, slot, entry: entryOf(key) ?? null };
+  if (key !== undefined) return { key, slot, entry: entryOf(key) ?? null, source: DetailFigureSource.EXPLICIT };
+  if (slot === DetailSlot.FLOOR_WALL && roomBaseboardHeightMm(room) !== null) {
+    return { key: DETAIL_BUILTIN_BASEBOARD_KEY, slot, entry: entryOf(DETAIL_BUILTIN_BASEBOARD_KEY) ?? null, source: DetailFigureSource.DEFAULT };
+  }
+  return null;
 }
 
 /**
  * 図を（壁厚）に合わせた局所座標のストローク列（fitLocal の結果）。失敗は {error:{code,message}}（例外にしない）。
- * メモは openings/ の fitDetailLocalMemo と共有（鍵は図のキー・slot・壁厚）。材マスタ未ロードで材束縛が解けない結果はメモしない。
- * @param {{figureKey:string, slot:string, wallThicknessMm:number, materialMap?:object|null}} p
+ * メモは openings/ の fitDetailLocalMemo と共有（鍵は図のキー・slot・壁厚・巾木高さ）。材マスタ未ロードで材束縛が解けない結果はメモしない。
+ * baseboardHeightMm＝部屋の巾木高さ（図が param baseboardHeight を使うときの供給。無ければ param 未解決の fit 失敗）。
+ * @param {{figureKey:string, slot:string, wallThicknessMm:number, baseboardHeightMm?:number|null, materialMap?:object|null}} p
  */
-export function fitRoomJunction({ figureKey, slot, wallThicknessMm, materialMap = null }) {
+export function fitRoomJunction({ figureKey, slot, wallThicknessMm, baseboardHeightMm = null, materialMap = null }) {
+  const dims = { wallThickness: wallThicknessMm };
+  if (baseboardHeightMm !== null) dims.baseboardHeight = baseboardHeightMm;
   return fitDetailLocalMemo({
-    figureKey, slot, dims: { wallThickness: wallThicknessMm },
-    targetsOf: (entry, dims) => junctionTargets(entry, { slot, wallThicknessMm: dims.wallThickness, materialMap }),
+    figureKey, slot, dims,
+    targetsOf: (entry, d) => junctionTargets(entry, { slot, wallThicknessMm: d.wallThickness, baseboardHeightMm: d.baseboardHeight, materialMap }),
   });
 }
 
@@ -111,7 +128,8 @@ export function collectRoomJunctionFailures(graph, seen = new Set(), { materialM
     const owner = detailOwnerRoom(room.name);
     for (const slot of ROOM_DETAIL_SLOTS) {
       const r = resolveRoomDetailFigure({ room, slot, entryOf });
-      if (!r) continue;
+      // 暗黙の既定（組込みの巾木）の失敗は通知しない: 展開は従来の巾木線へ黙って戻るので利用者が困らない（S8c）
+      if (!r || r.source === DetailFigureSource.DEFAULT) continue;
       const push = (key, label, reason, extra) => {
         if (seen.has(key)) return;
         seen.add(key);
@@ -125,7 +143,9 @@ export function collectRoomJunctionFailures(graph, seen = new Set(), { materialM
         continue;
       }
       for (const wallThickness of roomWallThicknessesMm(graph, room, faceWallsOf?.(room) ?? [])) {
-        const fitted = fitRoomJunction({ figureKey: r.key, slot, wallThicknessMm: wallThickness, materialMap });
+        const fitted = fitRoomJunction({
+          figureKey: r.key, slot, wallThicknessMm: wallThickness, baseboardHeightMm: baseboardOf(room, slot), materialMap,
+        });
         if (fitted.error) {
           push(`${detailFitKey({ figureKey: r.key, slot, dims: { wallThickness } })}|room|${room.id}`,
             r.entry.label || r.key, fitted.error.message, { wallThickness });

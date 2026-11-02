@@ -9,8 +9,10 @@
 //   --only  対象（golden ディレクトリ名）の部分文字列で絞る
 //   --jobs  子プロセスの並列数（1〜3。既定 2。メモリ制約）
 //   --test  最後に npm test も走らせ、合格数・失敗数を足す
+//   --ignore-source  比較から prim の source 属性（部分詳細図の派生線の印。見た目に影響しない）を除く（S8c: 組込み巾木・天板が既定になり
+//           golden とは source だけ違うことの機械確認用。golden は更新しない）
 //   --assign-floorwall <key>  全部屋の detailRefs.floorWall へ組込みの詳細図 <key> を割り当ててダンプする（golden とは割当て無しの出力と
-//           一致するはずの図〔巾木 10×60 等〕の検証用。source 属性と巾木高さ未設定の部屋の分だけ差が出る＝幾何の確認用）
+//           一致するはずの図〔巾木 出 10 等〕の検証用。source 属性と巾木高さ未設定の部屋の分だけ差が出る＝幾何の確認用）
 // 終了コード: 全一致=0、差分・ダンプ失敗・テスト失敗あり=1、用法違反=2。
 //
 // 比較は elevGoldenDiff.mjs の diffRoomPrimitives を再利用する（diffElevGolden.mjs と同じ部屋の突き合わせ:
@@ -28,7 +30,7 @@ const STQ_DIR = 'D:/tatsuya/Download';
 const DEFAULT_OUT = path.join(PROBE_DIR, '.gate-out');
 const MAX_JOBS = 3;
 
-const USAGE = '用法: elevGoldenGate.mjs [--out <dir>] [--base <dir>] [--only <部分文字列>] [--jobs N(1-3)] [--test]';
+const USAGE = '用法: elevGoldenGate.mjs [--out <dir>] [--base <dir>] [--only <部分文字列>] [--jobs N(1-3)] [--test] [--ignore-source]';
 
 export class UsageError extends Error {}
 
@@ -56,7 +58,7 @@ export const TARGETS = [
 export const labelOf = (target) => target.dir.replace(/\//g, '_');
 
 export function parseArgs(argv) {
-  const opts = { out: DEFAULT_OUT, base: null, only: null, jobs: 2, test: false, assignFloorWall: null };
+  const opts = { out: DEFAULT_OUT, base: null, only: null, jobs: 2, test: false, assignFloorWall: null, ignoreSource: false };
   const value = (i, name) => {
     const v = argv[i];
     if (v === undefined || v.startsWith('--')) throw new UsageError(`${name} には値を指定してください`);
@@ -65,6 +67,7 @@ export function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--test') opts.test = true;
+    else if (a === '--ignore-source') opts.ignoreSource = true;
     else if (a === '--out') opts.out = path.resolve(value(++i, '--out'));
     else if (a === '--base') opts.base = path.resolve(value(++i, '--base'));
     else if (a === '--only') opts.only = value(++i, '--only');
@@ -179,7 +182,11 @@ const readRows = (dir, file) => {
  *   add・rem・chg=追加・削除・線種変更のプリミティブ数 / missingFiles=新側に無い基準のファイル /
  *   extraFiles=基準側に無い新側のファイル（golden に無い elevfig は差分扱い）
  */
-export function compareDirs(baseDir, newDir) {
+export function compareDirs(baseDir, newDir, { ignoreSource = false } = {}) {
+  // ignoreSource: 部分詳細図の派生線の出どころの印（source）は見た目に影響しない属性なので、両側から除いて比べる
+  const prims = (row) => (ignoreSource
+    ? (row.prims ?? []).map(p => Object.fromEntries(Object.entries(p).filter(([k]) => k !== 'source')))
+    : (row.prims ?? []));
   const baseFiles = listElevfigFiles(baseDir);
   const newFiles = listElevfigFiles(newDir);
   const r = { bands: 0, changed: 0, add: 0, rem: 0, chg: 0, missingFiles: [], extraFiles: [], ok: true };
@@ -205,7 +212,7 @@ export function compareDirs(baseDir, newDir) {
         if (g.error !== n.error) r.changed++;
         continue;
       }
-      const { added, removed, changed } = diffRoomPrimitives(g.prims ?? [], n.prims ?? []);
+      const { added, removed, changed } = diffRoomPrimitives(prims(g), prims(n));
       if (added.length || removed.length || changed.length) r.changed++;
       r.add += added.length; r.rem += removed.length; r.chg += changed.length;
     }
@@ -275,7 +282,7 @@ export async function runTarget(target, opts, { stqDir = STQ_DIR, dumpScript = D
     { cwd: APP_DIR });
   if (r.code !== 0) return { error: `dump 失敗(exit ${r.code}): ${r.err.slice(-160).replace(/\s+/g, ' ')}`, sec: r.sec };
   try {
-    return { cmp: compareDirs(refDir, outDir), sec: r.sec };
+    return { cmp: compareDirs(refDir, outDir, { ignoreSource: opts.ignoreSource }), sec: r.sec };
   } catch (e) {
     return { error: e.message, sec: r.sec };
   }

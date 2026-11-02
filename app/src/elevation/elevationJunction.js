@@ -15,9 +15,9 @@ import {
   DETAIL_PRIM_SOURCE,
 } from '../core/constants.js';
 import { computeEnvelope, EnvelopeWeight } from '../detail/detailPlacement.js';
-import { resolveRoomDetailFigure, fitRoomJunction, wallAssemblyThicknessMm } from '../finish/roomDetailJunction.js';
-import { kneeDropPartEnvelope, floorStepEnvelope, ceilingStepEnvelope } from '../finish/partDetail.js';
-import { sameAxisLine, kneeDropRecordsOnAxis, kneeDropRecordsForWallPoint, kneeDropWallGeometry } from '../finish/kneeDropWall.js';
+import { resolveRoomDetailFigure, fitRoomJunction, wallAssemblyThicknessMm, baseboardOf } from '../finish/roomDetailJunction.js';
+import { kneeDropPartEnvelope, floorStepEnvelope, ceilingStepEnvelope, resolveKneeDropDetailFigure } from '../finish/partDetail.js';
+import { sameAxisLine, kneeDropRecordsForWallPoint, kneeDropWallGeometry } from '../finish/kneeDropWall.js';
 import { graphList } from '../graphReadScope.js';
 import { effectiveHeight, effectiveSillHeight } from '../openings/openingNumbering.js';
 import { ElevationLineRole, weightForRole, minDrawnMm, PROBE_EPS_MM, GAP_EPS_MM } from './elevationStyle.js';
@@ -70,13 +70,14 @@ export function faceWallOf(face, graph) {
 /**
  * 面 F の部屋の取り合い（floorWall・wallCeiling）を F 自身の壁厚で fit して包絡線にする。
  * fit が成った slot だけを含む（参照切れ・壁厚に合わない・壁が引けないものは含めない＝従来の描き方）。
- * 割当ての無い部屋・段差見付け面・吹抜けの面は null。
+ * floorWall は割当てが無くても部屋に巾木高さがあれば組込みの巾木で fit する（暗黙の既定。S8c。resolveRoomDetailFigure）。
+ * 部屋が無い・段差見付け面・吹抜けの面・割当ても既定も無い部屋は null。
  * @param {object} face
  * @param {{graph:object, room:object|null, materialMap?:object|null}} ctx
  * @returns {null | {[slot:string]: {steps:{t:number, weight:string}[], outline:number[][], maxDeviationMm:number}}}
  */
 export function junctionPlanForFace(face, { graph, room, materialMap = null }) {
-  if (!room?.detailRefs || face.kind === 'step' || face.voidAbove) return null;
+  if (!room || face.kind === 'step' || face.voidAbove) return null;
   const plan = {};
   let wall;
   for (const slot of ROOM_DETAIL_SLOTS) {
@@ -85,7 +86,7 @@ export function junctionPlanForFace(face, { graph, room, materialMap = null }) {
     if (wall === undefined) wall = faceWallOf(face, graph);
     const thickness = wall ? wallAssemblyThicknessMm(graph, wall) : null;
     if (thickness === null) continue;
-    const fitted = fitRoomJunction({ figureKey: r.key, slot, wallThicknessMm: thickness, materialMap });
+    const fitted = fitRoomJunction({ figureKey: r.key, slot, wallThicknessMm: thickness, baseboardHeightMm: baseboardOf(room, slot), materialMap });
     if (fitted.error) continue;
     plan[slot] = computeEnvelope(fitted.strokes, slot);
   }
@@ -112,20 +113,21 @@ export function junctionFaceWallsOf(room, graph) {
 /**
  * 断面エンジンの emitCtx.kneeDropPartStepsOf（腰壁の天端・垂れ壁の下端の部分詳細図。S8b-1）。帯 band・列 col・切断 cut から
  * 「その列の壁に掛かる記録」を引き、見る側（cut.viewSign の手前の部屋の側）から見た包絡線の段差 {kneeTop?, dropBottom?}: [{t, weight}] を返す。
- * 表の側（rec.frontSide）と見る側が違えば壁の中心で鏡像。割当ての無い記録・参照切れ・fit 失敗・自階（'self' の層）以外の壁は null
- * （従来の描き方）。記録に割当てが 1 つも無ければ null（エンジンへ関数自体を渡さない＝出力不変）。
+ * 表の側（rec.frontSide）と見る側が違えば壁の中心で鏡像。参照切れ・fit 失敗・自階（'self' の層）以外の壁は null（従来の描き方）。
+ * kneeTop は割当てが無くても腰壁があれば組込みの天板が既定（S8c）。fit が成った slot は段差が 0 本でも含める（空配列＝図が担う）。
+ * 腰壁・垂れ壁の記録が 1 つも無ければ null（エンジンへ関数自体を渡さない）。
  * 段差の t は最小描画幅（scaleDenom の縮尺。未指定＝100）へ調整する（stepsAtMinDrawn）。
  * @param {{graph:object, materialMap?:object|null, scaleDenom?:number}} p
  * @returns {null | ((band:object, col:object, cut:object) => ({kneeTop?:object[], dropBottom?:object[]}|null))}
  */
 export function kneeDropPartStepsOf({ graph, materialMap = null, scaleDenom }) {
-  if (![...(graph?.kneeDropWalls?.values() ?? [])].some(rec => rec?.detailRefs)) return null;
+  if (![...(graph?.kneeDropWalls?.values() ?? [])].some(rec => rec?.knee || rec?.drop)) return null;
   const minMm = minDrawnMm(scaleDenom);
   const byWall = new WeakMap(); // wall → Map<鍵, 包絡線の steps|null>
   return (band, col, cut) => {
     if (band.layerRole !== 'self' || !band.wall) return null;
     const hit = kneeDropRecordsForWallPoint(graph, band.wall, (col.worldLo + col.worldHi) / 2)
-      .find(({ rec }) => rec.detailRefs && (rec.knee || rec.drop));
+      .find(({ rec }) => rec.knee || rec.drop);
     if (!hit) return null;
     // 視線は +viewSign 側へ向く。壁を見る人は壁の手前（−viewSign 側）に立つので、viewSign>0 なら軸の負側の部屋から見る
     const viewedSide = cut.viewSign > 0 ? KneeDropFrontSide.ROOM_NEG : KneeDropFrontSide.ROOM_POS;
@@ -133,14 +135,15 @@ export function kneeDropPartStepsOf({ graph, materialMap = null, scaleDenom }) {
     const cache = byWall.get(band.wall);
     const out = {};
     for (const slot of KNEE_DROP_DETAIL_SLOTS) {
-      if (!hit.rec.detailRefs[slot]) continue;
+      if (!resolveKneeDropDetailFigure({ rec: hit.rec, slot })) continue; // 割当ても暗黙の既定（腰壁の天板）も無い
       const memoKey = `${hit.key}|${slot}|${viewedSide}`;
       if (!cache.has(memoKey)) {
         const env = kneeDropPartEnvelope({ graph, wall: band.wall, rec: hit.rec, slot, viewedSide, materialMap });
         cache.set(memoKey, env?.steps ? stepsAtMinDrawn(env.steps, minMm) : null);
       }
       const steps = cache.get(memoKey);
-      if (steps && steps.length > 0) out[slot] = steps;
+      // fit が成れば段差が 0 本でも解決済み（空の配列）: 図が担うので従来の天端下の細線へ戻らない（S8c）
+      if (steps) out[slot] = steps;
     }
     return Object.keys(out).length > 0 ? out : null;
   };
@@ -161,14 +164,10 @@ function subtractRanges(base, holes) {
   return out.filter(([lo, hi]) => hi > lo + DETAIL_FIT_EPS_MM);
 }
 
-// x の区間の床から天井面までの高さ（segs の区間。無ければ null）。垂れ壁の下端＝これ−bottomHeight（bottomHeight は天井からの寸法）。
-function ceilRelAt(segs, x, segCeilAbsAt) {
-  const s = (segs ?? []).find(g => g.loX <= x && x <= g.hiX) ?? null;
-  return s && segCeilAbsAt ? segCeilAbsAt(s, x) - (s.floorDeltaMm ?? 0) : null;
-}
-
-// 線の高さ（その区間の床から上へ。x の関数）が、開口・腰壁・垂れ壁・壁の無い区間で途切れる x 範囲。
-function blockedRanges(heightAt, { face, graph, openings, wallLessRuns, segs, segCeilAbsAt }) {
+// 線の高さ（その区間の床から上へ。x の関数）が、壁体の無い区間と線の高さを含む建具の開口で途切れる x 範囲。
+// 派生線（巾木・廻り縁）を切ってよい理由はこの 2 つだけ。腰壁・垂れ壁の記録は同じ壁体の上端・下端の修飾で壁体の有無を変えない
+// （finish/kneeDropWall.js）ので、その下の巾木・上の廻り縁も通す（従来の appendBaseboard も同じ述語だけを見る。S8c 裁定）。開放部の描き方は断面エンジンの担当。
+function blockedRanges(heightAt, { face, openings, wallLessRuns }) {
   const eps = DETAIL_FIT_EPS_MM;
   const localX = world => localXOf(face, world);
   const out = (wallLessRuns ?? []).map(r => [r.lo, r.hi]);
@@ -177,20 +176,6 @@ function blockedRanges(heightAt, { face, graph, openings, wallLessRuns, segs, se
     const sill = effectiveSillHeight(o);
     const h = heightAt(cx);
     if (h >= sill - eps && h <= sill + effectiveHeight(o) + eps) out.push([cx - o.width / 2, cx + o.width / 2]);
-  }
-  if (graph?.kneeDropWalls) {
-    for (const { rec, lo, hi } of kneeDropRecordsOnAxis(graph, face.axisCL, face.lo, face.hi)) {
-      if (!rec.knee && !rec.drop) continue;
-      const a = localX(lo);
-      const b = localX(hi);
-      const mid = (a + b) / 2;
-      const h = heightAt(mid);
-      // 垂れ壁の下端は天井から bottomHeight 下（床からの高さ＝その x の天井高−bottomHeight）。天井高が引けなければ覆いとみなさない
-      const ceilRel = rec.drop != null ? ceilRelAt(segs, mid, segCeilAbsAt) : null;
-      const covered = (rec.knee != null && h <= rec.knee.topHeight + eps)
-        || (ceilRel !== null && h >= ceilRel - rec.drop.bottomHeight - eps);
-      if (!covered) out.push([Math.min(a, b), Math.max(a, b)]);
-    }
   }
   return out;
 }

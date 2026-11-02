@@ -38,6 +38,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -150,6 +151,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1110,
@@ -276,6 +278,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3130,
@@ -378,6 +381,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4240,
@@ -555,6 +559,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1675,
@@ -823,6 +828,7 @@
     "y2": -2050
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 7480,
@@ -992,6 +998,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 14965,
@@ -1118,6 +1125,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 17130,
@@ -1244,6 +1252,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 20970,
@@ -1421,6 +1430,7 @@
     "y2": -2050
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 26630,
@@ -1590,6 +1600,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 34115,
@@ -1751,6 +1762,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 38100,
@@ -1997,6 +2009,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -2133,6 +2146,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -2302,6 +2316,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4824,
@@ -2428,6 +2443,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6844,
@@ -2648,6 +2664,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -2784,6 +2801,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -2953,6 +2971,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3914,
@@ -3098,6 +3117,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 5934,
@@ -3318,6 +3338,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -3454,6 +3475,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3840,
@@ -3666,6 +3688,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 7554,
@@ -3811,6 +3834,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 11394,
@@ -4074,6 +4098,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -4186,6 +4211,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -4312,6 +4338,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4040,
@@ -4414,6 +4441,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6060,
@@ -4591,6 +4619,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -4727,6 +4756,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -4853,6 +4883,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4040,
@@ -4979,6 +5010,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6060,
@@ -5156,6 +5188,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5268,6 +5301,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1110,
@@ -5394,6 +5428,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3130,
@@ -5496,6 +5531,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4240,
@@ -5673,6 +5709,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5801,6 +5838,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -5962,6 +6000,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3991.5,
@@ -7417,6 +7456,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -7529,6 +7569,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -7655,6 +7696,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4040,
@@ -7757,6 +7799,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6060,
@@ -7934,6 +7977,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -8070,6 +8114,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -8196,6 +8241,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 5860,
@@ -8322,6 +8368,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 7880,

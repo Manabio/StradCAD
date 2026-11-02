@@ -15,7 +15,7 @@ const dropCol = (extra = {}) => ({ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, b
 const detailLines = prims => prims.filter(p => p.source === DETAIL_PRIM_SOURCE);
 const hLinesAt = (prims, y) => prims.filter(p => p.type === 'line' && p.y1 === y && p.y2 === y);
 
-test('腰壁の帯: 天端から t 下に auto＝細線・air＝中線（source=detail・帯の列の幅）。既存の天端の下の細線は残る（両方引く）', () => {
+test('腰壁の帯: 天端から t 下に auto＝細線・air＝中線（source=detail・帯の列の幅）。kneeTop が解決していれば従来の天端の下の細線は引かない（S8c）', () => {
   const calls = [];
   const steps = { kneeTop: [{ t: 20, weight: 'auto' }, { t: 40, weight: 'air' }] };
   const prims = emitColumns([kneeCol()], cut, { ceilZ: 2400, kneeDropPartStepsOf: (band, col, c) => { calls.push([band.z1, col.x0, c.seqNo]); return steps; } });
@@ -25,7 +25,16 @@ test('腰壁の帯: 天端から t 下に auto＝細線・air＝中線（source=
   const at760 = hLinesAt(d, -760);
   assert.deepEqual([at780.length, at780[0].weight, at780[0].x1, at780[0].x2], [1, 'thin', 0, 1000]);
   assert.deepEqual([at760.length, at760[0].weight], [1, 'medium']);
-  assert.equal(hLinesAt(prims.filter(p => p.source === undefined), -750).length, 1, '既存の kneeCapUnderline（天端の 50 下の細線）は残す');
+  assert.equal(hLinesAt(prims.filter(p => p.source === undefined), -750).length, 0, '図が解決したので kneeCapUnderline（天端の 50 下の細線）は引かない');
+  // フォールバック: kneeTop が解決しない（null・段差の無い slot）ときは従来の細線が出る
+  for (const none of [() => null, () => ({ dropBottom: [{ t: 20, weight: 'auto' }] })]) {
+    const fb = emitColumns([kneeCol()], cut, { ceilZ: 2400, kneeDropPartStepsOf: none });
+    assert.equal(hLinesAt(fb.filter(p => p.source === undefined), -750).length, 1, '従来の kneeCapUnderline へ戻る');
+    assert.equal(detailLines(fb).length, 0);
+  }
+  // 解決したが段差が 0 本（空配列）＝図が担う: 従来の細線へ戻らない
+  const empty = emitColumns([kneeCol()], cut, { ceilZ: 2400, kneeDropPartStepsOf: () => ({ kneeTop: [] }) });
+  assert.equal(hLinesAt(empty, -750).length, 0);
   assert.ok(calls.length >= 1 && calls.every(c => c[0] === 800 && c[2] === '1'), '帯・列・切断を渡して呼ぶ');
 });
 
@@ -99,4 +108,15 @@ test('cutAlong の帯: 腰壁の天端の線は引く。垂れ壁の下端は引
   const steps = () => ({ kneeTop: [{ t: 20, weight: 'auto' }], dropBottom: [{ t: -20, weight: 'auto' }] });
   assert.deepEqual(detailLines(emitColumns([along(0, 800)], cut, { ceilZ: 2400, kneeDropPartStepsOf: steps })).map(p => p.y1), [-780]);
   assert.deepEqual(detailLines(emitColumns([along(2000, 2400)], cut, { ceilZ: 2400, kneeDropPartStepsOf: steps })), []);
+});
+
+test('cutAlong の帯: 明示の kneeTop（厚 30）が解決していれば天端 20 下の kneeCapUnderline は引かず 30 下に source=detail だけ・参照切れ（null）なら 20 下に細線（分母 20）', () => {
+  const col = [{ x0: 0, x1: 1000, worldLo: 0, worldHi: 1000, bands: [{ kind: 'cutAlong', z0: 0, z1: 800, layerRole: 'self', isKneeDrop: true }] }];
+  const plain = prims => prims.filter(p => p.source === undefined);
+  const fitted = emitColumns(col, cut, { ceilZ: 2400, scaleDenom: 20, kneeDropPartStepsOf: () => ({ kneeTop: [{ t: 30, weight: 'auto' }] }) });
+  assert.deepEqual(detailLines(fitted).map(p => p.y1), [-770]);
+  assert.equal(hLinesAt(plain(fitted), -780).length, 0, '図が担うので天端 20 下の細線は無い');
+  const gone = emitColumns(col, cut, { ceilZ: 2400, scaleDenom: 20, kneeDropPartStepsOf: () => null });
+  assert.equal(detailLines(gone).length, 0);
+  assert.equal(hLinesAt(plain(gone), -780).length, 1, '参照切れは従来の天端 20 下の細線');
 });

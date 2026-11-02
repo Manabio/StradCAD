@@ -471,23 +471,26 @@ function kneeCapUnderline(cut, x0, x1, topZ, floorZ, ceilZ, emitCtx = {}, topWei
  * 段差の列（emitCtx.kneeDropPartStepsOf(band, col, cut)＝{kneeTop?, dropBottom?}: [{t, weight}]。見る側の向きに合わせた包絡線。
  * エンジンは detail/ を引かず、段差の t を受けるだけ）を、腰壁の帯なら天端から t 下（z＝z1−t）、垂れ壁の帯なら下端から −t 上（z＝z0−t）へ引く。
  * 自動（auto）の段差＝細線 DETAIL・印（air）＝中線 SILHOUETTE。帯の中に収まる高さだけ。出力に source='detail' の印を付ける。
- * 既存の天端の下の細線（kneeCapUnderline）は残す（両方引く。ユーザー指示 Q3）。
+ * 天端の下の細線（kneeCapUnderline）は kneeTop の図が解決できない・fit 失敗のとき（戻り値 false）だけ呼び出し側が引く（S8c。それまでは両方引いていた）。
  * 遮蔽（hiddenByCutWall）・向こう側への降格（forceDash＋emitLine の判定）は呼び出し側の帯の既存判定を共有する。
  * @param {object[]} prims 積み先
  * @param {{cut:object, col:object, band:object, ceilZ:number|undefined, emitCtx:object, part:'kneeTop'|'dropBottom', forceDash?:boolean}} p
  *   part＝kneeTop は天井に届かない帯（天端が露出している帯。kneeCapUnderline と同じ条件）だけ、dropBottom は天井に届く帯（下端が露出している帯）だけ。
+ * @returns {boolean} その part の図が解決して fit が成ったか（段差が 0 本でも true。線が帯の外・遮蔽で出なくても true＝図が担う）
  */
 function appendKneeDropPartLines(prims, { cut, col, band, ceilZ, emitCtx, part, forceDash = false }) {
-  if (!band.isKneeDrop || band.profiledTop || typeof emitCtx.kneeDropPartStepsOf !== 'function') return;
+  if (!band.isKneeDrop || band.profiledTop || typeof emitCtx.kneeDropPartStepsOf !== 'function') return false;
   const reachesCeil = band.z1 >= (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS;
-  if ((part === 'kneeTop') === reachesCeil) return;
+  if ((part === 'kneeTop') === reachesCeil) return false;
   const steps = emitCtx.kneeDropPartStepsOf(band, col, cut)?.[part];
-  for (const { t, weight } of steps ?? []) {
+  if (!steps) return false;
+  for (const { t, weight } of steps) {
     const z = part === 'kneeTop' ? band.z1 - t : band.z0 - t;
     if (!(z > band.z0 + GAP_EPS && z < band.z1 - GAP_EPS) || hiddenByCutWall(col, z)) continue;
     const role = weight === DetailEdgeMark.AIR ? ElevationLineRole.SILHOUETTE : ElevationLineRole.DETAIL;
     prims.push(Object.assign(emitLine(cut, col.x0, z, col.x1, z, role, { ceilZ, forceDash }), { source: DETAIL_PRIM_SOURCE }));
   }
+  return true;
 }
 
 /**
@@ -1132,13 +1135,15 @@ function emitWallHorizontals(prims, { cut, col, band, ceilZ, emitCtx, role, sect
     prims.push(slope
       ? emitLine(cut, col.x0, slope.zAtX0, col.x1, slope.zAtX1, topRole, { ceilZ, forceDash: beyondBand })
       : emitLine(cut, col.x0, band.z1, col.x1, band.z1, topRole, { ceilZ, forceDash: beyondBand }));
+    // 腰壁の天端・垂れ壁の下端の部分詳細図から派生する水平線（天端の水平線を実際に描いた場合だけ＝遮蔽で消した縁の下に残さない）。
+    // 腰壁の天端（kneeTop）は割当てが無くても組込みの天板が既定（S8c）。
+    const kneeTopByFigure = appendKneeDropPartLines(prims, { cut, col, band, ceilZ, emitCtx, part: 'kneeTop', forceDash: beyondBand });
     // 腰壁の天端（仕様2026-08）: 見えがかりでも天端の帯は見えるので下端を細線で足す。
     // 天端の水平線を実際に描いた場合だけ——遮蔽で消した縁の下に帯だけ残ると嘘になる。
-    if (band.isKneeDrop && !band.profiledTop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
+    // 図が解決できない・fit 失敗のとき（kneeTopByFigure=false）だけ従来の細線へ戻る（フォールバック）。
+    if (!kneeTopByFigure && band.isKneeDrop && !band.profiledTop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
       prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(topRole)));
     }
-    // 腰壁の天端・垂れ壁の下端の部分詳細図から派生する水平線（天端の水平線を実際に描いた場合だけ＝遮蔽で消した縁の下に残さない）
-    appendKneeDropPartLines(prims, { cut, col, band, ceilZ, emitCtx, part: 'kneeTop', forceDash: beyondBand });
   }
   // 階段室越しの壁（viaStair）の巾木（ユーザー指示2026-10-15「階段下スペースは『ホール』なので巾木が
   // 見える」）。帯の部屋（ホール）の巾木高さ emitCtx.baseboardMm を、壁の足元（下に同じ壁の帯が続かない
@@ -1254,11 +1259,14 @@ function emitCutAlongBand(prims, { cut, col, band, prev, next, ceilZ, emitCtx })
   // 腰壁の天端（仕様2026-08）: 上端が天井より下で終わる＝天端が露出している帯だけ、
   // 帯の下端を細線で足す（垂れ壁は下端が露出するので z1 は天井に一致し、ここは通らない）。
   if (band.isKneeDrop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
-    prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(ElevationLineRole.CUT)));
-    // 腰壁の天端の部分詳細図から派生する水平線（cutAlong の垂れ壁は下端の水平線を描かないので dropBottom は対象外）
-    appendKneeDropPartLines(prims, {
+    // 腰壁の天端の部分詳細図から派生する水平線（cutAlong の垂れ壁は下端の水平線を描かないので dropBottom は対象外）。
+    // 図が解決できない・fit 失敗のときだけ従来の天端下の細線へ戻る（S8c）。
+    const kneeTopByFigure = appendKneeDropPartLines(prims, {
       cut, col, band, ceilZ, emitCtx, part: 'kneeTop', forceDash: bandFullyBeyond(cut, band, ceilZ),
     });
+    if (!kneeTopByFigure) {
+      prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(ElevationLineRole.CUT)));
+    }
   }
   // 端部縦線: 壁のx方向の実際の端（隣接列に同じcutAlong壁が続かない側）にCUT縦線
   // （壁の実端の断面。§5.5の凹み側面線と同じ「隣接列と比較」パターンだが、cutAlongは

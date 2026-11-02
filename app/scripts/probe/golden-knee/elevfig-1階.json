@@ -557,6 +557,7 @@
     "y2": -800
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 942.5,
@@ -1787,6 +1788,7 @@
     "y2": -800
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 9342.5,

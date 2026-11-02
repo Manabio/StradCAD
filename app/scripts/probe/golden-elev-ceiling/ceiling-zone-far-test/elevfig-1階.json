@@ -38,6 +38,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -150,6 +151,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1110,
@@ -276,6 +278,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3130,
@@ -378,6 +381,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4240,
@@ -555,6 +559,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -855,6 +860,7 @@
     "y2": -2350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 7480,
@@ -863,6 +869,7 @@
     "y2": 290
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 10975,
@@ -1082,6 +1089,7 @@
     "y2": -2350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 18955,
@@ -1261,6 +1269,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 21620,
@@ -1411,6 +1420,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 25460,
@@ -1419,6 +1429,7 @@
     "y2": 290
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 27135,
@@ -1630,6 +1641,7 @@
     "y2": -2050
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 31620,
@@ -1638,6 +1650,7 @@
     "y2": 290
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 35115,
@@ -1852,6 +1865,7 @@
     "y2": -2050
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 43095,
@@ -2064,6 +2078,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 47080,
@@ -2345,6 +2360,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -2481,6 +2497,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -2650,6 +2667,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4824,
@@ -2776,6 +2794,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6844,
@@ -2996,6 +3015,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -3132,6 +3152,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3840,
@@ -3344,6 +3365,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 7554,
@@ -3489,6 +3511,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 11394,
@@ -3752,6 +3775,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -3864,6 +3888,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -3990,6 +4015,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4040,
@@ -4092,6 +4118,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6060,
@@ -4269,6 +4296,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -4405,6 +4433,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -4531,6 +4560,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4040,
@@ -4657,6 +4687,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6060,
@@ -4834,6 +4865,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -4946,6 +4978,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1110,
@@ -5072,6 +5105,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 3130,
@@ -5174,6 +5208,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4240,
@@ -5386,6 +5421,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -5394,6 +5430,7 @@
     "y2": -60
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1820,
@@ -5402,6 +5439,7 @@
     "y2": 290
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 1820,
@@ -5591,6 +5629,7 @@
     "y2": 350
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4340,
@@ -5776,6 +5815,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6234,
@@ -5784,6 +5824,7 @@
     "y2": 290
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 7909,
@@ -5792,6 +5833,7 @@
     "y2": -60
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 7909,
@@ -6206,6 +6248,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 13395.5,
@@ -6559,6 +6602,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -6671,6 +6715,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -6797,6 +6842,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 4040,
@@ -6899,6 +6945,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 6060,
@@ -9025,6 +9072,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 0,
@@ -9161,6 +9209,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 2020,
@@ -9287,6 +9336,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 5860,
@@ -9413,6 +9463,7 @@
     "y2": 0
    },
    {
+    "source": "detail",
     "type": "line",
     "weight": "thin",
     "x1": 7880,

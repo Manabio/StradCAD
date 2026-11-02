@@ -104,6 +104,9 @@ const nando = graph.addRoom(new Set([cellKey(X1, Yb, X2, Y1)]), '納戸');
 ldk.setOverride('ceilingHeight', '2400');
 yoshitsu.setOverride('ceilingHeight', '2400');
 nando.setOverride('ceilingHeight', '2400');
+// 洋室・納戸は detailRefs 未割当てでも巾木高さ（h=60）があれば組込み巾木が既定で描かれる（S8c の確認用）
+yoshitsu.finish.setField('baseboardHeight', 'h=60');
+nando.finish.setField('baseboardHeight', 'h=60');
 // 小上がり: LDK の x 0..1500 の全セルを部分指定の子にし、床を +300（高い側）。df-jn-stepnose を割り当てる（S8b-3）
 const kamiagari = graph.addRoom(new Set(getCellsInRect(X0.value, Y0.value, Xs.value, Y1.value, graph).map(c => c.key)), '小上がり', undefined, new Set([ldk.id]));
 kamiagari.setFloorLevel(300);
@@ -234,13 +237,26 @@ function countFor() {
       const thinAt = y => b.primitives.filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === y && p.y2 === y).length;
       kneeCapBy[G.rooms.find(r => r.id === b.roomId)?.name ?? b.roomId] = { 'y-750(50下)': thinAt(-750), 'y-780(20下)': thinAt(-780) };
     }
-    return { ok: result.ok, bands: st.bands.length, err: st.materialError, by, n: det.length, kneeCapBy };
+    // 巾木（h=60）の線 y=−60 の本数（帯ごと）。derived＝図の派生線（source=detail）・legacy＝従来経路（appendBaseboard。フォールバック）
+    const baseboardBy = {};
+    for (const b of st.bands) {
+      const at60 = b.primitives.filter(p => p.type === 'line' && p.y1 === -60 && p.y2 === -60);
+      baseboardBy[G.rooms.find(r => r.id === b.roomId)?.name ?? b.roomId] = {
+        derived: at60.filter(p => p.source === DETAIL_PRIM_SOURCE).length, legacy: at60.filter(p => p.source === undefined).length,
+      };
+    }
+    return { ok: result.ok, bands: st.bands.length, err: st.materialError, by, n: det.length, kneeCapBy, baseboardBy };
   };
 }
 const withRefs = await countFor()();
 console.log('展開 割当てあり:', JSON.stringify(withRefs));
 check(withRefs.n > 0, '割当て部屋の展開に source=detail のプリミティブが出る');
 console.log('腰壁の天端の下の細線（高さ別の本数。帯ごと）:', JSON.stringify(withRefs.kneeCapBy));
+console.log('巾木 y=−60 の本数（帯ごと）:', JSON.stringify(withRefs.baseboardBy));
+// S8c: 未割当ての洋室・納戸でも巾木は組込みの図の派生線（source=detail）。従来経路の線（source なし）は引かれない
+check(withRefs.baseboardBy['洋室'].derived > 0 && withRefs.baseboardBy['洋室'].legacy === 0, '洋室（未割当て）の巾木が組込みの既定から描かれる');
+check(withRefs.baseboardBy['納戸'].derived > 0 && withRefs.baseboardBy['納戸'].legacy === 0, '納戸（未割当て）の巾木が組込みの既定から描かれる');
+check(withRefs.err === null, `暗黙の既定は通知しない（${withRefs.err}）`);
 check(Object.values(withRefs.kneeCapBy).some(c => c['y-750(50下)'] + c['y-780(20下)'] > 0), '腰壁の天端（kneeTop）の下に細線が出る（天板は最小描画幅へ調整され既存線と重なる）');
 
 // ---- 帯の端の腰壁の切断面（S8b-2）: カウンター天板の輪郭 polyline（CUT・source=detail）----

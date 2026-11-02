@@ -212,7 +212,7 @@ for (const kind of listKinds()) {
   test(`T1 ${kind}: loadBuiltin()の結果がvalidateBundleを無例外で通り、resolveCatalogのsizeが件数と一致する`, async () => {
     const def = kindDef(kind);
     const entries = await def.loadBuiltin();
-    assert.ok(entries.length > 0, `${kind}: loadBuiltin()が空`); // 部分詳細図も組込み「巾木 10×60」を持つ
+    assert.ok(entries.length > 0, `${kind}: loadBuiltin()が空`); // 部分詳細図も組込み「巾木 出 10」を持つ
 
     const bundle = withEntries(emptyBundle(), kind, entries);
     assert.doesNotThrow(() => validateBundle(bundle), `${kind}: validateBundleが例外を投げた`);

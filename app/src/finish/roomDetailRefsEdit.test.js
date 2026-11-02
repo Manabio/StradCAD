@@ -57,10 +57,10 @@ test('床の段差: 選ぶ・「なし」で外す（他の slot は保つ）。
   assert.ok(roomDetailRefSelects(room, FIGURES)[2].options.at(-1).label.includes('この枠には使えません'));
 });
 
-test('figureList 省略時（三層合成後）は組込み「巾木 10×60」が床と壁の選択肢に出る（壁と天井には出ない）', () => {
+test('figureList 省略時（三層合成後）は組込み「巾木 出 10」が床と壁の選択肢に出る（壁と天井には出ない）', () => {
   const [fw, wc] = roomDetailRefSelects(new Room('r1', 'LDK'));
-  assert.ok(fw.options.some(o => o.value === 'df-builtin-baseboard-10x60'), JSON.stringify(fw.options));
-  assert.ok(!wc.options.some(o => o.value === 'df-builtin-baseboard-10x60'));
+  assert.ok(fw.options.some(o => o.value === 'df-builtin-baseboard-10'), JSON.stringify(fw.options));
+  assert.ok(!wc.options.some(o => o.value === 'df-builtin-baseboard-10'));
 });
 
 test('現在値は detailRefs のキー。参照切れ・分類違いの現在値は選択肢の末尾に「見つかりません」「この枠には使えません」として残る', () => {

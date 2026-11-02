@@ -665,6 +665,8 @@ export const DetailParam = Object.freeze({
   FRAME_PROJECTION: 'frameProjection',
   FRAME_DEPTH:      'frameDepth',
   WALL_THICKNESS:   'wallThickness',
+  /** 部屋の巾木高さ（仕上げ設定 RoomFinish.baseboardHeight の "h=<mm>" を解析した mm。junction の floorWall だけが供給。S8c） */
+  BASEBOARD_HEIGHT: 'baseboardHeight',
 });
 /** LenSpec.mode='material' が参照する材の寸法の項目。 */
 export const DetailMaterialField = Object.freeze({
@@ -674,6 +676,8 @@ export const DetailMaterialField = Object.freeze({
 });
 /** 部分詳細ヘルパーの床・天井の段差（floorStep・ceilingStep）の試し込みの既定の段差高（mm。S8b-3 のリード指定。実際の段差高は床高・天井高の差）。 */
 export const DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM = 300;
+/** 部分詳細ヘルパーの床と壁の取り合い（巾木高さ param を使う図）の試し込みの既定の巾木高さ（mm。S8c。新規の部屋の既定 core/room.js DEFAULT_BASEBOARD_HEIGHT 'h=60' と同値。ヘルパーは core/room.js を引けないのでここに置く）。 */
+export const DETAIL_FIT_DEFAULT_BASEBOARD_HEIGHT_MM = 60;
 /** 詳細図の出どころ（provenance.source）。 */
 export const DetailProvenanceSource = Object.freeze({
   MANUAL: 'manual',
@@ -699,6 +703,14 @@ export const MIN_DRAWN_PAPER_MM = 0.5;
 export const ELEVATION_DEFAULT_SCALE_DENOM = 100;
 /** 天板（腰壁の天端）の実厚（mm）。組込みの天板図と展開図の天端下の細線が共有する。 */
 export const KNEE_CAP_THICKNESS_MM = 20;
+/**
+ * 組込みの部分詳細図のキー（detail/detailBuiltins.js が定義する図）。割当て無しの暗黙の既定（S8c）として finish/ が引くので、
+ * 組込み層を静的に import しなくて済むようここに置く。巾木＝部屋に巾木高さがあれば floorWall の既定・天板＝腰壁の kneeTop の既定。
+ */
+export const DETAIL_BUILTIN_BASEBOARD_KEY = 'df-builtin-baseboard-10';
+/** 部分詳細図の割当ての出どころ。explicit＝利用者が detailRefs へ割り当てた図・default＝割当て無しの暗黙の既定（組込みの巾木・天板。S8c）。通知は explicit だけ。 */
+export const DetailFigureSource = Object.freeze({ EXPLICIT: 'explicit', DEFAULT: 'default' });
+export const DETAIL_BUILTIN_KNEE_CAP_KEY = 'df-builtin-kneecap-20';
 /** fit の長さ比較の許容（mm）。elevationStyle.js の COORD_EPS_MM と同値だが、detail/ は elevation/ を引けないので別定義。 */
 export const DETAIL_FIT_EPS_MM = 1e-3;
 /** 手の辺に付ける印（Move.edge）。'air'＝空気との境目（室内側の見え掛かりの線。展開図で中線になる。S8a）。 */

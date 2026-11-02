@@ -20,7 +20,7 @@ import {
   PenDir, DetailLenMode, DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam,
   DetailMaterialField, DetailDash, DetailProvenanceSource, DETAIL_VIEW_COMBOS, DETAIL_FIGURE_VERSION,
   DETAIL_FIGURE_KEY_PREFIX, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_DRAFT_HISTORY_MAX,
-  DETAIL_SLOT_TARGETS, DetailSlot, DetailEdgeMark, ROOM_DETAIL_SLOTS, KNEE_DROP_DETAIL_SLOTS, DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
+  DETAIL_SLOT_TARGETS, DetailSlot, DetailEdgeMark, ROOM_DETAIL_SLOTS, KNEE_DROP_DETAIL_SLOTS, DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM, DETAIL_FIT_DEFAULT_BASEBOARD_HEIGHT_MM, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
   DXF_PROVENANCE_FIELDS, DXF_PREVIEW_STYLE,
 } from '../core/constants.js';
 import { readDxf, buildDxfScene } from '../detail/dxf/dxfImport.js';
@@ -76,6 +76,7 @@ export const DETAIL_PARAM_LABELS = Object.freeze({
   [DetailParam.FRAME_PROJECTION]: '枠の出幅',
   [DetailParam.FRAME_DEPTH]:      '枠の見込み',
   [DetailParam.WALL_THICKNESS]:   '壁厚',
+  [DetailParam.BASEBOARD_HEIGHT]: '巾木高さ',
 });
 export const DETAIL_MATERIAL_FIELD_LABELS = Object.freeze({
   [DetailMaterialField.THICKNESS]: '厚み',
@@ -149,7 +150,7 @@ export function wallThicknessNotice(materialLoadFailed) {
 /** NumPad の見出し。 */
 export const DETAIL_NUMPAD_LABELS = Object.freeze({
   penDistance: '距離', moveLen: '長さ', offset: 'オフセット', wallThickness: '壁厚', faceWidth: '見付', projection: '出幅',
-  width: '幅', height: '高さ', sill: '窓台', stepHeight: '段差高',
+  width: '幅', height: '高さ', sill: '窓台', stepHeight: '段差高', baseboardHeight: '巾木高さ',
 });
 /** 試し込みの目標値の欄（三方枠。順序＝表示順。field は defaultFitDims／tryFit の項目名）。 */
 export const FIT_DIM_FIELDS = Object.freeze([
@@ -202,10 +203,21 @@ export function isCeilingStepForm(form) {
   const t = DETAIL_SLOT_TARGETS[DetailSlot.CEILING_STEP];
   return form?.category === t.category && form?.view === t.view && form?.subject === t.subject;
 }
+/** 試し込みの目標値の欄（床と壁の取り合いで、図が巾木高さの param を使うとき。壁厚＋巾木高さ。S8c）。 */
+export const BASEBOARD_FIT_DIM_FIELDS = Object.freeze([
+  JUNCTION_FIT_DIM_FIELDS[0],
+  Object.freeze({ field: 'baseboardHeight', label: DETAIL_NUMPAD_LABELS.baseboardHeight }),
+]);
+/** 床と壁の取り合い（floorWall）の図で、手の長さに巾木高さの param（baseboardHeight）を使っているか。 */
+export function usesBaseboardHeightParam(form) {
+  return junctionSlotOf(form) === DetailSlot.FLOOR_WALL
+    && (form?.strokes ?? []).some(s => (s?.moves ?? []).some(m => m?.mode === DetailLenMode.PARAM && m.param === DetailParam.BASEBOARD_HEIGHT));
+}
 /** 現在の分類に合う試し込みの欄。 */
 export const fitDimFieldsFor = form => (isElevationFigureForm(form) ? ELEVATION_FIT_DIM_FIELDS
   : isFloorStepForm(form) || isCeilingStepForm(form) ? FLOOR_STEP_FIT_DIM_FIELDS
-    : junctionSlotOf(form) || partSlotOf(form) ? JUNCTION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
+    : usesBaseboardHeightParam(form) ? BASEBOARD_FIT_DIM_FIELDS
+      : junctionSlotOf(form) || partSlotOf(form) ? JUNCTION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
 /** 保存・破棄・削除の確認の文言。 */
 export const DETAIL_HELPER_MESSAGES = Object.freeze({
   saved: '保存しました',
@@ -255,7 +267,7 @@ export function confirmPairsMessage(pairs) {
  */
 export function saveContextFor(prevEntry, { docKeys, diffMap }) {
   if (!prevEntry) return { rowState: null, blocked: null };
-  // ヘルパーが開くのはライブラリ（user 層）の図だけで、組込み（巾木 10×60 等）は一覧に出ずキーも DETAIL_FIGURE_KEY_PREFIX で
+  // ヘルパーが開くのはライブラリ（user 層）の図だけで、組込み（巾木 出 10 等）は一覧に出ずキーも DETAIL_FIGURE_KEY_PREFIX で
   // 衝突しないため、ここでは builtin を渡さない（組込みをヘルパーで開けるようにしたら rowEditState に builtinKeys、planSaveEntry に builtinList）。
   const st = rowEditState(
     CatalogKind.DETAIL_FIGURE,
@@ -768,6 +780,8 @@ const ELEVATION_FIT_REPRESENTATIVE = Object.freeze({ category: 'fitting', subTyp
  */
 export function defaultFitDimsFor(form, wallThickness) {
   if (isFloorStepForm(form) || isCeilingStepForm(form)) return { stepHeight: String(DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM) };
+  // 巾木高さの param を使う床と壁の図: 部屋の巾木の既定と同じ高さを試し込みの既定にする
+  if (usesBaseboardHeightParam(form)) return { ...defaultFitDims(wallThickness), baseboardHeight: String(DETAIL_FIT_DEFAULT_BASEBOARD_HEIGHT_MM) };
   if (!isElevationFigureForm(form)) return defaultFitDims(wallThickness);
   const entry = findCatalogEntry(ELEVATION_FIT_REPRESENTATIVE.category, ELEVATION_FIT_REPRESENTATIVE.subType);
   return {
@@ -801,7 +815,13 @@ function tryFitJunction(form, dims, slot, materialMap) {
   const fig = entryFromForm(form);
   // 腰壁・垂れ壁の部位（kneeTop・dropBottom。S8b-1）は partTargets、取り合い（floorWall・wallCeiling）は junctionTargets
   const targetsOf = KNEE_DROP_DETAIL_SLOTS.includes(slot) ? partTargets : junctionTargets;
-  const t = targetsOf(fig, { slot, wallThicknessMm: wallThickness, materialMap });
+  // 巾木高さ（param baseboardHeight。S8c）: 欄が与えられたときだけ供給する（無ければ param 未解決＝使う図は fit 失敗）
+  let baseboardHeightMm;
+  if (slot === DetailSlot.FLOOR_WALL && dims.baseboardHeight !== undefined) {
+    baseboardHeightMm = parseNumberText(dims.baseboardHeight);
+    if (!Number.isFinite(baseboardHeightMm) || baseboardHeightMm <= 0) return badFitDim('巾木高さは正の数で入力してください');
+  }
+  const t = targetsOf(fig, { slot, wallThicknessMm: wallThickness, baseboardHeightMm, materialMap });
   if (t.error) return { error: t.error };
   return fitLocal(fig, t.targets);
 }

@@ -128,5 +128,8 @@ test('【失敗系】展開 init: 材未解決の図は fit 失敗を通知し�
   const plain = new ElevationModeState(twoRooms(KNEE).graph, null, { width: 1600, height: 1200 });
   await plain.init();
   assert.ok(String(withRef.materialError).includes('腰壁の天端に合わせられません'), String(withRef.materialError));
-  assert.equal(JSON.stringify(withRef.bands.map(b => b.primitives)), JSON.stringify(plain.bands.map(b => b.primitives)));
+  // 割当て無し（plain）は組込み天板が既定＝図の派生線（source=detail）。fit 失敗（withRef）は従来の細線へ戻る。source を除けば同じ（S8c）
+  const noSource = bands => JSON.stringify(bands.map(b => b.primitives.map(p => Object.fromEntries(Object.entries(p).filter(([k]) => k !== 'source')))));
+  assert.equal(noSource(withRef.bands), noSource(plain.bands));
+  assert.ok(plain.materialError == null || !String(plain.materialError).includes('腰壁の天端'), '暗黙の既定は通知しない');
 });

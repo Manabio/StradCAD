@@ -103,11 +103,11 @@ test('登録表: 照合・比較・重複禁止の項目', () => {
   assert.deepEqual(def.overrideLockedFields, []);
 });
 
-test('登録表: loadBuiltin は組込み 2 件（巾木 10×60・床と壁／天板 厚 20・腰壁の天端）で、validate と isSupported を通る', async () => {
+test('登録表: loadBuiltin は組込み 2 件（巾木 出 10・床と壁／天板 厚 20・腰壁の天端）で、validate と isSupported を通る', async () => {
   const def = kindDef(DF);
   const list = await def.loadBuiltin();
   assert.deepEqual(list.map(e => [e.key, e.category, e.subject]), [
-    ['df-builtin-baseboard-10x60', 'junction', 'floorWall'], ['df-builtin-kneecap-20', 'part', 'wall'],
+    ['df-builtin-baseboard-10', 'junction', 'floorWall'], ['df-builtin-kneecap-20', 'part', 'wall'],
   ]);
   for (const entry of list) {
     assert.doesNotThrow(() => def.validate(entry));
