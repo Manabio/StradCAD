@@ -231,6 +231,26 @@ test('_startStructAutoSave: S造スラブの共通仕様（steelSlabSpec）だ�
   clearDirty();
 });
 
+test('_startAutoSave: 腰壁・垂れ壁の記録の差し替えだけ（キーも件数も同じ＝部分詳細図の割当て・表の側・高さの変更）で markDirty する', () => {
+  clearDirty();
+  const mgr = new FloorSwapManager();
+  const { plane, graph } = makeGraph();
+  graph.setKneeDropWall('ax:s:e', { knee: { topHeight: 800 }, drop: null });
+  mgr._startAutoSave(plane, graph);
+  assert.equal(isDirty(), false, '前提: 開始直後は dirty でない');
+
+  runInAction(() => { graph.setKneeDropWall('ax:s:e', { knee: { topHeight: 800 }, drop: null, detailRefs: { kneeTop: 'df-k' } }); });
+  assert.equal(isDirty(), true, '割当てだけの変更（size が変わらない）で dirty になる');
+  clearDirty();
+  runInAction(() => { graph.setKneeDropWall('ax:s:e', { knee: { topHeight: 800 }, drop: null, detailRefs: { kneeTop: 'df-k' }, frontSide: 'roomPos' }); });
+  assert.equal(isDirty(), true, '表の側だけの変更で dirty になる');
+  clearDirty();
+  runInAction(() => { graph.setKneeDropWall('ax:s:e', { knee: { topHeight: 900 }, drop: null, detailRefs: { kneeTop: 'df-k' }, frontSide: 'roomPos' }); });
+  assert.equal(isDirty(), true, '高さだけの差し替え（knee.topHeight）で dirty になる');
+  mgr._stopAutoSave(plane.id);
+  clearDirty();
+});
+
 test('_startAutoSave: S造スラブの個別仕様（steelSpec）だけの変更で markDirty する（開始直後は付けない）', () => {
   clearDirty();
   const mgr = new FloorSwapManager();

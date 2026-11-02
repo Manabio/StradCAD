@@ -20,7 +20,7 @@ import {
   PenDir, DetailLenMode, DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam,
   DetailMaterialField, DetailDash, DetailProvenanceSource, DETAIL_VIEW_COMBOS, DETAIL_FIGURE_VERSION,
   DETAIL_FIGURE_KEY_PREFIX, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_DRAFT_HISTORY_MAX,
-  DETAIL_SLOT_TARGETS, DetailSlot, DetailEdgeMark, ROOM_DETAIL_SLOTS, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
+  DETAIL_SLOT_TARGETS, DetailSlot, DetailEdgeMark, ROOM_DETAIL_SLOTS, KNEE_DROP_DETAIL_SLOTS, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
   DXF_PROVENANCE_FIELDS, DXF_PREVIEW_STYLE,
 } from '../core/constants.js';
 import { readDxf, buildDxfScene } from '../detail/dxf/dxfImport.js';
@@ -42,7 +42,7 @@ import {
 } from '../catalog/catalogMaintenance.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
 import { detailFrameTargets, detailElevationTargets } from '../openings/openingDetailFrame.js';
-import { junctionTargets } from '../finish/roomDetailTargets.js';
+import { junctionTargets, partTargets } from '../finish/roomDetailTargets.js';
 import { evalNumpadExpr } from './numpadUtils.js';
 import { polyline, text } from '../structural/sectionFigure/svgFigurePrimitives.js';
 
@@ -52,6 +52,8 @@ export const DETAIL_ROLE_LABELS = Object.freeze({
   [DetailDatumRole.WALL_AXIS]:        '壁芯',
   [DetailDatumRole.FL]:               'FL（床の仕上げ面）',
   [DetailDatumRole.CEILING_FACE]:     '天井面',
+  [DetailDatumRole.WALL_TOP]:         '腰壁の天端',
+  [DetailDatumRole.WALL_BOTTOM]:      '垂れ壁の下端',
   [DetailDatumRole.GL]:               'GL',
   [DetailDatumRole.ROOF_SURFACE]:     '屋根面',
   [DetailDatumRole.EAVE_EDGE]:        '軒先',
@@ -176,9 +178,18 @@ export function junctionSlotOf(form) {
     return form?.category === t.category && form?.view === t.view && form?.subject === t.subject;
   }) ?? null;
 }
+/**
+ * 分類が腰壁・垂れ壁の部位（part/section/wall。S8b-1）なら試し込みに使う slot。腰壁の天端（kneeTop）と垂れ壁の下端（dropBottom）は
+ * 同じ分類なので、図の基準の役割で見分ける（t の基準に WALL_BOTTOM があれば dropBottom、無ければ kneeTop）。違えば null。
+ */
+export function partSlotOf(form) {
+  const t = DETAIL_SLOT_TARGETS[DetailSlot.KNEE_TOP];
+  if (!(form?.category === t.category && form?.view === t.view && form?.subject === t.subject)) return null;
+  return (form.datums ?? []).some(d => d?.role === DetailDatumRole.WALL_BOTTOM) ? DetailSlot.DROP_BOTTOM : DetailSlot.KNEE_TOP;
+}
 /** 現在の分類に合う試し込みの欄。 */
 export const fitDimFieldsFor = form => (isElevationFigureForm(form) ? ELEVATION_FIT_DIM_FIELDS
-  : junctionSlotOf(form) ? JUNCTION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
+  : junctionSlotOf(form) || partSlotOf(form) ? JUNCTION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
 /** 保存・破棄・削除の確認の文言。 */
 export const DETAIL_HELPER_MESSAGES = Object.freeze({
   saved: '保存しました',
@@ -315,6 +326,8 @@ export function defaultRoleFor(form, axis, kind) {
   if (isElevationFigureForm(form) && axis === DetailAxis.T) {
     return kind === DetailDatumKind.END ? DetailDatumRole.HEAD : DetailDatumRole.SILL;
   }
+  // 腰壁・垂れ壁の部位（part/section/wall）の t の origin は腰壁の天端の面（垂れ壁の下端にしたい図は基準の役割を選び直す）
+  if (partSlotOf(form) && axis === DetailAxis.T && kind === DetailDatumKind.ORIGIN) return DetailDatumRole.WALL_TOP;
   return DEFAULT_ROLE_BY_AXIS[axis];
 }
 
@@ -765,7 +778,9 @@ function tryFitJunction(form, dims, slot, materialMap) {
   const wallThickness = parseNumberText(dims.wallThickness);
   if (!Number.isFinite(wallThickness) || wallThickness <= 0) return badFitDim('壁厚は正の数で入力してください');
   const fig = entryFromForm(form);
-  const t = junctionTargets(fig, { slot, wallThicknessMm: wallThickness, materialMap });
+  // 腰壁・垂れ壁の部位（kneeTop・dropBottom。S8b-1）は partTargets、取り合い（floorWall・wallCeiling）は junctionTargets
+  const targetsOf = KNEE_DROP_DETAIL_SLOTS.includes(slot) ? partTargets : junctionTargets;
+  const t = targetsOf(fig, { slot, wallThicknessMm: wallThickness, materialMap });
   if (t.error) return { error: t.error };
   return fitLocal(fig, t.targets);
 }
@@ -779,6 +794,8 @@ export function tryFit(form, dims, { materialMap = null } = {}) {
   if (isElevationFigureForm(form)) return tryFitElevation(form, dims);
   const junctionSlot = junctionSlotOf(form);
   if (junctionSlot) return tryFitJunction(form, dims, junctionSlot, materialMap);
+  const partSlot = partSlotOf(form);
+  if (partSlot) return tryFitJunction(form, dims, partSlot, materialMap);
   const wallThickness = parseNumberText(dims.wallThickness);
   const faceWidth = parseNumberText(dims.faceWidth);
   const projection = parseNumberText(dims.projection);

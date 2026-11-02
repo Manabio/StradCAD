@@ -14,7 +14,7 @@ import { normalizeSubType } from '../openings/openingCatalog.js';
 import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION, normalizeBasementStructure } from '../structural/structureRules.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { normalizeDetailRefs } from '../core/detailRefs.js';
-import { StairPortSide, StairSoffitFinish } from '../core/constants.js';
+import { StairPortSide, StairSoffitFinish, KneeDropFrontSide } from '../core/constants.js';
 import { DEFAULT_PLAN_CUT_HEIGHT_MM, DEFAULT_CEILING_CUT_HEIGHT_MM } from '../core/plane.js';
 
 // CenterLine.beamAxisOrigin の許容値集合（BeamAxisOriginの値のみ。未知の文字列はnullへ正規化する
@@ -238,8 +238,13 @@ const WL = {
 
 // CLEccentricity（CL偏芯レコード）: 5 フィールド
 const CE = { CL_ID: 0, MODE: 1, VALUE: 2, SIDE: 3, BACKING: 4 };
-// KneeDropWall（腰壁・垂れ壁レコード）: 5 フィールド
-const KDW = { KEY: 0, HAS_KNEE: 1, KNEE_TOP: 2, HAS_DROP: 3, DROP_BOTTOM: 4 };
+// KneeDropWall（腰壁・垂れ壁レコード）: 8 フィールド
+const KDW = {
+  KEY: 0, HAS_KNEE: 1, KNEE_TOP: 2, HAS_DROP: 3, DROP_BOTTOM: 4,
+  // 部分詳細図の割当て（kneeTop・dropBottom。slot 名の昇順の並列 vector。無ければ両方とも書かない）と表の側（既定でなければ書く。
+  // 0＝roomNeg〔既定〕・1＝roomPos）。末尾追加（S8b-1）。旧ビルドで開いて保存すると消える片方向非互換（RM 32/33・OP 28/29 と同型）。
+  DETAIL_KEYS: 5, DETAIL_VALS: 6, FRONT_SIDE: 7,
+};
 
 // Plane（plane一覧のメタデータ）: 13 フィールド
 const PLN = {
@@ -896,13 +901,20 @@ function writeClEcc(b, ce) {
 
 function writeKneeDropWall(b, kdw) {
   const sKey = b.createString(kdw.key ?? '');
+  // 部分詳細図の割当て。正規化（core/kneeDropRecord.js の slot 限定は記録側で済んでいる）して 1 件以上あるときだけ vector を作る
+  const detailEntries = Object.entries(normalizeDetailRefs(kdw.detailRefs) ?? {});
+  const detailKeysVec = detailEntries.length > 0 ? writeStrVec(b, detailEntries.map(([slot]) => slot)) : 0;
+  const detailValsVec = detailEntries.length > 0 ? writeStrVec(b, detailEntries.map(([, key]) => key)) : 0;
 
-  b.startObject(5);
+  b.startObject(8);
   b.addFieldOffset(KDW.KEY,         sKey, 0);
   b.addFieldInt8(KDW.HAS_KNEE,      kdw.hasKnee ? 1 : 0, 0);
   b.addFieldFloat64(KDW.KNEE_TOP,   kdw.kneeTop ?? 0, 0.0);
   b.addFieldInt8(KDW.HAS_DROP,      kdw.hasDrop ? 1 : 0, 0);
   b.addFieldFloat64(KDW.DROP_BOTTOM, kdw.dropBottom ?? 0, 0.0);
+  b.addFieldOffset(KDW.DETAIL_KEYS, detailKeysVec, 0);
+  b.addFieldOffset(KDW.DETAIL_VALS, detailValsVec, 0);
+  b.addFieldInt8(KDW.FRONT_SIDE,    kdw.frontSide === KneeDropFrontSide.ROOM_POS ? 1 : 0, 0);
   return b.endObject();
 }
 
@@ -1689,6 +1701,8 @@ function readKneeDropWall(bb, tablePos) {
     kneeTop:    r.f64(KDW.KNEE_TOP),
     hasDrop:    r.i8(KDW.HAS_DROP) !== 0,
     dropBottom: r.f64(KDW.DROP_BOTTOM),
+    detailRefs: readDetailRefs(r.strVec(KDW.DETAIL_KEYS), r.strVec(KDW.DETAIL_VALS)),
+    frontSide:  r.i8(KDW.FRONT_SIDE) === 1 ? KneeDropFrontSide.ROOM_POS : KneeDropFrontSide.ROOM_NEG,
   };
 }
 

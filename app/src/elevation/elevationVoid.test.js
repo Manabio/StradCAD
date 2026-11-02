@@ -538,3 +538,25 @@ test('【失敗系・はり出し】buildRoomBandWithVoidAbove: 上階に床が�
   assert.deepEqual(upperFL, [],
     `上階の床が無い端のgateは切断壁の張り出しにも効く（実際:${JSON.stringify(upperFL)}）`);
 });
+
+// ---- 最小描画幅（2026-11-02 裁定）: 吹抜け帯の腰壁の天端下の細線が縮尺の分母に追う ----
+test('buildVoidBand: 腰壁の天端下の細線は scaleDenom に追う（分母 20＝天端 20 下・未指定＝100 は 50 下）', () => {
+  const graph = makeGraph('p1', 2900);
+  // L 字の吹抜け（面 A から見えがかりに張り出す内側の壁 y=3000, x=2000..4000 に腰壁）。見えがかりの壁の天端下は断面エンジン経由
+  const cl = (g, t, v) => g.addCenterLine(t, v, { labeled: false, discipline: Discipline.ARCH });
+  const V = CenterLineType.VERTICAL, H = CenterLineType.HORIZONTAL;
+  const x0 = cl(graph, V, 0), xm = cl(graph, V, 2000), x1 = cl(graph, V, 4000);
+  const y0 = cl(graph, H, 0), ym = cl(graph, H, 3000), y1 = cl(graph, H, 6000);
+  const voidRoom = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${ym.id}`, `${x0.id}:${ym.id}:${xm.id}:${y1.id}`]), '吹抜け');
+  generateRoomWallsFromOutline(graph, voidRoom);
+  voidRoom.setFeature(RoomFeature.VOID);
+  graph.setKneeDropWall(`${ym.id}:${xm.id}:${x1.id}`, { knee: { topHeight: 800 }, drop: null });
+  const lowerGraph = makeGraph('p0', 0);
+  makeRectRoom(lowerGraph, 0, 0, 4000, 6000, 'LDK');
+  const thinYs = ctx => [...new Set(buildVoidBand(voidRoom, graph, lowerGraph, { floorHeightBelowMm: 2900, ...ctx }).primitives
+    .filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2).map(p => p.y1))];
+  const fine = thinYs({ scaleDenom: 20 });
+  const dflt = thinYs({});
+  assert.ok(fine.includes(-780) && !fine.includes(-750), `分母 20: 天端 800 の 20 下（実際:${fine}）`);
+  assert.ok(dflt.includes(-750) && !dflt.includes(-780), `分母未指定: 天端 800 の 50 下（実際:${dflt}）`);
+});

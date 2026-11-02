@@ -29,7 +29,7 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  * （群は読み手による分類で、キーの置き場所を変えるものではない）。契約は`sectionTypes.test.js`が
  * 関数ごと（`buildSectionFromLine`／`buildCutContent`）の`opts.*`の読み取りとこの4群の`@property`の一致で固定する。
  * `buildCutContent`の`opts`はこのうち RenderStyle の全部と、CutSpec の endExtendMm・upperPlaneOverhang、
- * ProbeInputs の bandRoomBounds、BandInjections の gapBeamRects・gapFloorProfile・floorlessRanges・memberCeilZAt・memberSplitsGaps だけを読む。
+ * ProbeInputs の bandRoomBounds、BandInjections の gapBeamRects・gapFloorProfile・floorlessRanges・memberCeilZAt・memberSplitsGaps・kneeDropPartStepsOf だけを読む。
  *
  * @typedef {object} CutSpec 切断の定義（どの線を・どの向きで・どのz範囲で切るか）
  * @property {1|-1} viewSign
@@ -55,6 +55,7 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  *
  * @typedef {object} RenderStyle 体裁
  * @property {number} [scale] px/mm
+ * @property {number} [scaleDenom] 縮尺の分母（最小描画幅 minDrawnMm に使う。未指定＝展開の想定 100）
  * @property {object|null} [lineWeightsPx]
  * @property {number} [baseboardMm] 巾木高さ（0＝引かない）
  *
@@ -73,6 +74,9 @@ import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
  * @property {Array<{graph:object, floorZMm:number, role:string}>} [memberLayers] 梁の断面（memberCut）の候補を作る層（部屋帯は上階つき。
  *   省略は `layers`。`SectionCut.memberLayers`）
  * @property {boolean} [memberFromRoomSide] 梁の断面の続きを室内側で見る（面を見る帯。`SectionCut.memberFromRoomSide`）
+ * @property {((band:object, col:object, cut:object)=>({kneeTop?:object[], dropBottom?:object[]}|null))|null} [kneeDropPartStepsOf]
+ *   腰壁の天端・垂れ壁の下端に割り当てた部分詳細図から派生する水平線の段差（部屋帯だけ。S8b-1）。`emitCtx.kneeDropPartStepsOf` へ渡る。
+ *   段差は [{t, weight('auto'|'air')}]（見る側の向きに合わせた包絡線。エンジンは detail/ を引かず t を受けるだけ）。省略＝引かない
  */
 
 /**

@@ -1,0 +1,122 @@
+// ================================================================
+// 腰壁・垂れ壁の記録（graph.kneeDropWalls の値の detailRefs の kneeTop・dropBottom）の解決と fit・失敗の集計（部分詳細図 S8b-1）。
+// finish/roomDetailJunction.js（部屋の取り合い。S8a）と同型。
+//   resolveKneeDropDetailFigure  記録の slot の割当て → 図のキーとカタログのエントリ。参照切れは entry=null
+//   fitKneeDropPart              図のキー×slot×壁厚の fit（openings/openingCatalog.js fitDetailLocalMemo のメモを共有）
+//   kneeDropPartEnvelope         fit → 見る側の向きに合わせた包絡線（表の側と反対から見るときは壁の中心で鏡像）
+//   collectKneeDropPartFailures  未解決キー・fit 失敗の集計（仕上げ init・展開 init の通知）
+// 失敗は例外にしない（{error}・null・集計の行）。
+// ================================================================
+
+import { KNEE_DROP_DETAIL_SLOTS } from '../core/constants.js';
+import { kneeDropFrontSideOf } from '../core/kneeDropRecord.js';
+import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, detailOwnerKneeDrop } from '../error.js';
+import { detailFigureEntry, detailFitKey, fitDetailLocalMemo } from '../openings/openingCatalog.js';
+import { computeEnvelope } from '../detail/detailPlacement.js';
+import { partTargets } from './roomDetailTargets.js';
+import { wallAssemblyThicknessMm } from './roomDetailJunction.js';
+import { kneeDropWallGeometry } from './kneeDropWall.js';
+import { buildCellToRoom } from './edgeClassify.js';
+
+const refOf = (rec, slot) => {
+  const refs = rec?.detailRefs;
+  if (refs === null || typeof refs !== 'object' || Array.isArray(refs)) return undefined;
+  const key = refs[slot];
+  return typeof key === 'string' && key !== '' ? key : undefined;
+};
+
+/**
+ * 記録の slot の割当てを図のエントリへ解決する。
+ * @param {{rec:object, slot:string, entryOf?:(key:string)=>object|null}} p entryOf＝図のキー→エントリ（既定はカタログ）
+ * @returns {null | {key:string, slot:string, entry:object|null}} null＝割当て無し。entry が null＝参照切れ（カタログに無い）
+ */
+export function resolveKneeDropDetailFigure({ rec, slot, entryOf = detailFigureEntry }) {
+  const key = refOf(rec, slot);
+  if (key === undefined) return null;
+  return { key, slot, entry: entryOf(key) ?? null };
+}
+
+/**
+ * 図を（壁厚）に合わせた局所座標のストローク列（fitLocal の結果）。失敗は {error:{code,message}}（例外にしない）。
+ * メモは openings/ の fitDetailLocalMemo と共有（鍵は図のキー・slot・壁厚）。材未解決の結果はメモしない。
+ * @param {{figureKey:string, slot:string, wallThicknessMm:number, materialMap?:object|null}} p
+ */
+export function fitKneeDropPart({ figureKey, slot, wallThicknessMm, materialMap = null }) {
+  return fitDetailLocalMemo({
+    figureKey, slot, dims: { wallThickness: wallThicknessMm },
+    targetsOf: (entry, dims) => partTargets(entry, { slot, wallThicknessMm: dims.wallThickness, materialMap }),
+  });
+}
+
+/** 図の局所座標（s＝表の側の仕上げ面から表の側が正）を、反対側の仕上げ面から反対側が正の座標へ映す（壁の中心での鏡像）。 */
+export function mirrorStrokesAcrossWall(strokes, wallThicknessMm) {
+  return strokes.map(stroke => ({ ...stroke, points: stroke.points.map(p => ({ s: -wallThicknessMm - p.s, t: p.t })) }));
+}
+
+/**
+ * 記録の slot の図を、壁 wall（壁厚＝同軸・スパン重なりの壁の組）で fit し、見る側（viewedSide）から見た包絡線にする。
+ * 参照切れ・壁厚が引けない・fit 失敗は null（従来の描き方）。
+ * @param {{graph:object, wall:object, rec:object, slot:string, viewedSide:string, materialMap?:object|null,
+ *   entryOf?:(key:string)=>object|null}} p viewedSide＝KneeDropFrontSide（見る側の部屋の側）
+ * @returns {null | {steps:{t:number, weight:string}[], outline:number[][], maxDeviationMm:number}}
+ */
+export function kneeDropPartEnvelope({ graph, wall, rec, slot, viewedSide, materialMap = null, entryOf = detailFigureEntry }) {
+  const r = resolveKneeDropDetailFigure({ rec, slot, entryOf });
+  if (!r?.entry) return null;
+  const thickness = wallAssemblyThicknessMm(graph, wall);
+  if (thickness === null) return null;
+  const fitted = fitKneeDropPart({ figureKey: r.key, slot, wallThicknessMm: thickness, materialMap });
+  if (fitted.error) return null;
+  const strokes = viewedSide === kneeDropFrontSideOf(rec) ? fitted.strokes : mirrorStrokesAcrossWall(fitted.strokes, thickness);
+  return computeEnvelope(strokes, slot);
+}
+
+/**
+ * graph の腰壁・垂れ壁の記録について、部位の図が見つからない・壁厚に合わせられない組を集める。
+ * 通知の行は collectRoomJunctionFailures と同形: {key, symbolKey, slot, label, reason, message, kneeDropKey, wallThickness?}。
+ * symbolKey は通知文の主語（腰壁・垂れ壁〈部屋〉）。重複排除の鍵 seen は階をまたいで共有できる（破壊的に更新する）。
+ * @param {object|null} graph
+ * @param {Set<string>} [seen]
+ * @param {{materialMap?:object|null, entryOf?:(key:string)=>object|null}} [opts]
+ */
+export function collectKneeDropPartFailures(graph, seen = new Set(), { materialMap = null, entryOf = detailFigureEntry } = {}) {
+  const failures = [];
+  if (!graph?.kneeDropWalls || graph.kneeDropWalls.size === 0) return failures;
+  let cellToRoom = null;
+  for (const [recKey, rec] of graph.kneeDropWalls) {
+    if (!rec?.detailRefs) continue;
+    for (const slot of KNEE_DROP_DETAIL_SLOTS) {
+      const r = resolveKneeDropDetailFigure({ rec, slot, entryOf });
+      if (!r) continue;
+      cellToRoom ??= buildCellToRoom(graph);
+      const geo = kneeDropWallGeometry(graph, recKey, cellToRoom);
+      const owner = detailOwnerKneeDrop([geo?.roomNeg?.name, geo?.roomPos?.name]);
+      const push = (key, label, reason, extra) => {
+        if (seen.has(key)) return;
+        seen.add(key);
+        failures.push({
+          key, symbolKey: owner, slot, label, reason, message: ERR_DETAIL_FIT_FAILED(label, owner, reason, slot), kneeDropKey: recKey, ...extra,
+        });
+      };
+      if (!r.entry) {
+        // 参照切れ。鍵は記録ごと（同じ図を別の記録が指していても主語が違う）
+        push(`notFound|kneeDrop|${recKey}|${slot}|${r.key}`, r.key, ERR_DETAIL_FIGURE_NOT_FOUND(owner, slot));
+        continue;
+      }
+      if (!geo) continue; // 区間の壁が無い（孤児の記録）は試さない
+      const thicknesses = new Set();
+      for (const wall of geo.walls) {
+        const mm = wallAssemblyThicknessMm(graph, wall);
+        if (mm !== null) thicknesses.add(mm);
+      }
+      for (const wallThickness of [...thicknesses].sort((a, b) => a - b)) {
+        const fitted = fitKneeDropPart({ figureKey: r.key, slot, wallThicknessMm: wallThickness, materialMap });
+        if (fitted.error) {
+          push(`${detailFitKey({ figureKey: r.key, slot, dims: { wallThickness } })}|kneeDrop|${recKey}`,
+            r.entry.label || r.key, fitted.error.message, { wallThickness });
+        }
+      }
+    }
+  }
+  return failures;
+}

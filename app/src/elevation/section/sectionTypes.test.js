@@ -403,7 +403,7 @@ test('【失敗系・ceilProfileEdgeAt】profileが無い・空・ceilZ非有限
 
 // ---- 契約: 関数ごとの opts 読み取りキー ----
 //   buildSectionFromLine = CutSpec ∪ ProbeInputs ∪ RenderStyle ∪ BandInjections − gapFloorProfile・floorlessRanges・memberCeilZAt・memberSplitsGaps（転送しない）
-//   buildCutContent      = Pick の 11 キー（endExtendMm・upperPlaneOverhang・bandRoomBounds・RenderStyle 全部・gapBeamRects・gapFloorProfile・floorlessRanges・memberCeilZAt・memberSplitsGaps）
+//   buildCutContent      = Pick の 12 キー（endExtendMm・upperPlaneOverhang・bandRoomBounds・RenderStyle 全部・gapBeamRects・gapFloorProfile・floorlessRanges・memberCeilZAt・memberSplitsGaps・kneeDropPartStepsOf）
 const stripComments = src => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/.*$/gm, '');
 
 // `export function name(` の開始行〜次の `\nexport ` 直前（なければ末尾）。withProbeExtension の opts は別物なので含めない。
@@ -454,8 +454,8 @@ test('契約: 関数ごとの opts 読み取りキーと 4 typedef の @property
   assert.deepEqual([...read].sort(), [...declared].sort(),
     `buildSectionFromLine 読み取り−宣言=${[...read].filter(k => !declared.has(k))} / 宣言−読み取り=${[...declared].filter(k => !read.has(k))}`);
   const pick = ['endExtendMm', 'upperPlaneOverhang', 'bandRoomBounds', ...groups.RenderStyle, 'gapBeamRects', 'gapFloorProfile', 'floorlessRanges',
-    'memberCeilZAt', 'memberSplitsGaps'];
-  assert.deepEqual([...readCut].sort(), pick.sort(), 'buildCutContent の読み取りが Pick の 11 キーと一致しない');
+    'memberCeilZAt', 'memberSplitsGaps', 'kneeDropPartStepsOf'];
+  assert.deepEqual([...readCut].sort(), pick.sort(), 'buildCutContent の読み取りが Pick の 12 キーと一致しない');
 });
 
 // ---- makeSectionCut（SectionCut の唯一の生成器）----

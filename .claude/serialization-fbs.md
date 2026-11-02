@@ -44,6 +44,9 @@ CL→壁→開口→部屋→境界エッジ等の順で解決する。新しい
 ## 部屋の取り合いの割当て（`RM.DETAIL_KEYS=32`・`DETAIL_VALS=33`）は割当てのある部屋だけが書く
 `Room.detailRefs`（`{floorWall?, wallCeiling?}|null`。正規形は建具と共用の`core/detailRefs.js`）を slot 名と図キーの並列 vector で持つ。null・空のときは 2 フィールドとも書かない（13.stq・moku4 の全階で HEAD と sha256 一致を実測）。読みは無ければ null。旧ビルドで開いて保存すると黙って消える片方向非互換（`OP 28/29` と同型）。
 
+## 腰壁・垂れ壁の部分詳細図の割当てと表の側（`KDW.DETAIL_KEYS=5`・`DETAIL_VALS=6`・`FRONT_SIDE=7`）は値のある記録だけが書く
+記録（`GS.KNEE_DROP_WALLS`の要素。`startObject`は 5→8）の`detailRefs`（`{kneeTop?, dropBottom?}`。正規形は`core/detailRefs.js`と`core/kneeDropRecord.js`）を slot 名と図キーの並列 vector で持つ。null・空のときは 5/6 を書かず、`frontSide`（0＝roomNeg〔既定〕・1＝roomPos）も既定なら書かない（割当ても表の側の変更も無い文書のバイト列は不変。13.stq〔記録 4 件〕・moku4 の全階で HEAD と再エンコードの sha256 一致を実測）。読みは無ければ null・既定。旧ビルドで開いて保存すると黙って消える片方向非互換（`OP 28/29`・`RM 32/33` と同型）。
+
 ## 主屋根（`GS.MAIN_ROOF_SPEC=53`→同じ`RS`テーブル）は既定値のとき書かない
 最上階の階ごと設定（`PlanGraph.mainRoofSpec`）。`graphSnapshot.buildSnapshot`が`isDefaultRoofSpec`で既定値なら`null`にし、`encode`は`null`のとき何も書かない（フィールド自体を省く）ので、主屋根を編集していない文書のバイト列は1バイトも変わらない（読み側は無ければ`restoreGraph`の`clear()`の既定値）。`RS`の読み書きは下屋と共用（`writeRoofSpec`/`readRoofSpec`）。
 

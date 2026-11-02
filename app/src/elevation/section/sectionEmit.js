@@ -12,6 +12,7 @@ import {
   ElevationDash, FLOAT_EPS, COORD_EPS_MM,
 } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
+import { DETAIL_PRIM_SOURCE, DetailEdgeMark } from '../../core/constants.js';
 import {
   zToY, cutDrawRange, localXOf, hasCutWallStandingOn, slabRuns, cutWallRuns, slabJunctionOf, MEMBER_PRIM, WHOLE_OUTLINE, isOpenLikeBand,
 } from './sectionTypes.js';
@@ -422,8 +423,8 @@ function cutWallTopEdges(columns, cut, ceilZ, emitCtx) {
  * @param {import('./sectionTypes.js').SectionCut} cut
  * @param {object} col
  * @param {object} band 見えがかり壁の帯（isKneeDrop以外は無視する）
- * @param {{prev:object|null, next:object|null, loRanges:object[], hiRanges:object[], ceilZ:number|undefined, scale?:number}} ctx
- *   scale は表示倍率(px/mm)。見付の1px保証（elevationStyle.js kneeCapFaceMm）に使う。
+ * @param {{prev:object|null, next:object|null, loRanges:object[], hiRanges:object[], ceilZ:number|undefined, scale?:number, scaleDenom?:number}} ctx
+ *   scale は表示倍率(px/mm)。見付の1px保証（elevationStyle.js kneeCapFaceMm）に使う。scaleDenom は縮尺の分母（最小描画幅。未指定＝100）。
  */
 function appendKneeCapEndFaces(prims, cut, col, band, ctx) {
   if (!band.isKneeDrop || band.profiledTop) return; // 天端プロファイルの壁に笠木の端面は無い
@@ -431,8 +432,8 @@ function appendKneeCapEndFaces(prims, cut, col, band, ctx) {
   if (!(band.z1 < top - GAP_EPS)) return; // 天井まで届く壁＝天端が露出していない
   // 端面: 外側の線は凹み側面線（中線）、内側は細線。余白1px保証は中線×細線の線幅で取る。
   const outerWeight = weightForRole(ElevationLineRole.SILHOUETTE);
-  if (kneeCapBottomMm(band.z1 - band.z0, ctx.scale, ctx.lineWeightsPx, outerWeight) == null) return; // 見付に満たない退化指定
-  const faceMm = kneeCapFaceMm(ctx.scale, ctx.lineWeightsPx, outerWeight);
+  if (kneeCapBottomMm(band.z1 - band.z0, ctx.scale, ctx.lineWeightsPx, outerWeight, ctx.scaleDenom) == null) return; // 見付に満たない退化指定
+  const faceMm = kneeCapFaceMm(ctx.scale, ctx.lineWeightsPx, outerWeight, ctx.scaleDenom);
   const coversWholeBand = ranges => ranges.length === 1
     && Math.abs(ranges[0].z0 - band.z0) < GAP_EPS && Math.abs(ranges[0].z1 - band.z1) < GAP_EPS;
   // 内側へ寄せる向きは列の内側（lo端なら+、hi端なら−）。
@@ -453,16 +454,40 @@ function appendKneeCapEndFaces(prims, cut, col, band, ctx) {
  * ——面図側（elevationFigure.js の kneeCapMarksOnFace）と同じ規則にするため。
  * @param {number} topZ 天端のz（絶対）
  * @param {number} floorZ その壁の足元のz（帯のz0。層の床）
- * @param {{scale?:number, lineWeightsPx?:object}} [emitCtx] 表示倍率(px/mm)と線幅表。見付の1px保証
+ * @param {{scale?:number, lineWeightsPx?:object, scaleDenom?:number}} [emitCtx] 表示倍率(px/mm)と線幅表（見付の1px保証）と縮尺の分母（最小描画幅。未指定＝100）
  *   （天端の線が高さを守り、細線が線幅込みで余白1px以上下がる）
  * @param {string} [topWeight] 天端の線のweight（切断壁は'thick'、見えがかりは描いた線のrole）
  * @returns {object[]} 0本 or 1本
  */
 function kneeCapUnderline(cut, x0, x1, topZ, floorZ, ceilZ, emitCtx = {}, topWeight = 'thick') {
-  const bottom = kneeCapBottomMm(topZ - floorZ, emitCtx.scale, emitCtx.lineWeightsPx, topWeight);
+  const bottom = kneeCapBottomMm(topZ - floorZ, emitCtx.scale, emitCtx.lineWeightsPx, topWeight, emitCtx.scaleDenom);
   if (bottom == null) return [];
   const z = floorZ + bottom;
   return [emitLine(cut, x0, z, x1, z, ElevationLineRole.DETAIL, { ceilZ })];
+}
+
+/**
+ * 腰壁の天端・垂れ壁の下端に割り当てた部分詳細図（記録の detailRefs。S8b-1）の断面図から派生する水平線。
+ * 段差の列（emitCtx.kneeDropPartStepsOf(band, col, cut)＝{kneeTop?, dropBottom?}: [{t, weight}]。見る側の向きに合わせた包絡線。
+ * エンジンは detail/ を引かず、段差の t を受けるだけ）を、腰壁の帯なら天端から t 下（z＝z1−t）、垂れ壁の帯なら下端から −t 上（z＝z0−t）へ引く。
+ * 自動（auto）の段差＝細線 DETAIL・印（air）＝中線 SILHOUETTE。帯の中に収まる高さだけ。出力に source='detail' の印を付ける。
+ * 既存の天端の下の細線（kneeCapUnderline）は残す（両方引く。ユーザー指示 Q3）。
+ * 遮蔽（hiddenByCutWall）・向こう側への降格（forceDash＋emitLine の判定）は呼び出し側の帯の既存判定を共有する。
+ * @param {object[]} prims 積み先
+ * @param {{cut:object, col:object, band:object, ceilZ:number|undefined, emitCtx:object, part:'kneeTop'|'dropBottom', forceDash?:boolean}} p
+ *   part＝kneeTop は天井に届かない帯（天端が露出している帯。kneeCapUnderline と同じ条件）だけ、dropBottom は天井に届く帯（下端が露出している帯）だけ。
+ */
+function appendKneeDropPartLines(prims, { cut, col, band, ceilZ, emitCtx, part, forceDash = false }) {
+  if (!band.isKneeDrop || band.profiledTop || typeof emitCtx.kneeDropPartStepsOf !== 'function') return;
+  const reachesCeil = band.z1 >= (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS;
+  if ((part === 'kneeTop') === reachesCeil) return;
+  const steps = emitCtx.kneeDropPartStepsOf(band, col, cut)?.[part];
+  for (const { t, weight } of steps ?? []) {
+    const z = part === 'kneeTop' ? band.z1 - t : band.z0 - t;
+    if (!(z > band.z0 + GAP_EPS && z < band.z1 - GAP_EPS) || hiddenByCutWall(col, z)) continue;
+    const role = weight === DetailEdgeMark.AIR ? ElevationLineRole.SILHOUETTE : ElevationLineRole.DETAIL;
+    prims.push(Object.assign(emitLine(cut, col.x0, z, col.x1, z, role, { ceilZ, forceDash }), { source: DETAIL_PRIM_SOURCE }));
+  }
 }
 
 /**
@@ -1083,6 +1108,8 @@ function emitWallHorizontals(prims, { cut, col, band, ceilZ, emitCtx, role, sect
   if (!flushOnSlab && !hiddenByCutWall(col, band.z0) && !atSectionLevel(band.z0)
       && ownsBoundary(band, neighborBandAt(col, band.z0, -1), cut)) {
     prims.push(emitLine(cut, col.x0, band.z0, col.x1, band.z0, role, { ceilZ, forceDash: beyondBand }));
+    // 垂れ壁の下端の部分詳細図から派生する水平線（下端の水平線を実際に描いた場合だけ）
+    appendKneeDropPartLines(prims, { cut, col, band, ceilZ, emitCtx, part: 'dropBottom', forceDash: beyondBand });
   }
   // **その空間の天井の縁は、仮想断面から最も近い面（＝主な描画対象）と同格なので中線**
   // （ユーザー明示指示2026-08「追加した1階天井見えがかり：仮想断面から最も近い壁
@@ -1110,6 +1137,8 @@ function emitWallHorizontals(prims, { cut, col, band, ceilZ, emitCtx, role, sect
     if (band.isKneeDrop && !band.profiledTop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
       prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(topRole)));
     }
+    // 腰壁の天端・垂れ壁の下端の部分詳細図から派生する水平線（天端の水平線を実際に描いた場合だけ＝遮蔽で消した縁の下に残さない）
+    appendKneeDropPartLines(prims, { cut, col, band, ceilZ, emitCtx, part: 'kneeTop', forceDash: beyondBand });
   }
   // 階段室越しの壁（viaStair）の巾木（ユーザー指示2026-10-15「階段下スペースは『ホール』なので巾木が
   // 見える」）。帯の部屋（ホール）の巾木高さ emitCtx.baseboardMm を、壁の足元（下に同じ壁の帯が続かない
@@ -1209,7 +1238,7 @@ function emitWallRecessEdges(prims, { cut, columns, i, col, band, prev, next, ce
   //   - 同じ軸上に壁が続く端 … 連続する壁は同じ偏芯・同じ厚みで同面のため
   //     （uncoveredZRangesが空を返す）。
   appendKneeCapEndFaces(prims, cut, col, band, {
-    prev, next, loRanges, hiRanges, ceilZ, scale: emitCtx.scale, lineWeightsPx: emitCtx.lineWeightsPx,
+    prev, next, loRanges, hiRanges, ceilZ, scale: emitCtx.scale, lineWeightsPx: emitCtx.lineWeightsPx, scaleDenom: emitCtx.scaleDenom,
   });
 }
 
@@ -1226,6 +1255,10 @@ function emitCutAlongBand(prims, { cut, col, band, prev, next, ceilZ, emitCtx })
   // 帯の下端を細線で足す（垂れ壁は下端が露出するので z1 は天井に一致し、ここは通らない）。
   if (band.isKneeDrop && band.z1 < (col.ceilZ ?? ceilZ ?? Infinity) - GAP_EPS) {
     prims.push(...kneeCapUnderline(cut, col.x0, col.x1, band.z1, band.z0, ceilZ, emitCtx, weightForRole(ElevationLineRole.CUT)));
+    // 腰壁の天端の部分詳細図から派生する水平線（cutAlong の垂れ壁は下端の水平線を描かないので dropBottom は対象外）
+    appendKneeDropPartLines(prims, {
+      cut, col, band, ceilZ, emitCtx, part: 'kneeTop', forceDash: bandFullyBeyond(cut, band, ceilZ),
+    });
   }
   // 端部縦線: 壁のx方向の実際の端（隣接列に同じcutAlong壁が続かない側）にCUT縦線
   // （壁の実端の断面。§5.5の凹み側面線と同じ「隣接列と比較」パターンだが、cutAlongは

@@ -402,9 +402,13 @@ export function buildCutContent(cut, probeCtx, opts = {}) {
   // 列の分割（buildColumns）の後でないと分からないため、列を作った後で呼ぶ。
   const emitCtx = {
     ...emitCtxForCut(pcut), scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null,
+    scaleDenom: opts.scaleDenom, // 縮尺の分母（最小描画幅。未指定＝100。elevationStyle.js minDrawnMm）
     gapFloorProfile: opts.gapFloorProfile ?? null,
     gapBeamRects: typeof opts.gapBeamRects === 'function' ? opts.gapBeamRects(pcut) : (opts.gapBeamRects ?? null),
     baseboardMm: opts.baseboardMm ?? 0,
+    // 腰壁の天端・垂れ壁の下端の部分詳細図から派生する水平線の段差（帯 band・列 col・切断 cut → {kneeTop?, dropBottom?}|null）。
+    // 部屋帯だけが渡す（elevationBand.js）。省略＝引かない。エンジンは detail/ を引かず、段差の t を受けるだけ
+    ...(typeof opts.kneeDropPartStepsOf === 'function' ? { kneeDropPartStepsOf: opts.kneeDropPartStepsOf } : {}),
   };
   // 壁content（断面・見えがかり・凹み側面線）は「断面内部は描画しない」の一般判定
   // （`clipInsideSlabSolids`）を通してから返す。
@@ -499,9 +503,11 @@ export function buildSectionFromLine(line, layers, opts = {}) {
     endExtendMm: opts.endExtendMm ?? 0,
     bandRoomBounds: opts.bandRoomBounds ?? null,
     scale: opts.scale,
+    scaleDenom: opts.scaleDenom,
     lineWeightsPx: opts.lineWeightsPx ?? null,
     upperPlaneOverhang: opts.upperPlaneOverhang ?? false,
     baseboardMm: opts.baseboardMm ?? 0,
     gapBeamRects: opts.gapBeamRects ?? null,
+    kneeDropPartStepsOf: opts.kneeDropPartStepsOf ?? null,
   });
 }

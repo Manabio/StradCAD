@@ -2,11 +2,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveLineWeightsPx, DEFAULT_PX_PER_MM } from '../viewport.js';
+import { MIN_DRAWN_PAPER_MM, ELEVATION_DEFAULT_SCALE_DENOM, KNEE_CAP_THICKNESS_MM } from '../core/constants.js';
 import {
   ElevationLineRole, weightForRole,
   TRIANGLE_ANGLE_DEG, TRIANGLE_HEIGHT_SCREEN_MM, FACE_GAP_SCREEN_MM,
   MIN_FACE_PX, drawLimitMm, visibleFaceMm, kneeCapFaceMm, kneeCapBottomMm, KNEE_CAP_FACE_MM,
-  faceGapLimitMm, strokePxOf,
+  faceGapLimitMm, strokePxOf, minDrawnMm, kneeCapDrawnFaceMm,
   GAP_EPS_MM, FLOAT_EPS, SAMPLE_OFFSET_MM, COORD_EPS_MM, ElevationDash,
 } from './elevationStyle.js';
 
@@ -52,6 +53,28 @@ test('kneeCapFaceMm/kneeCapBottomMm: 腰壁天端は中線（天端）が高さ�
   assert.equal(kneeCapFaceMm(1 / 100, lw, 'thick'), 300);
   assert.equal(kneeCapFaceMm(1 / 100, lw, 'medium'), 250, '見えがかりの天端（中線）なら 1+(2+1)/2=2.5px');
   assert.equal(kneeCapBottomMm(800, 1 / 100, lw, 'thick'), 500);
+});
+
+// ---- 最小描画幅（2026-11-02 裁定: 紙上 0.5mm。展開 1/100 の 50mm の一般化）----
+test('minDrawnMm: 紙上 0.5mm × 分母。未指定・不正は展開の想定 100（50mm）', () => {
+  assert.equal(MIN_DRAWN_PAPER_MM, 0.5);
+  assert.equal(ELEVATION_DEFAULT_SCALE_DENOM, 100);
+  assert.equal(minDrawnMm(100), 50);
+  assert.equal(minDrawnMm(20), 10);
+  assert.equal(minDrawnMm(50), 25);
+  for (const d of [undefined, null, 0, -5, NaN]) assert.equal(minDrawnMm(d), 50, `denom=${d}`);
+});
+
+test('kneeCapDrawnFaceMm: 天板厚 20 と最小描画幅の大きい方。1/100 なら 20→50、1/20 なら 20、1/50 は 25', () => {
+  assert.equal(KNEE_CAP_THICKNESS_MM, 20);
+  assert.equal(kneeCapDrawnFaceMm(), 50);
+  assert.equal(kneeCapDrawnFaceMm(100), 50);
+  assert.equal(kneeCapDrawnFaceMm(20), 20);
+  assert.equal(kneeCapDrawnFaceMm(50), 25);
+  assert.equal(KNEE_CAP_FACE_MM, 50, '分母未指定の既定値（従来値・golden 不変）');
+  assert.equal(kneeCapFaceMm(undefined, null, 'thick', 20), 20);
+  assert.equal(kneeCapBottomMm(800, undefined, null, 'thick', 20), 780);
+  assert.equal(kneeCapBottomMm(800, undefined, null, 'thick'), 750);
 });
 
 // ---- I9: px(CUT) > px(SILHOUETTE) > px(DETAIL)（校正値ベース固定pxで） ----

@@ -623,7 +623,7 @@ export function buildFaceFigure(face, ctx) {
   const {
     graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
     prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
-    wallLessEndExtendModelMm, scale, lineWeightsPx, ceilingProfile, ceilingProfileGaps, skipBaseboard, skipWallLabel, floorSpanX,
+    wallLessEndExtendModelMm, scale, scaleDenom, lineWeightsPx, ceilingProfile, ceilingProfileGaps, skipBaseboard, skipWallLabel, floorSpanX,
     extraCenterLineXs, skipFaceLabel, faceLabelBoundary, floorProfile,
     upperOverhang, upperFloorZ, upperFloorEnds, upperFloorCutEnds, lowerOverhang,
   } = ctx;
@@ -787,6 +787,7 @@ export function buildFaceFigure(face, ctx) {
       face, graph, run, segs, openings, wallLessRuns, segCeilAbsAt,
       ceilRiserXAt: i => drawnCeilingRiserX(segs, i, halfWallMm, CH),
       hasCeilingProfile: Array.isArray(ceilingProfile) && ceilingProfile.length >= 2,
+      scaleDenom,
     });
     for (const sp of specs.floorWall) {
       appendFloorOffsetLine(prims, {

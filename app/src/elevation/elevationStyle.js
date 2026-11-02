@@ -7,6 +7,8 @@
  * （viewport.lineWeightsPx）をそのまま使う。ultraThickは展開図では使わない。
  */
 
+import { MIN_DRAWN_PAPER_MM, ELEVATION_DEFAULT_SCALE_DENOM, KNEE_CAP_THICKNESS_MM } from '../core/constants.js';
+
 // 展開図の線の役割（3段階）。
 //   CUT        … 切断面（床線・天井線・両端縦線など、部屋の輪郭そのもの）→ 太
 //   SILHOUETTE … 空気と切れる線（開口内法・アキ矩形輪郭など）           → 中
@@ -117,11 +119,25 @@ export const SCALE_LABEL_BOTTOM_PX = 26;
 export const SCALE_LABEL_FONT_PX   = 13;        // 文字サイズ(px)。面ラベル（FACE_LABEL_FONT_PX）と同じ大きさ
 export const SCALE_LABEL_COLOR     = '#64748b'; // 補助情報の灰色（図の線と紛れない控えめな色）
 
-// 展開図での腰壁天端の見付(mm)。実際の天端厚（finish/kneeDropWall.js の CAP_THICKNESS=30）の
-// ままだと天端の2本線が縮尺で潰れて読めないため、**作図上だけ**広げて描く（ユーザー明示指示
-// 2026-08「見付30のまま2本線だと見えないので50で書いて」）。モデルの寸法（天端の実厚・
-// 腰壁高さ）はCAP_THICKNESS側のまま変えない——ここは見えがかりの表現専用の値。
-export const KNEE_CAP_FACE_MM = 50;
+/**
+ * 最小描画幅(mm)＝紙上 MIN_DRAWN_PAPER_MM × 縮尺の分母（2026-11-02 裁定「描画図面内実寸が 0.5mm 以下は最小幅で描く」。
+ * 当初は展開 1/100 を想定して 50mm と定めた値の一般化）。分母が分からない（未指定・不正）ときは展開の想定 100＝50mm。
+ * @param {number} [scaleDenom] 縮尺の分母（1/100 なら 100）
+ */
+export function minDrawnMm(scaleDenom) {
+  return MIN_DRAWN_PAPER_MM * (scaleDenom > 0 ? scaleDenom : ELEVATION_DEFAULT_SCALE_DENOM);
+}
+
+/** 腰壁天端の見付の作図値(mm)＝天板の実厚と最小描画幅の大きい方。分母未指定は 50。 */
+export function kneeCapDrawnFaceMm(scaleDenom) {
+  return Math.max(KNEE_CAP_THICKNESS_MM, minDrawnMm(scaleDenom));
+}
+
+// 展開図での腰壁天端の見付(mm)の既定値（分母未指定＝1/100 想定で 50）。実際の天端厚のままだと
+// 天端の2本線が縮尺で潰れて読めないため、最小描画幅（minDrawnMm）へ引き上げて描く（ユーザー明示指示
+// 2026-08「2本線だと見えないので50で書いて」→ 2026-11-02 に最小描画幅の一般規則へ）。
+// モデルの寸法（天端の実厚・腰壁高さ）は変えない——ここは見えがかりの表現専用の値。
+export const KNEE_CAP_FACE_MM = kneeCapDrawnFaceMm();
 
 // ---- 見付の1px保証（ユーザー指示2026-09「展開図：見付1px保証」）----
 // 見付（2本線の間隔）は実画面で潰れると1本に見える。表示倍率 scale(px/mm) から**描画限界**を
@@ -160,11 +176,12 @@ export function visibleFaceMm(faceMm, scale, lineWeightsPx, weightA, weightB) {
 }
 
 /**
- * 腰壁天端の見付の作図値(mm)。KNEE_CAP_FACE_MM に1px保証を掛けたもの（唯一の定義箇所）。
+ * 腰壁天端の見付の作図値(mm)。kneeCapDrawnFaceMm(scaleDenom) に1px保証を掛けたもの（唯一の定義箇所）。
  * 天端側の線（topWeight。切断壁なら'thick'、見えがかりなら中線/細線）と下端の細線('thin')の間の余白を保証する。
+ * scaleDenom は縮尺の分母（未指定＝展開の想定 100）。
  */
-export function kneeCapFaceMm(scale, lineWeightsPx, topWeight = 'thick') {
-  return visibleFaceMm(KNEE_CAP_FACE_MM, scale, lineWeightsPx, topWeight, 'thin');
+export function kneeCapFaceMm(scale, lineWeightsPx, topWeight = 'thick', scaleDenom) {
+  return visibleFaceMm(kneeCapDrawnFaceMm(scaleDenom), scale, lineWeightsPx, topWeight, 'thin');
 }
 
 /**
@@ -181,10 +198,11 @@ export function kneeCapFaceMm(scale, lineWeightsPx, topWeight = 'thick') {
  * @param {number} [scale] 表示倍率(px/mm)。省略時は1px保証なし
  * @param {object} [lineWeightsPx] 線幅表(px)。省略時は線幅0として余白のみ保証
  * @param {string} [topWeight] 天端側の線のweight（既定'thick'）
+ * @param {number} [scaleDenom] 縮尺の分母（未指定＝100）
  * @returns {number|null}
  */
-export function kneeCapBottomMm(topMm, scale, lineWeightsPx, topWeight) {
-  const bottom = topMm - kneeCapFaceMm(scale, lineWeightsPx, topWeight);
+export function kneeCapBottomMm(topMm, scale, lineWeightsPx, topWeight, scaleDenom) {
+  const bottom = topMm - kneeCapFaceMm(scale, lineWeightsPx, topWeight, scaleDenom);
   return bottom > GAP_EPS_MM ? bottom : null;
 }
 

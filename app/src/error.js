@@ -349,9 +349,19 @@ export const ERR_ROOF_UPPER_ROOMS = (floorLabels) =>
 // （fit の error.message など）。slot は DetailSlot の値（'jamb'＝方立・'head'＝上枠。core/constants.js）。
 const DETAIL_SLOT_LABELS = Object.freeze({
   jamb: '方立（縦枠）', head: '上枠', figure: '姿図', floorWall: '床と壁', wallCeiling: '壁と天井',
+  kneeTop: '腰壁の天端', dropBottom: '垂れ壁の下端',
 });
 // 部屋の取り合い（Room.detailRefs。S8a）の通知文の主語。ERR_DETAIL_FIT_FAILED の symbolKey・ERR_DETAIL_FIGURE_NOT_FOUND の owner に渡す。
 export const detailOwnerRoom = (roomName) => `部屋「${roomName || '（名称なし）'}」`;
+// 腰壁・垂れ壁の記録（kneeDropWalls の detailRefs。S8b-1）の通知文の主語。roomNames＝区間の両側の部屋名（無名屋外は null・空）。
+export const detailOwnerKneeDrop = (roomNames = []) => {
+  const names = roomNames.filter(n => typeof n === 'string' && n !== '');
+  return `腰壁・垂れ壁（${names.length > 0 ? names.join('／') + (names.length > 1 ? 'の間' : '') : '部屋なし'}）`;
+};
+// 腰壁・垂れ壁ダイアログの部分詳細欄・表の側の文言（ui/KneeDropWallDialog.jsx。S8b-1）。
+export const KNEE_DROP_DETAIL_TEXT = Object.freeze({
+  topLabel: '天端の部分詳細', bottomLabel: '下端の部分詳細', frontSideLabel: '表の側', none: 'なし', noRoom: '（部屋なし）',
+});
 // 仕上げモードの部屋カードの「部分詳細」欄の文言（finish/roomDetailRefsEdit.js）。
 export const ROOM_DETAIL_REF_TEXT = Object.freeze({ section: '部分詳細', none: 'なし' });
 export const detailSlotLabel = (slot) => (Object.hasOwn(DETAIL_SLOT_LABELS, slot) ? DETAIL_SLOT_LABELS[slot] : slot);
@@ -365,6 +375,7 @@ export const ERR_DETAIL_FIGURE_NOT_FOUND = (owner, slot) =>
 // 詳細図の基準（Datum）が取り付け先（既定は三方枠。建具の姿図なら「建具の姿図」）の供給できない組（role・軸・種別）のとき。
 export const DETAIL_TARGET_ELEVATION = '建具の姿図';
 export const DETAIL_TARGET_JUNCTION = '部屋の取り合い';
+export const DETAIL_TARGET_PART = '腰壁・垂れ壁の部位';
 export const ERR_DETAIL_DATUM_UNSUPPORTED = (datumId, role, target = '三方枠') =>
   `基準 ${datumId}（${role}）は${target}では使えません`;
 // 部分詳細図ヘルパー（全画面パネル）の動的 import が失敗したときのトースト。

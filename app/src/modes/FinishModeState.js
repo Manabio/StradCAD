@@ -37,6 +37,7 @@ import { buildCodeTable, currentDocumentAliases, peekUnresolvedCodes, ROOF_SPEC_
 import { buildResolveRows } from '../catalog/resolveQueue.js';
 import { materialCodesOf } from '../detail/detailPlacement.js';
 import { collectRoomJunctionFailures } from '../finish/roomDetailJunction.js';
+import { collectKneeDropPartFailures } from '../finish/partDetail.js';
 import { detailFigureCatalog } from '../openings/openingCatalog.js';
 import { REMOVED_MATERIALS } from '../catalog/legacyMaterialCodes.js';
 
@@ -326,7 +327,11 @@ export class FinishModeState {
    */
   _roomDetailFitFailures(materialMap) {
     try {
-      return collectRoomJunctionFailures(this.graph, new Set(), { materialMap }).filter(f => f.wallThickness !== undefined);
+      const seen = new Set();
+      return [
+        ...collectRoomJunctionFailures(this.graph, seen, { materialMap }),
+        ...collectKneeDropPartFailures(this.graph, seen, { materialMap }), // 腰壁・垂れ壁の部位（S8b-1）
+      ].filter(f => f.wallThickness !== undefined);
     } catch (err) {
       console.error('[finish] 部屋の取り合いの詳細図の合わせ込み検査に失敗:', err);
       return [];
@@ -362,6 +367,12 @@ export class FinishModeState {
       for (const room of this.graph.rooms) {
         for (const [slot, key] of Object.entries(room.detailRefs ?? {})) {
           if (!appMap.has(key)) usage.push({ code: key, location: 'room', roomId: room.id, slot });
+        }
+      }
+      // 腰壁・垂れ壁の記録（kneeDropWalls の detailRefs。S8b-1）
+      for (const [recKey, rec] of this.graph.kneeDropWalls ?? []) {
+        for (const [slot, key] of Object.entries(rec.detailRefs ?? {})) {
+          if (!appMap.has(key)) usage.push({ code: key, location: 'kneeDrop', key: recKey, slot });
         }
       }
       return usage;
@@ -634,10 +645,12 @@ export class FinishModeState {
     }
 
     // 部屋の取り合い（rooms[].detailRefs）が指す詳細図の material 束縛の材コード（推移。S8a）。割当てが無ければ合成しない。
-    if ((g?.rooms ?? []).some(room => room.detailRefs)) {
+    // 腰壁・垂れ壁の記録（kneeDropWalls の detailRefs。S8b-1）も同じ扱い。
+    const refHolders = [...(g?.rooms ?? []), ...(g?.kneeDropWalls?.values() ?? [])].filter(holder => holder.detailRefs);
+    if (refHolders.length > 0) {
       const figures = detailFigureCatalog();
-      for (const room of g.rooms) {
-        for (const key of Object.values(room.detailRefs ?? {})) {
+      for (const holder of refHolders) {
+        for (const key of Object.values(holder.detailRefs)) {
           for (const code of materialCodesOf(figures.get(key))) if (isMaterialCode(code)) codes.add(code);
         }
       }

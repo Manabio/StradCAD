@@ -7,7 +7,7 @@ import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
 import { DetailSlot, PenDir, DETAIL_PRIM_SOURCE } from '../core/constants.js';
 import { buildFaceFigure } from './elevationFigure.js';
-import { junctionPlanForFace, junctionLineSpecs } from './elevationJunction.js';
+import { junctionPlanForFace, junctionLineSpecs, stepsAtMinDrawn } from './elevationJunction.js';
 import {
   junctionFigure, fixedLen, move, baseboardFigure, wallBackedFigure,
 } from '../finish/roomDetailTestFixtures.js';
@@ -97,6 +97,25 @@ test('floorWall: 床まで達する戸・線の高さを含む窓・壁の無い
   assert.deepEqual([500, 2000, 3500, 3100].map(x => drawnAt(l100, x)), [false, false, false, false], '戸・腰壁が覆わない区間・窓・開放スパンは途切れる');
 });
 
+test('floorWall: 垂れ壁（天井から bottomHeight の寸法）の覆いは「天井高−bottomHeight」以上の高さだけ（8a の不良修正）', () => {
+  // 段差の高さ 1000 と 2100。天井 2400・垂れ壁 400 → 垂れ壁の下端は床から 2000
+  install(junctionFigure('k', FLOOR_WALL, [
+    move(PenDir.RIGHT, fixedLen(20)), move(PenDir.UP, fixedLen(1000)), move(PenDir.LEFT, fixedLen(10)),
+    move(PenDir.UP, fixedLen(1100)), move(PenDir.LEFT, fixedLen(10)),
+  ], { closed: true }));
+  const shapes = new Map([['s', { value: 1500 }], ['e', { value: 2500 }]]);
+  const kneeDropWalls = new Map([[edgeKey('axisY0', 's', 'e'), { knee: null, drop: { bottomHeight: 400 } }]]);
+  const prims = buildFaceFigure(makeFace(), ctxOf({
+    graph: makeGraph({ shapes, kneeDropWalls }), room: makeRoom({ [FLOOR_WALL]: 'k' }),
+  }));
+  const drawnAt = (lines, x) => lines.some(l => Math.min(l.x1, l.x2) <= x && x <= Math.max(l.x1, l.x2));
+  const l1000 = at(detailLines(prims), -1000);
+  assert.deepEqual([500, 3500].map(x => drawnAt(l1000, x)), [true, true]);
+  assert.equal(drawnAt(l1000, 2000), false, '高さ 1000 は垂れ壁の下端（2000）より下＝垂れ壁の下には壁が無いので引かない');
+  const l2100 = at(detailLines(prims), -2100);
+  assert.deepEqual([500, 2000, 3500].map(x => drawnAt(l2100, x)), [true, true, true], '高さ 2100 は垂れ壁の中＝切れない');
+});
+
 test('wallCeiling: 天井面から下へ t の線が区間ごとの天井高に追従する', () => {
   install(ceilingTrimFigure('k'));
   const floorSegments = [
@@ -180,6 +199,35 @@ test('skipBaseboard の帯（階段帯等）・段差見付け面・吹抜けの
   assert.equal(detailLines(buildFaceFigure(makeFace(), ctxOf({ room, skipBaseboard: true }))).length, 0);
   assert.equal(junctionPlanForFace(makeFace({ kind: 'step' }), { graph: makeGraph(), room }), null);
   assert.equal(junctionPlanForFace(makeFace({ voidAbove: { selfLocal: [] } }), { graph: makeGraph(), room }), null);
+});
+
+test('stepsAtMinDrawn: |t| が最小幅未満なら最小幅へ（符号を保つ）・60 は不変・t=0 は触らない・入力は書き換えない', () => {
+  const input = [{ t: 20, weight: 'auto' }, { t: -20, weight: 'air' }, { t: 60, weight: 'auto' }, { t: 0, weight: 'auto' }];
+  const snapshot = JSON.parse(JSON.stringify(input));
+  assert.deepEqual(stepsAtMinDrawn(input, 50), [
+    { t: 50, weight: 'auto' }, { t: -50, weight: 'air' }, { t: 60, weight: 'auto' }, { t: 0, weight: 'auto' },
+  ]);
+  assert.deepEqual(input, snapshot);
+  assert.deepEqual(stepsAtMinDrawn(input, 10), snapshot, '最小幅 10（1/20）なら 20 は 20 のまま');
+  assert.deepEqual(stepsAtMinDrawn(null, 50), []);
+});
+
+test('stepsAtMinDrawn: 調整後に同じ t へ畳まれる段差は 1 本・auto と air が重なれば air（順序によらない）', () => {
+  assert.deepEqual(stepsAtMinDrawn([{ t: 20, weight: 'auto' }, { t: 30, weight: 'auto' }], 50), [{ t: 50, weight: 'auto' }]);
+  assert.deepEqual(stepsAtMinDrawn([{ t: 20, weight: 'auto' }, { t: 30, weight: 'air' }], 50), [{ t: 50, weight: 'air' }]);
+  assert.deepEqual(stepsAtMinDrawn([{ t: 20, weight: 'air' }, { t: 50, weight: 'auto' }], 50), [{ t: 50, weight: 'air' }]);
+  assert.deepEqual(stepsAtMinDrawn([{ t: 20, weight: 'auto' }, { t: -30, weight: 'auto' }], 50), [{ t: 50, weight: 'auto' }, { t: -50, weight: 'auto' }], '符号が違えば別の線');
+});
+
+test('floorWall: 厚 20 の段差は分母 100（未指定）で高さ 50・1/20 で 20・厚 60 はどちらでも 60（最小描画幅）', () => {
+  install(baseboardFigure('k20', 12, 20), baseboardFigure('k60', 12, 60));
+  const heights = (key, extra = {}) => detailLines(buildFaceFigure(makeFace(), ctxOf({ room: makeRoom({ [FLOOR_WALL]: key }), ...extra })))
+    .filter(p => p.y1 === p.y2).map(p => -p.y1);
+  assert.deepEqual([...new Set(heights('k20'))], [50], '分母未指定＝100');
+  assert.deepEqual([...new Set(heights('k20', { scaleDenom: 100 }))], [50]);
+  assert.deepEqual([...new Set(heights('k20', { scaleDenom: 20 }))], [20]);
+  assert.deepEqual([...new Set(heights('k60'))], [60]);
+  assert.deepEqual([...new Set(heights('k60', { scaleDenom: 20 }))], [60]);
 });
 
 test('junctionLineSpecs: 仕様は純粋に包絡線から（段差の高さ・役割・途切れ）', () => {

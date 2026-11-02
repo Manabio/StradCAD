@@ -2,7 +2,7 @@
 // 取り合いの断面図（junction）の「室内側の包絡線」（純関数。部分詳細図 S8a）。
 // 入力は fit 済みの局所点列（detailFit.js の strokes。s＝壁の仕上げ面から室内側が正・t＝下向き正）と slot。
 //   - 辺: 全ストロークの辺（closed は閉じ辺も）。破線ストロークは除く。辺の印（edgeMarks）は手の番号に対応。
-//   - 定義域: floorWall は t<−ε（FL より上）・wallCeiling は t>ε（天井面より下）。辺は定義域へ切り詰める。
+//   - 定義域: floorWall・dropBottom は t<−ε（FL・垂れ壁の下端より上）・wallCeiling・kneeTop は t>ε（天井面・腰壁の天端より下）。辺は定義域へ切り詰める。
 //   - E(t): 端点・辺どうしの交点・辺が s=0 を跨ぐ点の t を昇順に並べ（DETAIL_FIT_EPS_MM 以内は併合）、各区間で最大の s の辺。s は 0 以上に頭打ち
 //     （壁の中側の下地は見えない）。跨ぐ辺が無い・図の外は E=0。
 //   - 区切りで左右の差 > DETAIL_ENVELOPE_STEP_MIN_MM なら段差、差が無く辺の向きの差 > DETAIL_ENVELOPE_KINK_MIN_DEG
@@ -22,6 +22,8 @@ import {
 /** steps の weight。 */
 export const EnvelopeWeight = Object.freeze({ AUTO: 'auto', AIR: 'air' });
 
+const ABOVE_ORIGIN_SLOTS = new Set([DetailSlot.FLOOR_WALL, DetailSlot.DROP_BOTTOM]);
+const BELOW_ORIGIN_SLOTS = new Set([DetailSlot.WALL_CEILING, DetailSlot.KNEE_TOP]);
 const RAD_TO_DEG = 180 / Math.PI;
 const EMPTY = Object.freeze({ steps: Object.freeze([]), outline: Object.freeze([]), maxDeviationMm: 0 });
 
@@ -57,13 +59,14 @@ const angleOf = edge => Math.atan((edge.b.s - edge.a.s) / (edge.b.t - edge.a.t))
 
 /**
  * @param {{points:{s:number,t:number}[], closed?:boolean, line?:{dashRole?:string}, edgeMarks?:(string|null)[]}[]} strokes fit 済みのストローク列
- * @param {string} slot DetailSlot.FLOOR_WALL | DetailSlot.WALL_CEILING
+ * @param {string} slot DetailSlot.FLOOR_WALL | WALL_CEILING | DROP_BOTTOM（floorWall と同じ定義域）| KNEE_TOP（wallCeiling と同じ定義域）
  * @returns {{steps:{t:number, weight:'auto'|'air'}[], outline:number[][], maxDeviationMm:number}}
  */
 export function computeEnvelope(strokes, slot) {
   const eps = DETAIL_FIT_EPS_MM;
-  const floorWall = slot === DetailSlot.FLOOR_WALL;
-  if (!floorWall && slot !== DetailSlot.WALL_CEILING) return EMPTY;
+  // 定義域: 基準面（t=0）より上＝t<−ε の slot（床と壁・垂れ壁の下端）／下＝t>ε の slot（壁と天井・腰壁の天端）
+  const floorWall = ABOVE_ORIGIN_SLOTS.has(slot);
+  if (!floorWall && !BELOW_ORIGIN_SLOTS.has(slot)) return EMPTY;
   // 定義域（切り詰め先）。境界 0 は FL・天井面。
   const lo = floorWall ? -Infinity : 0;
   const hi = floorWall ? 0 : Infinity;

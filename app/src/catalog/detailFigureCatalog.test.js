@@ -103,10 +103,12 @@ test('登録表: 照合・比較・重複禁止の項目', () => {
   assert.deepEqual(def.overrideLockedFields, []);
 });
 
-test('登録表: loadBuiltin は組込み 1 件（巾木 10×60・床と壁）で、validate と isSupported を通る', async () => {
+test('登録表: loadBuiltin は組込み 2 件（巾木 10×60・床と壁／天板 厚 20・腰壁の天端）で、validate と isSupported を通る', async () => {
   const def = kindDef(DF);
   const list = await def.loadBuiltin();
-  assert.deepEqual(list.map(e => [e.key, e.category, e.subject]), [['df-builtin-baseboard-10x60', 'junction', 'floorWall']]);
+  assert.deepEqual(list.map(e => [e.key, e.category, e.subject]), [
+    ['df-builtin-baseboard-10x60', 'junction', 'floorWall'], ['df-builtin-kneecap-20', 'part', 'wall'],
+  ]);
   for (const entry of list) {
     assert.doesNotThrow(() => def.validate(entry));
     assert.equal(def.isSupported(entry), true);
@@ -548,6 +550,52 @@ test('walker（S8a）: rewrite は rooms[].detailRefs の値も alias 表で書�
   const dropped = walker.rewrite({ rooms: snapshot.rooms }, new Map([['df-old', null]]));
   assert.deepEqual(dropped.snapshot.rooms[0].detailRefs, { floorWall: 'df-old', wallCeiling: 'df-keep' });
   assert.deepEqual(dropped.unresolved, [{ code: 'df-old', location: 'room', roomId: 'r1', slot: 'floorWall' }]);
+});
+
+test('walker（S8b-1）: enumerate は kneeDropWalls[].detailRefs の値を {location:kneeDrop, key, slot} で列挙し、使用キー収集に合流する。空・空文字・非文字列は無視', () => {
+  const walker = SNAPSHOT_REF_WALKERS[DF];
+  const snapshot = {
+    rooms: [{ id: 'r1', detailRefs: { floorWall: 'df-fw' } }],
+    kneeDropWalls: [
+      { key: 'a:s:e', detailRefs: { kneeTop: 'df-kt', dropBottom: 'df-db' } },
+      { key: 'b:s:e', detailRefs: null },
+      { key: 'c:s:e' },
+      { key: 'd:s:e', detailRefs: { kneeTop: '', dropBottom: 3 } },
+    ],
+  };
+  assert.deepEqual([...walker.enumerate(snapshot)], [
+    { code: 'df-fw', location: 'room', roomId: 'r1', slot: 'floorWall' },
+    { code: 'df-kt', location: 'kneeDrop', key: 'a:s:e', slot: 'kneeTop' },
+    { code: 'df-db', location: 'kneeDrop', key: 'a:s:e', slot: 'dropBottom' },
+  ]);
+  assert.deepEqual([...collectUsedKeys(snapshot).detailFigure].sort(), ['df-db', 'df-fw', 'df-kt']);
+  assert.deepEqual([...walker.enumerate({ kneeDropWalls: [] })], []);
+});
+
+test('walker（S8b-1）: rewrite は kneeDropWalls[].detailRefs の値も alias 表で書き換える。表に無い記録は同一参照・元は変えず、to=null は据え置きで unresolved へ。キーの無い snapshot に足さない', () => {
+  const walker = SNAPSHOT_REF_WALKERS[DF];
+  const snapshot = {
+    rooms: [{ id: 'r1', detailRefs: { floorWall: 'df-old' } }],
+    kneeDropWalls: [
+      { key: 'a:s:e', hasKnee: true, detailRefs: { kneeTop: 'df-old' } },
+      { key: 'b:s:e', hasKnee: true, detailRefs: { kneeTop: 'df-keep' } },
+      { key: 'c:s:e', hasKnee: true, detailRefs: null },
+    ],
+  };
+  const before = JSON.stringify(snapshot);
+  const { snapshot: next, unresolved } = walker.rewrite(snapshot, new Map([['df-old', 'df-new']]));
+  assert.deepEqual(next.kneeDropWalls[0], { key: 'a:s:e', hasKnee: true, detailRefs: { kneeTop: 'df-new' } }, '他の項目を保つ');
+  assert.deepEqual(next.rooms[0].detailRefs, { floorWall: 'df-new' }, 'rooms の書換えと両立する');
+  assert.equal(next.kneeDropWalls[1], snapshot.kneeDropWalls[1], '表に無い記録は同一参照のまま');
+  assert.equal(next.kneeDropWalls[2], snapshot.kneeDropWalls[2]);
+  assert.deepEqual(unresolved, []);
+  assert.equal(JSON.stringify(snapshot), before, '元のスナップショットを書き換えない');
+  assert.equal(walker.rewrite(snapshot, new Map([['df-x', 'df-y']])).snapshot, snapshot);
+  const noKnee = walker.rewrite({ rooms: snapshot.rooms }, new Map([['df-old', 'df-new']]));
+  assert.equal(Object.hasOwn(noKnee.snapshot, 'kneeDropWalls'), false);
+  const dropped = walker.rewrite({ kneeDropWalls: snapshot.kneeDropWalls }, new Map([['df-old', null]]));
+  assert.deepEqual(dropped.snapshot.kneeDropWalls[0].detailRefs, { kneeTop: 'df-old' });
+  assert.deepEqual(dropped.unresolved, [{ code: 'df-old', location: 'kneeDrop', key: 'a:s:e', slot: 'kneeTop' }]);
 });
 
 test('【失敗系】walker（S6a）: detailFigure への alias は積める（rewrite がある）。循環は従来どおり例外。applyDocumentCodeNormalization が detailRefs を書き換える', () => {

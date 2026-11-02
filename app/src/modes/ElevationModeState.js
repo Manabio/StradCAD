@@ -33,6 +33,7 @@ import { CatalogKind } from '../catalog/catalogKinds.js';
 import { composeCatalog } from '../catalog/catalogRegistry.js';
 import { collectDetailFitFailures } from '../openings/openingDetailFitCheck.js';
 import { collectRoomJunctionFailures } from '../finish/roomDetailJunction.js';
+import { collectKneeDropPartFailures } from '../finish/partDetail.js';
 import { ERR_DETAIL_FIT_FAILED_MORE } from '../error.js';
 import { DetailSlot } from '../core/constants.js';
 
@@ -198,12 +199,15 @@ export class ElevationModeState {
       // 展開の断面が実際に使う上枠（head の図があれば head、無ければ jamb の流用。平面の方立は対象外）と、
       // 建具の姿図（S6b）の分だけ試す。
       // 部屋の取り合い（Room.detailRefs の floorWall・wallCeiling。S8a-2）の参照切れ・壁厚に合わない図も同じ 1 回の通知へ合流する。
+      const seen = new Set();
       const failures = [
         ...collectDetailFitFailures(this.graph, undefined, { slots: [DetailSlot.HEAD, DetailSlot.FIGURE] }),
         // 壁厚は描画と同じ「面ごとの壁」（隣室が生成した壁を含む）でも試す
-        ...collectRoomJunctionFailures(this.graph, new Set(), {
+        ...collectRoomJunctionFailures(this.graph, seen, {
           materialMap: this._materialMap ?? null, faceWallsOf: room => junctionFaceWallsOf(room, this.graph),
         }),
+        // 腰壁・垂れ壁の部位（記録の detailRefs の kneeTop・dropBottom。S8b-1）
+        ...collectKneeDropPartFailures(this.graph, seen, { materialMap: this._materialMap ?? null }),
       ];
       if (failures.length === 0) return null;
       return failures.length === 1
@@ -370,6 +374,7 @@ export class ElevationModeState {
     // 高さを標準帯高さの整数倍に揃える）を経てから使う——チェックする値はどのパスでも同じ
     // normalizeBandHeightUnitsを通すことで、パス1の縮尺決定とパス2の最終bandsで基準がずれない。
     const scale = chooseElevationScale(normalizeBandHeightUnits(pass1.bands), this.viewSize ?? { width: 800, height: 600 });
+    const scaleDenom            = Math.round(screenPxPerMm / scale);
     const gapModelMm            = screenMmToModelMm(FACE_GAP_SCREEN_MM, screenPxPerMm, scale);
     const nameGapModelMm        = screenMmToModelMm(NAME_GAP_BELOW_SCREEN_MM, screenPxPerMm, scale);
     const triangleOffsetModelMm = screenMmToModelMm(TRIANGLE_OFFSET_SCREEN_MM, screenPxPerMm, scale);
@@ -402,7 +407,9 @@ export class ElevationModeState {
         dimFootGapModelMm, scale, lineWeightsPx: resolveLineWeightsPx(screenPxPerMm),
         // 部屋の取り合い（Room.detailRefs）の断面形への差し替えは、表示倍率が詳細（分母 ≤ LOD_DETAIL_DENOM）の 2 パス目だけ。
         // 展開図に拡大縮小は無く、画面の高さ（帯が収まる倍率）で決まる。画面サイズ変更後の再判定はしない（既知の限界）
-        junctionSectionSwap: Math.round(screenPxPerMm / scale) <= LOD_DETAIL_DENOM,
+        junctionSectionSwap: scaleDenom <= LOD_DETAIL_DENOM,
+        // 縮尺の分母（最小描画幅 minDrawnMm に使う。1 パス目・単体テスト・ゴールデンは未指定＝100）
+        scaleDenom,
       }),
       (err, room) => console.error(`[elevation] 部屋「${elevationRoomDisplayName(room) || room.id}」の帯構築に失敗:`, err),
     );

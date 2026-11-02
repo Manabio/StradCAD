@@ -6,7 +6,12 @@ import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.j
 import { figureBounds, chooseScale, makeTransform } from '../structural/sectionFigure/sectionGeometry.js';
 import { kneeDropWallFigurePrimitives } from './kneeDropWallFigure.js';
 import { buildCellToRoom } from '../finish/edgeClassify.js';
-import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED } from '../finish/kneeDropWall.js';
+import { effectiveCeilingHeight, kneeDropWallGeometry, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED } from '../finish/kneeDropWall.js';
+import { kneeDropDetailSelects, kneeDropFrontSideOptions, buildKneeDropRecord } from '../finish/kneeDropRecordEdit.js';
+import { detailRefsAfterSelectFor } from '../finish/roomDetailRefsEdit.js';
+import { kneeDropFrontSideOf } from '../core/kneeDropRecord.js';
+import { KNEE_DROP_DETAIL_SLOTS } from '../core/constants.js';
+import { KNEE_DROP_DETAIL_TEXT } from '../error.js';
 
 /**
  * 腰壁・垂れ壁ダイアログ（壁の長押し「腰/垂壁」から開く）。
@@ -19,7 +24,8 @@ import { effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESO
  * @param {{x:number,y:number}} anchor 長押し位置（スクリーン座標）。壁に重ならないよう少しずらして表示する。
  * @param {boolean}  isVerticalWall 長押しした壁が縦壁か（レイアウトのミラーリング判定に使う）
  * @param {number}   wallOffsetSign 軸CLに対する壁の生成側（axisOffsetの符号。+1/-1/0）
- * @param {(rec:object|null)=>void} onConfirm rec = { knee: {topHeight}|null, drop: {bottomHeight}|null } | null（null=両方未指定＝解除）
+ * @param {(rec:object|null)=>void} onConfirm rec = { knee: {topHeight}|null, drop: {bottomHeight}|null, detailRefs?, frontSide? } | null
+ *   （null=両方未指定＝解除。detailRefs＝天端・下端の部分詳細図、frontSide＝表の側。既存の記録の値を引き継ぐ。S8b-1）
  * @param {()=>void} onCancel
  */
 export function KneeDropWallDialog({ graph, spanKey, anchor, isVerticalWall = true, wallOffsetSign = 1, onConfirm, onCancel }) {
@@ -35,6 +41,10 @@ export function KneeDropWallDialog({ graph, spanKey, anchor, isVerticalWall = tr
   const [kneeStr, setKneeStr] = useState(String(existing?.knee?.topHeight ?? ''));
   const [dropStr, setDropStr] = useState(String(existing?.drop?.bottomHeight ?? ''));
   const [focusedField, setFocusedField] = useState('knee'); // 'knee' | 'drop'
+  // 部分詳細図の割当て（天端・下端）と表の側。既存の記録から引き継ぐ（確定で buildKneeDropRecord が正規化）
+  const [detailRefs, setDetailRefs] = useState(existing?.detailRefs ?? null);
+  const [frontSide, setFrontSide] = useState(kneeDropFrontSideOf(existing));
+  const geo = useMemo(() => kneeDropWallGeometry(graph, spanKey, buildCellToRoom(graph)), [graph, spanKey]);
 
   const kneeVal = kneeStr.trim() === '' ? null : evalNumpadExpr(kneeStr);
   const dropVal = dropStr.trim() === '' ? null : evalNumpadExpr(dropStr);
@@ -50,12 +60,12 @@ export function KneeDropWallDialog({ graph, spanKey, anchor, isVerticalWall = tr
 
   function handleConfirm() {
     if (!canConfirm) return;
-    if (kneeVal == null && dropVal == null) { onConfirm(null); return; }
-    onConfirm({
-      knee: kneeVal != null ? { topHeight: kneeVal } : null,
-      drop: dropVal != null ? { bottomHeight: dropVal } : null,
-    });
+    onConfirm(buildKneeDropRecord({ kneeVal, dropVal, detailRefs, frontSide })); // 両方未指定は null（解除）
   }
+
+  const detailSelects = kneeDropDetailSelects({
+    kneeVal: kneeInvalid ? null : kneeVal, dropVal: dropInvalid ? null : dropVal, detailRefs,
+  });
 
   function handleKeyDown(e) {
     if (e.key === 'Enter' && canConfirm) handleConfirm();
@@ -221,6 +231,30 @@ export function KneeDropWallDialog({ graph, spanKey, anchor, isVerticalWall = tr
                 />
                 <span className="cl-dialog-unit">mm</span>
               </span>
+            </label>
+          </div>
+        )}
+
+        {/* 部分詳細図（腰壁の天端・垂れ壁の下端）と表の側。値が入っている側の select だけ出す */}
+        {detailSelects.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {detailSelects.map(sel => (
+              <label key={sel.slot} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span className="cl-dialog-label" style={{ width: 'auto', textAlign: 'left' }}>{sel.label}</span>
+                <select
+                  className="cl-dialog-input"
+                  value={sel.value}
+                  onChange={e => setDetailRefs(detailRefsAfterSelectFor(KNEE_DROP_DETAIL_SLOTS, detailRefs, sel.slot, e.target.value))}
+                >
+                  {sel.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </label>
+            ))}
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <span className="cl-dialog-label" style={{ width: 'auto', textAlign: 'left' }}>{KNEE_DROP_DETAIL_TEXT.frontSideLabel}</span>
+              <select className="cl-dialog-input" value={frontSide} onChange={e => setFrontSide(e.target.value)}>
+                {kneeDropFrontSideOptions(geo).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
             </label>
           </div>
         )}

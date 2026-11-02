@@ -405,12 +405,12 @@ test('libraryRows: 呼称順で分類のラベルを持つ', () => {
   ]);
 });
 
-test('ラベル表: 全 enum 値を持つ（subject 17・role 13・mode 4・param 4・材の項目 3・kind 2・axis 2・方向）', () => {
+test('ラベル表: 全 enum 値を持つ（subject 17・role 15・mode 4・param 4・材の項目 3・kind 2・axis 2・方向）', () => {
   const keysOf = o => Object.keys(o).sort();
   assert.deepEqual(keysOf(DETAIL_SUBJECT_LABELS), Object.values(DetailSubject).sort());
   assert.equal(Object.keys(DETAIL_SUBJECT_LABELS).length, 17);
   assert.deepEqual(keysOf(DETAIL_ROLE_LABELS), Object.values(DetailDatumRole).sort());
-  assert.equal(Object.keys(DETAIL_ROLE_LABELS).length, 13);
+  assert.equal(Object.keys(DETAIL_ROLE_LABELS).length, 15);
   assert.deepEqual(keysOf(DETAIL_MODE_LABELS), Object.values(DetailLenMode).sort());
   assert.deepEqual(keysOf(DETAIL_PARAM_LABELS), Object.values(DetailParam).sort());
   assert.deepEqual(keysOf(DETAIL_MATERIAL_FIELD_LABELS), Object.values(DetailMaterialField).sort());

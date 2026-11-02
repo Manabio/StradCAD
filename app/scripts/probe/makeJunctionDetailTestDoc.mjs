@@ -18,7 +18,8 @@ import { floorSwapManager } from '../../src/storage/FloorSwapManager.js';
 import { emptyBundle, withEntries } from '../../src/catalog/catalogBundle.js';
 import { CatalogKind } from '../../src/catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../../src/catalog/catalogRegistry.js';
-import { DetailSlot, DetailDash, DetailEdgeMark, PenDir, DETAIL_PRIM_SOURCE } from '../../src/core/constants.js';
+import { DetailSlot, DetailDash, DetailEdgeMark, PenDir, DETAIL_PRIM_SOURCE, KneeDropFrontSide } from '../../src/core/constants.js';
+import detailBuiltins, { KNEE_CAP_20_KEY } from '../../src/detail/detailBuiltins.js';
 import { junctionFigure, fixedLen, move } from '../../src/finish/roomDetailTestFixtures.js';
 import { ElevationModeState } from '../../src/modes/ElevationModeState.js';
 import { loadDocument } from './loadDoc.mjs';
@@ -108,8 +109,12 @@ const cellToRoom = buildCellToRoom(graph);
 const kneeKey = edgeKey(X1.id, Ya.id, Yb.id);
 const kneeCheck = validateKneeDropWall(800, null, effectiveCeilingHeight(graph, kneeKey, cellToRoom));
 console.log('knee validate:', JSON.stringify(kneeCheck), 'geometry:', kneeDropWallGeometry(graph, kneeKey, cellToRoom) ? 'resolved' : 'UNRESOLVED');
-if (kneeCheck.valid) graph.setKneeDropWall(kneeKey, { knee: { topHeight: 800 }, drop: null });
-else console.log('WARNING: 腰壁を省きます');
+// 腰壁の天端に組込み「天板 厚 20×（12＋壁厚＋12）」を割り当て（S8b-1）。表の側＝LDK 側（LDK が区間の負側なら roomNeg・正側なら roomPos）
+const kneeGeo = kneeDropWallGeometry(graph, kneeKey, cellToRoom);
+const frontSide = kneeGeo?.roomPos === ldk ? KneeDropFrontSide.ROOM_POS : KneeDropFrontSide.ROOM_NEG;
+if (kneeCheck.valid) {
+  graph.setKneeDropWall(kneeKey, { knee: { topHeight: 800 }, drop: null, detailRefs: { [DetailSlot.KNEE_TOP]: KNEE_CAP_20_KEY }, frontSide });
+} else console.log('WARNING: 腰壁を省きます');
 
 // 戸（仕切り壁 y=2300）・窓（LDK 南外壁 x=2000）
 const partition = graph.walls.find(w => w.isVertical && !w.isExteriorWall && Math.abs(w.axisCL.effectiveValue - 4000) < 1);
@@ -146,21 +151,35 @@ const figs = doc.catalogs?.catalogs?.[CatalogKind.DETAIL_FIGURE] ?? [];
 console.log('同梱の詳細図:', figs.map(f => f.key).join(','));
 check(figs.map(f => f.key).sort().join(',') === [KEY_FW, KEY_WC].sort().join(','), '同梱の detailFigure 2 件');
 check(G.openings.length === 2, `建具 2（${G.openings.length}）`);
+const kneeRecs = [...G.kneeDropWalls.values()];
+console.log('腰壁の記録:', JSON.stringify(kneeRecs));
+check(kneeRecs.length === 1 && kneeRecs[0].detailRefs?.kneeTop === KNEE_CAP_20_KEY, '腰壁の記録の detailRefs.kneeTop（組込み天板）が往復する');
 
 // ---- 展開（ElevationModeState）----
 function countFor() {
   return async () => {
     clearOverlays();
-    setOverlay(CatalogKind.DETAIL_FIGURE, { doc: figs });
+    // 組込み層（天板）はアプリが非同期に載せる。probe では利用者層に載せて同じ三層合成に通す
+    setOverlay(CatalogKind.DETAIL_FIGURE, { doc: figs, user: detailBuiltins });
     const st = new ElevationModeState(G, P, { width: 1600, height: 1200 });
     const result = await st.init();
     const prims = st.bands.flatMap(b => b.primitives);
     const det = prims.filter(p => p.source === DETAIL_PRIM_SOURCE);
     const by = {};
     for (const p of det) { const k = `${p.type}/${p.weight}`; by[k] = (by[k] ?? 0) + 1; }
-    return { ok: result.ok, bands: st.bands.length, err: st.materialError, by, n: det.length };
+    // 腰壁の天端（800）の下の細線の高さ別の本数（帯ごと）。天板の派生線（厚 20）は最小描画幅（0.5mm×縮尺の分母）へ調整され、
+    // 既存の天端の下の細線（max(20, 最小幅)）と同じ高さに重なって 1 本になる（source は残らない）。
+    // y=−750（天端の 50 下）＝最小幅 50（分母 ≥ 100）・y=−780（20 下）＝最小幅 ≤ 20（分母 ≤ 40）
+    const kneeCapBy = {};
+    for (const b of st.bands) {
+      const thinAt = y => b.primitives.filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === y && p.y2 === y).length;
+      kneeCapBy[G.rooms.find(r => r.id === b.roomId)?.name ?? b.roomId] = { 'y-750(50下)': thinAt(-750), 'y-780(20下)': thinAt(-780) };
+    }
+    return { ok: result.ok, bands: st.bands.length, err: st.materialError, by, n: det.length, kneeCapBy };
   };
 }
 const withRefs = await countFor()();
 console.log('展開 割当てあり:', JSON.stringify(withRefs));
 check(withRefs.n > 0, '割当て部屋の展開に source=detail のプリミティブが出る');
+console.log('腰壁の天端の下の細線（高さ別の本数。帯ごと）:', JSON.stringify(withRefs.kneeCapBy));
+check(Object.values(withRefs.kneeCapBy).some(c => c['y-750(50下)'] + c['y-780(20下)'] > 0), '腰壁の天端（kneeTop）の下に細線が出る（天板は最小描画幅へ調整され既存線と重なる）');

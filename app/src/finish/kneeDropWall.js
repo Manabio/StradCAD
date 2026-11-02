@@ -187,6 +187,26 @@ const POINT_QUERY_EPS_MM = 0.5;
 const CORNER_OVERHANG_EPS_MM = 150;
 
 /**
+ * 壁の長さ方向の1点に掛かる構成壁のレコード（kneeDropZRangesAt と同じ解決。狭い点クエリが0件で、点が壁自身の端から
+ * CORNER_OVERHANG_EPS_MM 以内のときだけ検索窓を広げて再クエリする）。部分詳細図の派生線（S8b-1）が同じ記録を引くための共有口。
+ * @param {object} graph
+ * @param {import('@core').Wall} wall
+ * @param {number} pointCoord 壁の長さ方向の世界座標
+ * @returns {Array<{key:string, rec:object, lo:number, hi:number}>}
+ */
+export function kneeDropRecordsForWallPoint(graph, wall, pointCoord) {
+  let records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, POINT_QUERY_EPS_MM);
+  if (records.length === 0) {
+    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
+    const nearWallEnd = pointCoord < wLo + CORNER_OVERHANG_EPS_MM || pointCoord > wHi - CORNER_OVERHANG_EPS_MM;
+    if (nearWallEnd) {
+      records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, CORNER_OVERHANG_EPS_MM);
+    }
+  }
+  return records;
+}
+
+/**
  * 腰壁・垂れ壁指定を反映したwallのz存在**範囲の並び**（§5.2 step2）。
  * 指定なし=[[floorZ,ceilZ]]（全高）。腰壁指定=[[floorZ,floorZ+topHeight]]、垂れ壁指定=
  * [[ceilZ-bottomHeight,ceilZ]]。
@@ -235,15 +255,7 @@ export function kneeDropZRangesAt(graph, wall, pointCoord, floorZ, ceilZ, wallTo
     const z1 = Math.min(ceilZ, top);
     return z1 > floorZ ? [{ z0: floorZ, z1, topAt: wallTop.zAt }] : [];
   }
-  let records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, POINT_QUERY_EPS_MM);
-  if (records.length === 0) {
-    const wLo = Math.min(wall.coord1, wall.coord2), wHi = Math.max(wall.coord1, wall.coord2);
-    const nearWallEnd = pointCoord < wLo + CORNER_OVERHANG_EPS_MM || pointCoord > wHi - CORNER_OVERHANG_EPS_MM;
-    if (nearWallEnd) {
-      records = kneeDropRecordsAtPointOnWall(graph, wall, pointCoord, CORNER_OVERHANG_EPS_MM);
-    }
-  }
-  for (const { rec } of records) {
+  for (const { rec } of kneeDropRecordsForWallPoint(graph, wall, pointCoord)) {
     if (!rec.knee && !rec.drop) continue;
     const kneeTop  = rec.knee ? floorZ + rec.knee.topHeight : null;
     const dropBase = rec.drop ? ceilZ - rec.drop.bottomHeight : null;

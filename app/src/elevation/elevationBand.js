@@ -19,7 +19,7 @@ import { faceBoundaryLocalX, faceWallLessExtents, wallLessEndAt, elevationRoomDi
 import { composeRoomFaces, neighborWallFace } from './elevationFaceList.js';
 import { beamBlockerRectsForFace, droppedMemberPrimitivesForFace, memberLayersOf } from './elevationSolids.js';
 import { buildFaceFigure, segEndProfile, hasRightChDim, parseBaseboardHeightMm, ceilingResolversOf } from './elevationFigure.js';
-import { applyJunctionSectionSwap } from './elevationJunction.js';
+import { applyJunctionSectionSwap, kneeDropPartStepsOf } from './elevationJunction.js';
 import { ceilArcCircleOf, ceilArcChords } from './ceilArcSection.js';
 import { wallAdjacentFloorSegments, familyCeilingSegments, cornerOpeningZOfFace } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
@@ -92,6 +92,7 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
   const gridRowGapModelMm    = ctx.gridRowGapModelMm;     // 未指定はbuildFaceFigure既定(QA D1)
   const wallLessEndExtendModelMm = ctx.wallLessEndExtendModelMm; // 未指定はbuildFaceFigure既定(項目1)
   const scale = ctx.scale; // 未指定はbuildFaceFigure既定=壁2段書き省略判定を行わない（項目4）
+  const scaleDenom = ctx.scaleDenom; // 縮尺の分母（最小描画幅。未指定＝100）
   const lineWeightsPx = ctx.lineWeightsPx ?? null; // 見付1px保証の線幅表（未指定＝線幅0扱い）
   // ユーザー明示指示2026-08その13: 寸法線の足はCLから実画面3mm離す（展開図で統一）。
   // 未指定（単体テスト等）は1パス目の仮値。
@@ -193,7 +194,7 @@ export function layoutBandFaces(room, graph, faces, ctx = {}) {
     const faceCtx = {
       graph, project, room, ceilingHeight: CH, materialMap, gridCLs, faceLabelAvoidThresholdModelMm,
       prevFace, nextFace, openingTagRowModelMm, dimRowGapModelMm, gridRowGapModelMm, floorSegments,
-      beyondCeilings, wallLessEndExtendModelMm, scale, lineWeightsPx, solids: ctx.solids ?? null,
+      beyondCeilings, wallLessEndExtendModelMm, scale, scaleDenom, lineWeightsPx, solids: ctx.solids ?? null,
       dimFootGapModelMm: dimFootGapMm,
       // 規則B: 面ラベルはパネルで1つ（2枚目以降は描かず、先頭はパネル全幅の中心へ）。
       skipFaceLabel: inPanelWithPrev[i], faceLabelBoundary: panelLabelBoundary.get(i),
@@ -867,8 +868,10 @@ export function appendBandCutContent(primitives, room, graph, layout, layers, op
         // 相対z（面の床=0）に**その端の区間の床高さ**（floorDeltaMm。buildFaceFigure の floorDyAt と
         // 同じ値）を足して帯のz（切断のz基準＝ceilProfile・探査と同じ）へ。端の列の凹み側面線が引く。
         ...cornerOpeningZOfFace(face, faceAt(i, -1), faceAt(i, 1), floorSegments, graph),
-        probeCtx, endExtendMm, bandRoomBounds, scale: opts.scale, lineWeightsPx: opts.lineWeightsPx ?? null,
+        probeCtx, endExtendMm, bandRoomBounds, scale: opts.scale, scaleDenom: opts.scaleDenom, lineWeightsPx: opts.lineWeightsPx ?? null,
         upperPlaneOverhang: opts.upperPlaneOverhang, baseboardMm,
+        // 腰壁の天端・垂れ壁の下端の部分詳細図から派生する水平線の段差（部屋帯だけが渡す。S8b-1）
+        kneeDropPartStepsOf: opts.kneeDropPartStepsOf,
         // アキの手前を横切る梁（部屋帯だけが渡す。アキのバツを梁の上下で分ける）。加算で描く梁（帯が持たない部材）の判定は列の分割の後に
         // 分かるので、切断（pcut）を受ける関数で渡す（`buildCutContent` が列を作った後に呼ぶ）
         gapBeamRects: opts.gapBeamRectsOf ? (pc) => opts.gapBeamRectsOf(face, pc) : null,
@@ -1042,7 +1045,7 @@ export function buildRoomBand(room, graph, ctx = {}) {
   } : null;
   const memberEdgesX = [];
   appendBandCutContent(primitives, room, graph, layout, layers,
-    { memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, floorHeightMm: ctx.solids?.floorHeightMm, upperGraph: ctx.solids?.upperGraph ?? null,
+    { memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, scaleDenom: ctx.scaleDenom, floorHeightMm: ctx.solids?.floorHeightMm, upperGraph: ctx.solids?.upperGraph ?? null,
       // 面に加算する梁（帯が持たない部材）の矩形を、アキを塞ぐものとして渡す（solids指定時だけ）。
       // 帯が持たない部材（列の端を捨てた部材）の断面・along の矩形は切断（pcut）の列の分割の後に分かる
       gapBeamRectsOf: solidsOpts
@@ -1054,6 +1057,8 @@ export function buildRoomBand(room, graph, ctx = {}) {
       droppedMemberPrimsOf: solidsOpts
         ? (face, pcut) => droppedMemberPrimitivesForFace(face, solidsOpts, droppedMemberKeysOf(pcut, { inZRange: true }))
         : undefined,
+      // 腰壁の天端・垂れ壁の下端の部分詳細図（記録の detailRefs）から派生する水平線。割当てが無ければ undefined（出力不変）
+      kneeDropPartStepsOf: kneeDropPartStepsOf({ graph, materialMap: ctx.materialMap ?? null, scaleDenom: ctx.scaleDenom }) ?? undefined,
       stairOver: stairContributionOverRoom(room, graph, ctx.solids?.floorHeightMm, ctx.solids?.upperGraph ?? null, soffitStairIds) });
   // 部屋の取り合い（Room.detailRefs）の断面形への差し替え（S8a-2）。倍率が閾値以上の 2 パス目だけ（ctx.junctionSectionSwap）
   if (ctx.junctionSectionSwap === true) {

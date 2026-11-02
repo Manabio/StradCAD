@@ -35,6 +35,7 @@ import { Point, Intersection } from './nodes.js';
 import { VerticalLine, HorizontalLine, DiagonalLine, Arc, Circle } from './shapes.js';
 import { Wall, Opening } from './wall.js';
 import { CenterLine } from './centerLine.js';
+import { normalizeKneeDropRecord } from './kneeDropRecord.js';
 import { DimensionLine } from './dimension.js';
 import { WallBackingMaterial, Edge, ExteriorFinishRow, Room } from './room.js';
 import { Stair } from './stair.js';
@@ -515,10 +516,11 @@ export class PlanGraph {
 
   /**
    * 腰壁・垂れ壁レコードを1件設定する。key = edgeKey(axisCLId, startCLId, endCLId)（start/endはCL
-   * value昇順に正規化）。rec = { knee: {topHeight:number}|null, drop: {bottomHeight:number}|null }。
+   * value昇順に正規化）。rec = { knee: {topHeight:number}|null, drop: {bottomHeight:number}|null,
+   * detailRefs?: {kneeTop?, dropBottom?}, frontSide?: 'roomPos' }（部分詳細図の割当てと表の側。core/kneeDropRecord.js で正規化）。
    * immutableに保つため凍結する（CL偏芯と同方式）。
    */
-  setKneeDropWall(key, rec) { this.kneeDropWalls.set(key, Object.freeze({ ...rec })); }
+  setKneeDropWall(key, rec) { this.kneeDropWalls.set(key, Object.freeze(normalizeKneeDropRecord(rec))); }
   /** 腰壁・垂れ壁指定を解除する（＝両方nullの既定へ戻す）。 */
   removeKneeDropWall(key)   { this.kneeDropWalls.delete(key); }
 

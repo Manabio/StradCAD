@@ -2,6 +2,7 @@ import { runInAction } from 'mobx';
 import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, isDefaultRoofSpec, restoreCeilingZones, restoreRoofZones } from '@core';
 import { encode, decode, countClEccentricities } from './schema/graphFbs.js';
 import { normalizeDetailRefs } from './core/detailRefs.js';
+import { kneeDropFrontSideOf } from './core/kneeDropRecord.js';
 import { normalizeBasementStructure } from './structural/structureRules.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
 import {
@@ -298,6 +299,8 @@ function buildSnapshot(graph) {
       key,
       hasKnee: r.knee != null, kneeTop: r.knee?.topHeight ?? 0,
       hasDrop: r.drop != null, dropBottom: r.drop?.bottomHeight ?? 0,
+      // 部分詳細図の割当て（kneeTop・dropBottom）と表の側（S8b-1）。凍結した正規形なので参照の共有で安全
+      detailRefs: normalizeDetailRefs(r.detailRefs), frontSide: kneeDropFrontSideOf(r),
     })),
   };
 }
@@ -1031,6 +1034,8 @@ function applySnapshot(graph, snapshot) {
       graph.setKneeDropWall(d.key, {
         knee: d.hasKnee ? { topHeight: d.kneeTop ?? 0 } : null,
         drop: d.hasDrop ? { bottomHeight: d.dropBottom ?? 0 } : null,
+        detailRefs: d.detailRefs ?? null, // 旧データ（キー欠落）は null
+        frontSide: d.frontSide, // 欠落・未知は既定（kneeDropFrontSideOf）
       });
     }
 

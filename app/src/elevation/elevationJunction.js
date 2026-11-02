@@ -10,19 +10,40 @@
 // ================================================================
 
 import {
-  ROOM_DETAIL_SLOTS, DetailSlot, DETAIL_FIT_EPS_MM, DETAIL_SECTION_SWAP_MIN_DIFF_MM, DETAIL_PRIM_SOURCE,
+  ROOM_DETAIL_SLOTS, KNEE_DROP_DETAIL_SLOTS, KneeDropFrontSide, DetailSlot, DETAIL_FIT_EPS_MM, DETAIL_SECTION_SWAP_MIN_DIFF_MM,
+  DETAIL_PRIM_SOURCE,
 } from '../core/constants.js';
 import { computeEnvelope, EnvelopeWeight } from '../detail/detailPlacement.js';
 import { resolveRoomDetailFigure, fitRoomJunction, wallAssemblyThicknessMm } from '../finish/roomDetailJunction.js';
-import { sameAxisLine, kneeDropRecordsOnAxis, kneeDropRecordFor } from '../finish/kneeDropWall.js';
+import { kneeDropPartEnvelope } from '../finish/partDetail.js';
+import { sameAxisLine, kneeDropRecordsOnAxis, kneeDropRecordFor, kneeDropRecordsForWallPoint } from '../finish/kneeDropWall.js';
 import { graphList } from '../graphReadScope.js';
 import { effectiveHeight, effectiveSillHeight } from '../openings/openingNumbering.js';
-import { ElevationLineRole, weightForRole } from './elevationStyle.js';
+import { ElevationLineRole, weightForRole, minDrawnMm } from './elevationStyle.js';
 import { wallLessEndAt, cornerOpeningZRanges, faceBoundaryLocalX, localXOf } from './elevationFaces.js';
 import { composeRoomFaces } from './elevationFaceList.js';
 import { polyline, subtractCollinearSpans } from './elevationPrimitives.js';
 
 const roleOf = weight => (weight === EnvelopeWeight.AIR ? ElevationLineRole.SILHOUETTE : ElevationLineRole.DETAIL);
+
+/**
+ * 包絡線の段差 [{t, weight}] を最小描画幅へ調整する（2026-11-02 裁定。elevationStyle.js minDrawnMm）。
+ * datum（FL・天井面・天端・下端）からの距離 |t| が minMm 未満なら minMm に置く（符号は保つ・t=0 は触らない）。
+ * 調整後に同じ t（DETAIL_FIT_EPS_MM 以内）へ畳まれた段差は 1 本にし、auto と air が重なれば air。入力は書き換えない。
+ * @param {{t:number, weight:string}[]} steps
+ * @param {number} minMm 最小描画幅（mm）
+ * @returns {{t:number, weight:string}[]}
+ */
+export function stepsAtMinDrawn(steps, minMm) {
+  const out = [];
+  for (const s of steps ?? []) {
+    const t = Math.abs(s.t) <= DETAIL_FIT_EPS_MM || Math.abs(s.t) >= minMm ? s.t : Math.sign(s.t) * minMm;
+    const same = out.find(o => Math.abs(o.t - t) <= DETAIL_FIT_EPS_MM);
+    if (!same) out.push({ ...s, t });
+    else if (s.weight === EnvelopeWeight.AIR) same.weight = EnvelopeWeight.AIR;
+  }
+  return out;
+}
 
 /**
  * 面 F の軸上で F の区間に最も長く重なる壁（F 自身の壁）。無ければ null。
@@ -82,6 +103,43 @@ export function junctionFaceWallsOf(room, graph) {
   return walls;
 }
 
+/**
+ * 断面エンジンの emitCtx.kneeDropPartStepsOf（腰壁の天端・垂れ壁の下端の部分詳細図。S8b-1）。帯 band・列 col・切断 cut から
+ * 「その列の壁に掛かる記録」を引き、見る側（cut.viewSign の手前の部屋の側）から見た包絡線の段差 {kneeTop?, dropBottom?}: [{t, weight}] を返す。
+ * 表の側（rec.frontSide）と見る側が違えば壁の中心で鏡像。割当ての無い記録・参照切れ・fit 失敗・自階（'self' の層）以外の壁は null
+ * （従来の描き方）。記録に割当てが 1 つも無ければ null（エンジンへ関数自体を渡さない＝出力不変）。
+ * 段差の t は最小描画幅（scaleDenom の縮尺。未指定＝100）へ調整する（stepsAtMinDrawn）。
+ * @param {{graph:object, materialMap?:object|null, scaleDenom?:number}} p
+ * @returns {null | ((band:object, col:object, cut:object) => ({kneeTop?:object[], dropBottom?:object[]}|null))}
+ */
+export function kneeDropPartStepsOf({ graph, materialMap = null, scaleDenom }) {
+  if (![...(graph?.kneeDropWalls?.values() ?? [])].some(rec => rec?.detailRefs)) return null;
+  const minMm = minDrawnMm(scaleDenom);
+  const byWall = new WeakMap(); // wall → Map<鍵, 包絡線の steps|null>
+  return (band, col, cut) => {
+    if (band.layerRole !== 'self' || !band.wall) return null;
+    const hit = kneeDropRecordsForWallPoint(graph, band.wall, (col.worldLo + col.worldHi) / 2)
+      .find(({ rec }) => rec.detailRefs && (rec.knee || rec.drop));
+    if (!hit) return null;
+    // 視線は +viewSign 側へ向く。壁を見る人は壁の手前（−viewSign 側）に立つので、viewSign>0 なら軸の負側の部屋から見る
+    const viewedSide = cut.viewSign > 0 ? KneeDropFrontSide.ROOM_NEG : KneeDropFrontSide.ROOM_POS;
+    if (!byWall.has(band.wall)) byWall.set(band.wall, new Map());
+    const cache = byWall.get(band.wall);
+    const out = {};
+    for (const slot of KNEE_DROP_DETAIL_SLOTS) {
+      if (!hit.rec.detailRefs[slot]) continue;
+      const memoKey = `${hit.key}|${slot}|${viewedSide}`;
+      if (!cache.has(memoKey)) {
+        const env = kneeDropPartEnvelope({ graph, wall: band.wall, rec: hit.rec, slot, viewedSide, materialMap });
+        cache.set(memoKey, env?.steps ? stepsAtMinDrawn(env.steps, minMm) : null);
+      }
+      const steps = cache.get(memoKey);
+      if (steps && steps.length > 0) out[slot] = steps;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  };
+}
+
 // base 区間 [lo,hi] から holes を引いた残り（昇順。holes は [lo,hi] の配列で ±Infinity 可）。
 function subtractRanges(base, holes) {
   let out = [base];
@@ -97,8 +155,14 @@ function subtractRanges(base, holes) {
   return out.filter(([lo, hi]) => hi > lo + DETAIL_FIT_EPS_MM);
 }
 
+// x の区間の床から天井面までの高さ（segs の区間。無ければ null）。垂れ壁の下端＝これ−bottomHeight（bottomHeight は天井からの寸法）。
+function ceilRelAt(segs, x, segCeilAbsAt) {
+  const s = (segs ?? []).find(g => g.loX <= x && x <= g.hiX) ?? null;
+  return s && segCeilAbsAt ? segCeilAbsAt(s, x) - (s.floorDeltaMm ?? 0) : null;
+}
+
 // 線の高さ（その区間の床から上へ。x の関数）が、開口・腰壁・垂れ壁・壁の無い区間で途切れる x 範囲。
-function blockedRanges(heightAt, { face, graph, openings, wallLessRuns }) {
+function blockedRanges(heightAt, { face, graph, openings, wallLessRuns, segs, segCeilAbsAt }) {
   const eps = DETAIL_FIT_EPS_MM;
   const localX = world => localXOf(face, world);
   const out = (wallLessRuns ?? []).map(r => [r.lo, r.hi]);
@@ -113,8 +177,12 @@ function blockedRanges(heightAt, { face, graph, openings, wallLessRuns }) {
       if (!rec.knee && !rec.drop) continue;
       const a = localX(lo);
       const b = localX(hi);
-      const h = heightAt((a + b) / 2);
-      const covered = (rec.knee != null && h <= rec.knee.topHeight + eps) || (rec.drop != null && h >= rec.drop.bottomHeight - eps);
+      const mid = (a + b) / 2;
+      const h = heightAt(mid);
+      // 垂れ壁の下端は天井から bottomHeight 下（床からの高さ＝その x の天井高−bottomHeight）。天井高が引けなければ覆いとみなさない
+      const ceilRel = rec.drop != null ? ceilRelAt(segs, mid, segCeilAbsAt) : null;
+      const covered = (rec.knee != null && h <= rec.knee.topHeight + eps)
+        || (ceilRel !== null && h >= ceilRel - rec.drop.bottomHeight - eps);
       if (!covered) out.push([Math.min(a, b), Math.max(a, b)]);
     }
   }
@@ -128,12 +196,14 @@ function blockedRanges(heightAt, { face, graph, openings, wallLessRuns }) {
  * 床〜天井の外の高さ・円弧／傾斜プロファイルの天井の面の wallCeiling は出さない。
  * @param {object} plan junctionPlanForFace の結果
  * @param {{face:object, graph:object, run:number, segs:object[], openings:object[], wallLessRuns:object[],
- *   ceilRiserXAt:(i:number)=>number, segCeilAbsAt:(s:object,x:number)=>number, hasCeilingProfile?:boolean}} geo
+ *   ceilRiserXAt:(i:number)=>number, segCeilAbsAt:(s:object,x:number)=>number, hasCeilingProfile?:boolean,
+ *   scaleDenom?:number}} geo  scaleDenom＝縮尺の分母（最小描画幅。未指定＝100）
  * @returns {{floorWall:object[], wallCeiling:object[]}}
  */
 export function junctionLineSpecs(plan, geo) {
   const eps = DETAIL_FIT_EPS_MM;
   const { segs, run, ceilRiserXAt, segCeilAbsAt } = geo;
+  const minMm = minDrawnMm(geo.scaleDenom); // 段差 t は最小描画幅へ調整（stepsAtMinDrawn）
   const floorWall = [];
   const wallCeiling = [];
 
@@ -141,7 +211,7 @@ export function junctionLineSpecs(plan, geo) {
   if (fw) {
     // 区間の天井（床から）の最小。それ以上の高さの線は天井の外
     const ceilRel = Math.min(...segs.map(s => segCeilAbsAt(s, (s.loX + s.hiX) / 2) - (s.floorDeltaMm ?? 0)));
-    for (const { t, weight } of fw.steps) {
+    for (const { t, weight } of stepsAtMinDrawn(fw.steps, minMm)) {
       const heightMm = -t;
       if (!(heightMm > eps) || heightMm >= ceilRel - eps) continue;
       const gaps = blockedRanges(() => heightMm, geo).sort((a, b) => a[0] - b[0]);
@@ -151,7 +221,7 @@ export function junctionLineSpecs(plan, geo) {
 
   const wc = plan?.[DetailSlot.WALL_CEILING];
   if (wc && !geo.hasCeilingProfile) {
-    for (const { t, weight } of wc.steps) {
+    for (const { t, weight } of stepsAtMinDrawn(wc.steps, minMm)) {
       if (!(t > eps)) continue;
       const pieces = [];
       segs.forEach((s, i) => {

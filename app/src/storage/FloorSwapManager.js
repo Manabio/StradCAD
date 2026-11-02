@@ -285,6 +285,8 @@ export class FloorSwapManager {
       void graph.columnAxisOffsets.size;
       void graph.clEccentricities.size;
       void graph.kneeDropWalls.size;
+      // 記録の差し替え（腰壁・垂れ壁の値・部分詳細図の割当て・表の側の変更。キーは同じで size が変わらない）も dirty 対象にする
+      for (const rec of graph.kneeDropWalls.values()) void rec;
       for (const cl of graph.centerLines) {
         void cl._value;
         void cl.refOffset;

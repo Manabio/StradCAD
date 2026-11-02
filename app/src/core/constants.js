@@ -576,9 +576,22 @@ export const DetailSlot = Object.freeze({
   FIGURE:       'figure', // 建具の姿図（正面図）。枠・機構・ハンドルを置き換える（S6b）
   FLOOR_WALL:   'floorWall',   // 部屋の床と壁の取り合い（Room.detailRefs。S8a）
   WALL_CEILING: 'wallCeiling', // 部屋の壁と天井の取り合い（Room.detailRefs。S8a）
+  KNEE_TOP:     'kneeTop',     // 腰壁の天端（腰壁・垂れ壁の記録の detailRefs。S8b-1）
+  DROP_BOTTOM:  'dropBottom',  // 垂れ壁の下端（同上）
 });
-/** 部屋（Room.detailRefs）に割り当てられる slot（S8a。wall・floor・ceiling の part は 8b）。 */
+/** 部屋（Room.detailRefs）に割り当てられる slot（S8a。wall・floor・ceiling の part は要素付き＝8b）。 */
 export const ROOM_DETAIL_SLOTS = Object.freeze([DetailSlot.FLOOR_WALL, DetailSlot.WALL_CEILING]);
+/** 腰壁・垂れ壁の記録（graph.kneeDropWalls の値の detailRefs）に割り当てられる slot（S8b-1。ROOM_DETAIL_SLOTS には混ぜない）。 */
+export const KNEE_DROP_DETAIL_SLOTS = Object.freeze([DetailSlot.KNEE_TOP, DetailSlot.DROP_BOTTOM]);
+/**
+ * 腰壁・垂れ壁の記録の「表の側」（rec.frontSide。部分詳細図の s 原点＝表の側の仕上げ面）。値は kneeDropWallGeometry の
+ * roomNeg（軸の負側の部屋）・roomPos（正側）の呼び名に合わせる。記録に無ければ KNEE_DROP_FRONT_SIDE_DEFAULT。
+ */
+export const KneeDropFrontSide = Object.freeze({
+  ROOM_NEG: 'roomNeg',
+  ROOM_POS: 'roomPos',
+});
+export const KNEE_DROP_FRONT_SIDE_DEFAULT = KneeDropFrontSide.ROOM_NEG;
 /** 有効な (category, view, subject) の組合せ表。検証（detail/detailModel.js）と割当て先の絞り込みが引く。 */
 export const DETAIL_VIEW_COMBOS = Object.freeze([
   ...[DetailView.PLAN, DetailView.SECTION].flatMap(view =>
@@ -606,6 +619,8 @@ export const DETAIL_SLOT_TARGETS = Object.freeze({
   [DetailSlot.FIGURE]:       Object.freeze({ category: DetailCategory.FIGURE, view: DetailView.ELEVATION, subject: DetailSubject.OPENING }),
   [DetailSlot.FLOOR_WALL]:   Object.freeze({ category: DetailCategory.JUNCTION, view: DetailView.SECTION, subject: DetailSubject.FLOOR_WALL }),
   [DetailSlot.WALL_CEILING]: Object.freeze({ category: DetailCategory.JUNCTION, view: DetailView.SECTION, subject: DetailSubject.WALL_CEILING }),
+  [DetailSlot.KNEE_TOP]:     Object.freeze({ category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.WALL }),
+  [DetailSlot.DROP_BOTTOM]:  Object.freeze({ category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.WALL }),
 });
 /** 基準（Datum）の種別。origin=図を載せる原点・end=伸縮区間の終端。 */
 export const DetailDatumKind = Object.freeze({
@@ -623,6 +638,8 @@ export const DetailDatumRole = Object.freeze({
   WALL_AXIS:        'wallAxis',
   FL:               'fl',
   CEILING_FACE:     'ceilingFace',
+  WALL_TOP:         'wallTop',    // 腰壁の天端の面（t の origin。S8b-1）
+  WALL_BOTTOM:      'wallBottom', // 垂れ壁の下端の面（t の origin。S8b-1）
   GL:               'gl',
   ROOF_SURFACE:     'roofSurface',
   EAVE_EDGE:        'eaveEdge',
@@ -665,6 +682,12 @@ export const FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD = 'detailFigures';
 export const DETAIL_FIGURE_KEY_PREFIX = 'df-';
 /** 詳細図由来のプリミティブに付ける出どころの印（source。kind は立面が上書きするので使わない）。 */
 export const DETAIL_PRIM_SOURCE = 'detail';
+/** 紙上の最小描画幅（mm）。描く図面の縮尺で実寸がこれ以下になる幅は、これに引き上げて描く（2026-11-02 裁定。展開図に限らず全図面共通）。 */
+export const MIN_DRAWN_PAPER_MM = 0.5;
+/** 展開図で縮尺の分母が分からないとき（1 パス目・単体テスト・ゴールデン）に想定する分母。最小描画幅は 0.5×100＝50mm。 */
+export const ELEVATION_DEFAULT_SCALE_DENOM = 100;
+/** 天板（腰壁の天端）の実厚（mm）。組込みの天板図と展開図の天端下の細線が共有する。 */
+export const KNEE_CAP_THICKNESS_MM = 20;
 /** fit の長さ比較の許容（mm）。elevationStyle.js の COORD_EPS_MM と同値だが、detail/ は elevation/ を引けないので別定義。 */
 export const DETAIL_FIT_EPS_MM = 1e-3;
 /** 手の辺に付ける印（Move.edge）。'air'＝空気との境目（室内側の見え掛かりの線。展開図で中線になる。S8a）。 */

@@ -124,6 +124,29 @@ test('【明示指示】buildRoomBandWithVoidAbove: 上階の腰壁が面に突�
     `腰壁の天端(z=${FLOOR_HEIGHT + 800})の断面線が出るはず（実際:${tops.length}本）`);
 });
 
+// 最小描画幅（2026-11-02 裁定）: 上階の輪郭（appendUpperStoreyOutline）の腰壁も scaleDenom に追う
+test('buildRoomBandWithVoidAbove: 上階の腰壁の天端下の細線は scaleDenom に追う（分母 20＝20 下・未指定＝50 下）', () => {
+  const g1 = makeGraph('1階', 0);
+  const room = makeRectRoom(g1, 0, 0, 6000, 6000, 'LDK');
+  const g2 = makeGraph('2階', FLOOR_HEIGHT);
+  // 上階: 吹抜け（x 0..3000）と隣の部屋（x 3000..6000）。境界と奥の辺に腰壁——奥の辺の腰壁は輪郭（上階の床がある側）が描く
+  const voidRoom = makeRectRoom(g2, 0, 0, 3000, 6000, '吹抜け');
+  voidRoom.setFeature(RoomFeature.VOID);
+  makeRectRoom(g2, 3000, 0, 6000, 6000, '居室');
+  const cl = (type, v) => g2.centerLines.find(c => c.centerLineType === type && c.effectiveValue === v);
+  const V = CenterLineType.VERTICAL, H = CenterLineType.HORIZONTAL;
+  const knee = { knee: { topHeight: 800 }, drop: null };
+  g2.setKneeDropWall(`${cl(V, 3000).id}:${cl(H, 0).id}:${cl(H, 6000).id}`, knee);
+  g2.setKneeDropWall(`${cl(H, 6000).id}:${cl(V, 3000).id}:${cl(V, 6000).id}`, knee);
+  const thinYs = ctx => [...new Set(buildRoomBandWithVoidAbove(room, g1, voidRoom, g2, { floorHeightAboveMm: FLOOR_HEIGHT, ...ctx })
+    .primitives.filter(p => p.type === 'line' && p.weight === 'thin' && p.y1 === p.y2).map(p => p.y1))];
+  const top = -(FLOOR_HEIGHT + 800);
+  const fine = thinYs({ scaleDenom: 20 });
+  const dflt = thinYs({});
+  assert.ok(fine.includes(top + 20) && !fine.includes(top + 50), `分母 20（実際:${fine}）`);
+  assert.ok(dflt.includes(top + 50) && !dflt.includes(top + 20), `分母未指定（実際:${dflt}）`);
+});
+
 test('【失敗系】buildRoomBandWithVoidAbove: 腰壁指定が無ければ天端の線は出ない', () => {
   const g1 = makeGraph('1階', 0);
   const room = makeRectRoom(g1, 0, 0, 4000, 6000, 'LDK');

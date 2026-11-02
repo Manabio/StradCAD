@@ -224,7 +224,7 @@ function makeUpperStoreyContext(layout, upperGraph, floorHeightMm, upperCH) {
  * @param {{floorHeightMm:number, roomBoundsRect:object|null, endExtendMm:number|undefined}} opts
  */
 function appendUpperStoreyOutline(primitives, layout, upper, opts) {
-  const { floorHeightMm, roomBoundsRect, endExtendMm, scale, lineWeightsPx = null } = opts;
+  const { floorHeightMm, roomBoundsRect, endExtendMm, scale, scaleDenom, lineWeightsPx = null } = opts;
   const { layers, probeCtx, columnSolids, hiZ, segsByFace } = upper;
   for (const { face, xCursor } of layout.faceRuns) {
     for (const seg of segsByFace.get(face) ?? []) {
@@ -244,7 +244,7 @@ function appendUpperStoreyOutline(primitives, layout, upper, opts) {
           zRange: { loZ: floorHeightMm, hiZ },
           ceilProfile: [{ loX: 0, hiX: hi - lo, ceilZ: hiZ }],
           seqNo: `${face.label}^`,
-          probeCtx, endExtendMm, bandRoomBounds: roomBoundsRect, scale, lineWeightsPx,
+          probeCtx, endExtendMm, bandRoomBounds: roomBoundsRect, scale, scaleDenom, lineWeightsPx,
         },
       );
       // cutのローカルx=0は line.lo/hi 側。面ローカルxへ戻す。
@@ -499,7 +499,7 @@ export function buildVoidBand(voidRoom, graph, lowerGraph, ctx = {}) {
   // 一切出ない（面の引き伸ばしは床線・天井線の話で、壁の実体の話ではない）。
   const memberEdgesX = [];
   appendBandCutContent(primitives, voidRoom, graph, layout, layers,
-    { memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null,
+    { memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, scaleDenom: ctx.scaleDenom, lineWeightsPx: ctx.lineWeightsPx ?? null,
       // 下階の平面が面の端より外へ続くぶん（gate付き）。探査（層ごとの窓）と描画範囲へ同じ値。
       ...(overhangByFace
         ? { upperPlaneOverhang: true, faceOverhangOf: face => overhangByFace.get(face) } : {}) });
@@ -555,7 +555,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
     const prims = [...layout.primitives];
     const memberEdgesX = [];
     appendBandCutContent(prims, room, graph, layout, buildBandLayers(graph),
-      { memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null,
+      { memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, scaleDenom: ctx.scaleDenom, lineWeightsPx: ctx.lineWeightsPx ?? null,
         // 梁の断面（memberCut。U1b B3-1）: 加算レイヤ（solids）の有無に合わせる（solids 無しは梁なし＝従来どおり）
         // （solids の共有の層があればそれ〔ElevationModeState が全部屋で共有〕、無ければ cut.layers）
         memberLayers: ctx.solids ? ctx.solids.memberLayers : [],
@@ -702,7 +702,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   const mainLayers = buildBandLayers(graph, { above: [{ graph: upperGraph, floorHeightMm }] });
   const memberEdgesX = [];
   appendBandCutContent(cutContent, room, graph, layout, mainLayers, {
-    memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null,
+    memberEdgesX, endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, scaleDenom: ctx.scaleDenom, lineWeightsPx: ctx.lineWeightsPx ?? null,
     // 梁の断面（memberCut。U1b B3-1）: 主帯の層（自階＋上階）の梁。加算レイヤ（solids）の有無に合わせる（solids 無しは梁なし）
     memberLayers: ctx.solids ? ctx.solids.memberLayers : [],
     droppedMemberPrimsOf: droppedMemberPrimsOfSolids(ctx.solids, graph, room, layout),
@@ -725,7 +725,7 @@ export function buildRoomBandWithVoidAbove(room, graph, voidRoom, upperGraph, ct
   appendUpperStoreyOutline(primitives, layout, upper, {
     floorHeightMm,
     roomBoundsRect: roomBounds(room.cells, graph),
-    endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, lineWeightsPx: ctx.lineWeightsPx ?? null,
+    endExtendMm: ctx.wallLessEndExtendModelMm, scale: ctx.scale, scaleDenom: ctx.scaleDenom, lineWeightsPx: ctx.lineWeightsPx ?? null,
   });
   // 値の出どころはすべて2階の部屋。
   appendUpperStoreyTrim(primitives, layout, upperGraph, upper, {
