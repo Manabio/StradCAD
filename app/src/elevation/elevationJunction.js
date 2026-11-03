@@ -4,6 +4,7 @@
 //   junctionPlanForFace   面 F の部屋の割当てを F 自身の壁の厚みで fit し、包絡線（段差の t 列）を求める
 //   junctionLineSpecs     包絡線の段差を面の水平線の仕様へ（途切れる区間・天井の段差への追従）。描画は elevationFigure.js
 //   floorStepLineSpecs / applyFloorStepSectionSwap  床の段差（Room.detailRefs の floorStep。S8b-3）の派生線（段差見付け面）と riser の差し替え
+//   ceilingStepLineSpecs  天井の段差（detailRefs の ceilingStep。S8b-4b-2）の派生線（天井の段差見付け面の ceilingSteps の区間ごと）
 // 断面図の包絡線の各段差 t: floorWall は FL から上へ −t の高さ、wallCeiling は天井面から下へ t の位置。
 // 自動（auto）の段差は細線 DETAIL・ヘルパーの印（air）は中線 SILHOUETTE（同じ t は包絡線が中線 1 本に畳んでいる）。
 // 失敗（参照切れ・壁厚に合わない図）は線を出さない（通知は展開 init が集める＝collectRoomJunctionFailures）。
@@ -493,6 +494,33 @@ export function floorStepLineSpecs(face, { materialMap = null, scaleDenom } = {}
   const eps = DETAIL_FIT_EPS_MM;
   return stepsAtMinDrawn(env.steps, minDrawnMm(scaleDenom))
     .filter(({ t }) => t > eps && t < face.stepHeightMm - eps)
+    .map(({ t, weight }) => ({ t, role: roleOf(weight) }));
+}
+
+/**
+ * 天井の段差見付け面（face.ceilingSteps の 1 区間 cs）に引く水平線の仕様（低い側の天井＝見付け下端から t）。cs.lowSurface の持ち主
+ * （区画があれば区画・無ければ部屋。区画→部屋の継承はしない）の ceilingStep を段差高 cs.ceilStepHeightMm で fit した包絡線の段差 t を
+ * 最小描画幅へ調整（stepsAtMinDrawn）し、低い側の天井（t≈0）と高い側の天井（t≈−段差高）に一致するものは引かない。
+ * 割当て無し・参照切れ・fit 失敗は空（8b-4b-1 の出力のまま）。
+ * @param {object} face 段差見付け面
+ * @param {{lowSurface?:{roomId:string, zoneId:string|null}, ceilStepHeightMm:number}} cs
+ * @param {{graph?:object|null, materialMap?:object|null, scaleDenom?:number}} [opts]
+ * @returns {{t:number, role:string}[]} t＝低い側の天井から上向きが負
+ */
+export function ceilingStepLineSpecs(face, cs, { graph = null, materialMap = null, scaleDenom } = {}) {
+  const surface = cs?.lowSurface;
+  if (face?.kind !== 'step' || !surface) return [];
+  const room = (graph?.rooms ?? []).find(r => r.id === surface.roomId);
+  if (!room) return [];
+  const zone = surface.zoneId == null ? null : (room.ceilingZones ?? []).find(z => z.id === surface.zoneId);
+  if (surface.zoneId != null && !zone) return [];
+  // 割当て無しは fit（図の解決）を呼ばずに返す近道
+  if (!(zone ?? room).detailRefs?.[DetailSlot.CEILING_STEP]) return [];
+  const env = ceilingStepEnvelope({ room, zone, stepHeightMm: cs.ceilStepHeightMm, materialMap });
+  if (!env) return [];
+  const eps = DETAIL_FIT_EPS_MM;
+  return stepsAtMinDrawn(env.steps, minDrawnMm(scaleDenom))
+    .filter(({ t }) => t < -eps && t > -cs.ceilStepHeightMm + eps)
     .map(({ t, weight }) => ({ t, role: roleOf(weight) }));
 }
 

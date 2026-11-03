@@ -364,3 +364,38 @@ check(Object.values(withRefs.kneeCapBy).some(c => c['y-750(50下)'] + c['y-780(2
   check(ldk.filter(f => f.floor === 300 && f.cs.length === 1 && f.cs[0][2] === 2100).length >= 1 && ceilingOnly(ldk).length === 0,
     'LDK: 小上がり（床 +300・天井 2100）は床の面に ceilingSteps が合流し、天井だけの面は重ならない');
 }
+
+// ---- 天井の段差見付け面の派生線（S8b-4b-2）: 割当ての有無の差で source=detail の水平な細線の増分（y ごとの本数）を見る ----
+{
+  const runElev = async () => {
+    clearOverlays();
+    setOverlay(CatalogKind.DETAIL_FIGURE, { doc: figs, user: detailBuiltins });
+    const st = new ElevationModeState(G, P, { width: 1600, height: 1200 });
+    await st.init();
+    return { bands: st.bands.map(b => ({ name: G.rooms.find(r => r.id === b.roomId)?.name ?? b.roomId, prims: b.primitives })), err: st.materialError };
+  };
+  const isDetailHLine = p => p.type === 'line' && p.source === DETAIL_PRIM_SOURCE && p.weight === 'thin' && p.y1 === p.y2;
+  const countsBy = (r, name) => {
+    const m = {};
+    for (const b of r.bands.filter(x => x.name === name)) for (const p of b.prims.filter(isDetailHLine)) m[p.y1] = (m[p.y1] ?? 0) + 1;
+    return m;
+  };
+  const added = (a, b) => Object.fromEntries(Object.entries(a).map(([y, n]) => [y, n - (b[y] ?? 0)]).filter(([, n]) => n !== 0));
+  const zoneData = ry.ceilingZones.map(z => z.toData());
+  const roomRefs = rk.detailRefs;
+  const both = await runElev();
+  ry.setCeilingZones(ry.ceilingZones.map(z => new CeilingZone({ ...z.toData(), detailRefs: null })));
+  const noZone = await runElev();
+  ry.setCeilingZones(zoneData.map(d => CeilingZone.fromData(d)));
+  rk.setDetailRefs({ floorStep: KEY_ST });
+  const noRoom = await runElev();
+  rk.setDetailRefs(roomRefs);
+  const yoshitsuAdd = added(countsBy(both, '洋室'), countsBy(noZone, '洋室'));
+  const ldkAdd = added(countsBy(both, 'LDK'), countsBy(noRoom, 'LDK'));
+  console.log('区画の割当てによる洋室の水平細線の増分（y: 本数）:', JSON.stringify(yoshitsuAdd), ' 小上がりの天井割当てによる LDK の増分:', JSON.stringify(ldkAdd));
+  check(both.err === null && noZone.err === null && noRoom.err === null, `天井の段差の派生線の通知なし（${both.err}）`);
+  check(Object.keys(yoshitsuAdd).sort().join(',') === '-2140,-2170' && Object.values(yoshitsuAdd).every(n => n === 1),
+    '洋室の帯の中の細い水平の detail 線: 見付け下端 2100 の上 40・70（見切りの厚の上端と見切りの天端）の y に 1 本ずつ増える（帯全体の数。面の x 範囲での絞り込みは帯が faceRuns を公開しないため不可）');
+  check(ldkAdd['-2140'] === 1 && ldkAdd['-2170'] === 1 && Object.keys(ldkAdd).length === 2,
+    'LDK の帯の中の細い水平の detail 線: 小上がりの部屋単位の割当てで −2140・−2170 の y に増える（床の面へ合流した面の分。床の派生線 −260・−230 は割当て無しでも残る。帯全体の数）');
+}

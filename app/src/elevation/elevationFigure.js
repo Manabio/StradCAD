@@ -30,7 +30,7 @@ import {
 } from './elevationFloorProfile.js';
 import { kneeDropRecordsOnAxis } from '../finish/kneeDropWall.js';
 import { DetailSlot, DETAIL_PRIM_SOURCE } from '../core/constants.js';
-import { junctionPlanForFace, junctionLineSpecs, floorStepLineSpecs } from './elevationJunction.js';
+import { junctionPlanForFace, junctionLineSpecs, floorStepLineSpecs, ceilingStepLineSpecs } from './elevationJunction.js';
 import { formatMaterialLabel } from '../finish/materials/materialLabel.js';
 import {
   ElevationLineRole, weightForRole, faceGapLimitMm,
@@ -888,6 +888,10 @@ function appendStepFace(prims, {
   for (const cs of fasciae) {
     const lowY = -cs.lowCeilAbsMm;
     prims.push(line(cs.loX, lowY, cs.hiX, lowY, { weight: stepSilhouetteWeight }));
+    // 低い側の持ち主の天井の段差の部位図（ceilingStep。S8b-4b-2）から派生する水平線（見付け下端から t。区間の幅）
+    for (const sp of ceilingStepLineSpecs(face, cs, { graph, materialMap, scaleDenom })) {
+      prims.push(line(cs.loX, lowY + sp.t, cs.hiX, lowY + sp.t, { weight: weightForRole(sp.role), source: DETAIL_PRIM_SOURCE }));
+    }
     if (!(cs.loX <= GAP_EPS_MM && wallAt0)) prims.push(line(cs.loX, lowY, cs.loX, stepCeilY, { weight: stepSilhouetteWeight }));
     if (!(cs.hiX >= run - GAP_EPS_MM && wallAtRun)) prims.push(line(cs.hiX, lowY, cs.hiX, stepCeilY, { weight: stepSilhouetteWeight }));
     if (cs.beyondFloorDeltaMm != null && cs.beyondFloorDeltaMm < face.baseFloorDeltaMm - GAP_EPS_MM) {
