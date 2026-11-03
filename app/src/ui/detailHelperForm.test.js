@@ -370,7 +370,7 @@ test('previewPrimitivesOf: 試し込み結果があればその形（dim なし�
   assert.equal(prims.some(p => p.type === SvgFigurePrimitiveType.DIM), false);
   const line = prims.find(p => p.type === SvgFigurePrimitiveType.POLYLINE);
   assert.deepEqual(line.points[4], [20, 105]);
-  assert.equal(prims.filter(p => p.type === SvgFigurePrimitiveType.TEXT).length, 6);
+  assert.equal(prims.filter(p => p.type === SvgFigurePrimitiveType.TEXT && !p.guide).length, 6);
   assert.ok(previewPrimitivesOf(f, { error: { code: 'x' } }).some(p => p.type === SvgFigurePrimitiveType.DIM));
   const badOffset = setDatumField(f, 'd1', 'offset', 'zz');
   const pts = previewPrimitivesOf(badOffset).find(p => p.type === SvgFigurePrimitiveType.POLYLINE).points.flat();

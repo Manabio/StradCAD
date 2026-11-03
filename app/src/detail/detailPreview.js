@@ -38,8 +38,44 @@ export function airEdgeOverlays(pts, marks) {
 }
 
 /**
+ * origin の Datum（s・t 軸）の基準線。図の全頂点の外接矩形を両端 gap だけ延ばした破線＋役割名の text。
+ * 寸法・頂点番号と違い editable／editKey を持たない（クリックにも寸法編集にも掛からない。guide:true の印だけ付ける）。
+ * end の Datum・軸が s/t でないもの・offsetMm が有限でないものは出さない（黙って 0 に置き換えると誤った位置に線が出るため。
+ * 呼び出し側 ui の previewEntryOf は非有限を 0 にしてから渡すので、画面では 0 の位置に出る）。頂点が無ければ [] 。
+ * @param {{role:string, axis:string, kind:string, offsetMm:number}[]} datums
+ * @param {{s:number,t:number}[]} pts 描いた全ストロークの頂点
+ * @param {{gap?: number, labelOf?: (role:string)=>string, labelOffsetMm?: number, labelSizePx?: number}} [opts]
+ *   labelOf は役割名の表示（detail/ は ui/ を引けないので呼び出し側が渡す。既定は role 文字列そのまま）
+ */
+export function datumGuidePrimitives(datums, pts, opts = {}) {
+  const gap = opts.gap ?? PREVIEW_DIM_GAP_MM;
+  const off = opts.labelOffsetMm ?? PREVIEW_LABEL_OFFSET_MM;
+  const size = opts.labelSizePx ?? PREVIEW_LABEL_SIZE_PX;
+  const labelOf = opts.labelOf ?? (role => role);
+  if (!Array.isArray(pts) || pts.length === 0) return [];
+  const minS = Math.min(...pts.map(p => p.s)) - gap;
+  const maxS = Math.max(...pts.map(p => p.s)) + gap;
+  const minT = Math.min(...pts.map(p => p.t)) - gap;
+  const maxT = Math.max(...pts.map(p => p.t)) + gap;
+  const out = [];
+  for (const d of datums ?? []) {
+    if (!d || d.kind !== DetailDatumKind.ORIGIN || !Number.isFinite(d.offsetMm)) continue;
+    const name = labelOf(d.role);
+    if (d.axis === DetailAxis.S) {
+      out.push(polyline([[d.offsetMm, minT], [d.offsetMm, maxT]], { dash: DetailDash.DASHED, guide: true }));
+      out.push(text(d.offsetMm, minT - off, name, { size, guide: true }));
+    } else if (d.axis === DetailAxis.T) {
+      out.push(polyline([[minS, d.offsetMm], [maxS, d.offsetMm]], { dash: DetailDash.DASHED, guide: true }));
+      out.push(text(maxS + off, d.offsetMm, name, { size, anchor: 'start', baseline: 'middle', guide: true }));
+    }
+  }
+  return out;
+}
+
+/**
  * @param {object} figure DetailFigure（下書きでもよい。歩けないストロークは飛ばす）
- * @param {{dimGapMm?: number, labelOffsetMm?: number, labelSizePx?: number}} [opts]
+ * @param {{dimGapMm?: number, labelOffsetMm?: number, labelSizePx?: number, labelOf?: (role:string)=>string}} [opts]
+ *   末尾に origin の Datum の基準線（datumGuidePrimitives）を付ける
  */
 export function previewPrimitives(figure, opts = {}) {
   const gap = opts.dimGapMm ?? PREVIEW_DIM_GAP_MM;
@@ -48,6 +84,7 @@ export function previewPrimitives(figure, opts = {}) {
   const fig = normalizeDetailFigure(figure);
   const datumById = new Map(fig.datums.filter(d => d && typeof d === 'object').map(d => [d.id, d]));
   const out = [];
+  const allPts = [];
 
   for (const stroke of fig.strokes) {
     if (!stroke || typeof stroke !== 'object') continue;
@@ -61,6 +98,7 @@ export function previewPrimitives(figure, opts = {}) {
     }
     const pts = walked.map(p => ({ s: p.s + shift[DetailAxis.S], t: p.t + shift[DetailAxis.T] }));
 
+    allPts.push(...pts);
     const extra = { strokeId: stroke.id };
     if (stroke.closed) extra.closed = true;
     if (stroke.line?.dashRole === DetailDash.DASHED) extra.dash = DetailDash.DASHED;
@@ -84,5 +122,6 @@ export function previewPrimitives(figure, opts = {}) {
       }
     });
   }
+  out.push(...datumGuidePrimitives(fig.datums.filter(d => d && typeof d === 'object'), allPts, { gap, labelOf: opts.labelOf, labelOffsetMm: off, labelSizePx: size }));
   return out;
 }

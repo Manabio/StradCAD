@@ -1,10 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SvgFigurePrimitiveType, PenDir, DetailDash } from '../core/constants.js';
-import { previewPrimitives } from './detailPreview.js';
+import { previewPrimitives, datumGuidePrimitives, PREVIEW_DIM_GAP_MM } from './detailPreview.js';
 import { stretchFigure, rectFigure, figureOf, strokeOf, move, vmove, fixedLen, anchorOf } from './detailTestFixtures.js';
 
-const types = prims => prims.map(p => p.type);
 
 test('preview: 出力の type は SvgFigurePrimitiveType の値だけ', () => {
   const known = new Set(Object.values(SvgFigurePrimitiveType));
@@ -41,7 +40,7 @@ test('preview: polyline は [x,y] タプル列・頂点番号 text は頂点数�
   const poly = prims.find(p => p.type === SvgFigurePrimitiveType.POLYLINE);
   assert.deepEqual(poly.points, [[0, 0], [100, 0], [100, 50], [0, 50]]);
   assert.equal(poly.closed, true);
-  assert.deepEqual(prims.filter(p => p.type === SvgFigurePrimitiveType.TEXT).map(p => p.text), ['0', '1', '2', '3']);
+  assert.deepEqual(prims.filter(p => p.type === SvgFigurePrimitiveType.TEXT && !p.guide).map(p => p.text), ['0', '1', '2', '3']);
   const open = previewPrimitives(stretchFigure()).find(p => p.type === SvgFigurePrimitiveType.POLYLINE);
   assert.equal(open.closed, undefined);
 });
@@ -57,6 +56,38 @@ test('preview: 点線のストロークは dash を持つ／origin の Anchor �
 test('preview: 歩けないストローク（未知の dir）は飛ばし、例外にしない', () => {
   const fig = figureOf([strokeOf('a', [{ dir: 'Z', len: fixedLen(5) }]), strokeOf('b', [move(PenDir.RIGHT, fixedLen(5))])]);
   const prims = previewPrimitives(fig);
-  assert.deepEqual(types(prims).filter(t => t === SvgFigurePrimitiveType.POLYLINE).length, 1);
+  assert.deepEqual(prims.filter(p => p.type === SvgFigurePrimitiveType.POLYLINE && !p.guide).length, 1);
   assert.deepEqual(previewPrimitives(null), []);
+});
+
+const dOrigin = (id, role, axis, offsetMm) => ({ id, role, axis, kind: 'origin', offsetMm });
+
+test('基準線: origin の Datum ごとに bbox ± gap の破線＋役割名 text（s は縦線・t は横線）。labelOf を使う。editable／editKey は持たない', () => {
+  const pts = [{ s: 0, t: 0 }, { s: 100, t: 50 }];
+  const g = datumGuidePrimitives([dOrigin('a', 'stepEdge', 's', 30), dOrigin('b', 'ceilingFace', 't', 10)], pts, { gap: 7, labelOf: r => `L:${r}` });
+  const lines = g.filter(p => p.type === SvgFigurePrimitiveType.POLYLINE);
+  assert.deepEqual(lines.map(p => p.points), [[[30, -7], [30, 57]], [[-7, 10], [107, 10]]]);
+  for (const p of lines) assert.equal(p.dash, DetailDash.DASHED);
+  assert.deepEqual(g.filter(p => p.type === SvgFigurePrimitiveType.TEXT).map(p => p.text), ['L:stepEdge', 'L:ceilingFace']);
+  for (const p of g) { assert.equal(p.guide, true); assert.equal(p.editable, undefined); assert.equal(p.editKey, undefined); }
+  assert.equal(datumGuidePrimitives([dOrigin('a', 'stepEdge', 's', 0)], pts, { gap: 7 }).at(-1).text, 'stepEdge');
+});
+
+test('基準線【失敗系】: datum なし・頂点なし・end・非有限 offset・s/t 以外の軸は出さない', () => {
+  const pts = [{ s: 0, t: 0 }, { s: 10, t: 10 }];
+  assert.deepEqual(datumGuidePrimitives([], pts), []);
+  assert.deepEqual(datumGuidePrimitives(undefined, pts), []);
+  assert.deepEqual(datumGuidePrimitives([dOrigin('a', 'fl', 's', 0)], []), []);
+  assert.deepEqual(datumGuidePrimitives([{ ...dOrigin('a', 'fl', 't', 0), kind: 'end' }], pts), []);
+  assert.deepEqual(datumGuidePrimitives([dOrigin('a', 'fl', 's', NaN), dOrigin('b', 'fl', 't', Infinity)], pts), []);
+  assert.deepEqual(datumGuidePrimitives([dOrigin('a', 'fl', 'x', 0)], pts), []);
+});
+
+test('基準線: previewPrimitives は origin の Datum の位置（offset 反映後）に出し、既定の gap は PREVIEW_DIM_GAP_MM。end は出さない', () => {
+  const fig = stretchFigure(); // datums: ds0(s origin)・dt0(t origin)・dt1(t end)
+  const guides = previewPrimitives(fig).filter(p => p.guide);
+  assert.equal(guides.length, 4, 'origin 2 本ぶんの線＋text（end の dt1 は出ない）');
+  const v = guides.find(p => p.type === SvgFigurePrimitiveType.POLYLINE && p.points[0][0] === p.points[1][0]);
+  // 下書きの高さは 10+50+10=70（stretch は mm のまま歩く）
+  assert.deepEqual(v.points, [[0, -PREVIEW_DIM_GAP_MM], [0, 70 + PREVIEW_DIM_GAP_MM]]);
 });

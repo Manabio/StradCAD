@@ -33,7 +33,7 @@ import {
   ERR_DXF_BINARY, ERR_DXF_BAD_GROUP_CODE, ERR_DXF_TRUNCATED, ERR_DXF_UNEXPECTED, ERR_DXF_NOT_BYTES,
 } from '../error.js';
 import { validateDetailFigure, DetailValidationError } from '../detail/detailModel.js';
-import { previewPrimitives, airEdgeOverlays, PREVIEW_LABEL_OFFSET_MM, PREVIEW_LABEL_SIZE_PX } from '../detail/detailPreview.js';
+import { previewPrimitives, airEdgeOverlays, datumGuidePrimitives, PREVIEW_LABEL_OFFSET_MM, PREVIEW_LABEL_SIZE_PX } from '../detail/detailPreview.js';
 import { fitLocal } from '../detail/detailPlacement.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import {
@@ -54,7 +54,7 @@ export const DETAIL_ROLE_LABELS = Object.freeze({
   [DetailDatumRole.CEILING_FACE]:     '天井面',
   [DetailDatumRole.WALL_TOP]:         '腰壁の天端',
   [DetailDatumRole.WALL_BOTTOM]:      '垂れ壁の下端',
-  [DetailDatumRole.STEP_EDGE]:        '床の段差の立ち上がり面',
+  [DetailDatumRole.STEP_EDGE]:        '段差の立ち上がり面（平面・天伏の段差の線の位置）',
   [DetailDatumRole.GL]:               'GL',
   [DetailDatumRole.ROOF_SURFACE]:     '屋根面',
   [DetailDatumRole.EAVE_EDGE]:        '軒先',
@@ -955,7 +955,24 @@ function previewEntryOf(form) {
   return { ...entry, datums: entry.datums.map(d => (Number.isFinite(d.offsetMm) ? d : { ...d, offsetMm: 0 })) };
 }
 
-function fittedPrimitives(fitted) {
+// 基準線に出す役割名（表に無ければ役割の文字列のまま）。
+const roleLabelOf = role => DETAIL_ROLE_LABELS[role] ?? role;
+
+// 基準線は fit 後の基準の位置＝origin の Anchor が載る頂点（base＋offsetMm）。offsetMm だけでは base≠0 の試し込みでずれる。
+// 頂点が見つからない基準は出さない。
+function fittedDatums(form, fitted) {
+  const entry = entryFromForm(form);
+  const out = [];
+  for (const d of entry.datums) {
+    if (d.kind !== DetailDatumKind.ORIGIN) continue;
+    const a = entry.anchors.find(x => x.datumId === d.id);
+    const v = fitted.strokes.find(st => st.id === a?.strokeId)?.points[a?.vertexIndex];
+    if (v) out.push({ ...d, offsetMm: v[d.axis] });
+  }
+  return out;
+}
+
+function fittedPrimitives(fitted, form) {
   const out = [];
   for (const st of fitted.strokes) {
     const extra = { strokeId: st.id };
@@ -965,14 +982,15 @@ function fittedPrimitives(fitted) {
     out.push(...airEdgeOverlays(st.points, st.edgeMarks));
     st.points.forEach((p, i) => out.push(text(p.s + PREVIEW_LABEL_OFFSET_MM, p.t - PREVIEW_LABEL_OFFSET_MM, String(i), { size: PREVIEW_LABEL_SIZE_PX })));
   }
+  out.push(...datumGuidePrimitives(fittedDatums(form, fitted), fitted.strokes.flatMap(st => st.points), { labelOf: roleLabelOf }));
   return out;
 }
 
 /** プレビュー用プリミティブ。fitted（tryFit の成功結果）があれば試し込み後の形、無ければ下書き（各手の dim は editable）。手が 1 つも無ければ []。 */
 export function previewPrimitivesOf(form, fitted = null) {
   if (!form.strokes.some(s => s.moves.length > 0)) return [];
-  if (fitted && !fitted.error) return fittedPrimitives(fitted);
-  return previewPrimitives(previewEntryOf(form));
+  if (fitted && !fitted.error) return fittedPrimitives(fitted, form);
+  return previewPrimitives(previewEntryOf(form), { labelOf: roleLabelOf });
 }
 
 // ================================================================
