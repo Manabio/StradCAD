@@ -6,7 +6,7 @@
 //   S4: 階段室の開口は最初の壁まで見通し（800 の深度上限を掛けない）、開口越しに階段の見えがかりを描く。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature, StairType } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature, StairType, edgeKey } from '@core';
 import { buildBandLayers } from './sectionBandLayers.js';
 import { buildSectionFromLine } from './sectionContent.js';
 import { emitOpenSpanEdgeOnWalls } from './sectionEmit.js';
@@ -209,6 +209,62 @@ test('【失敗系・S1】階段室とつながらない隙間（向こう側に
   const { columns, gapMarks } = buildHallFaceC(graph);
   assert.equal(columns.flatMap(c => c.bands).some(b => b.farStair), false);
   assert.equal(gapMarks.some(p => p.type === 'text'), true);
+});
+
+// ---- 面の壁の奥側の材の面に突き当たる直交壁 ----
+// 面の壁は腰壁（天端900）にして、その上の開放スパンに隔て板（x=2000）の小口が見えるようにする。
+// 薄い面の壁（H(4000)・x 0..2500・下地100＝材 3950..4050）と厚い面の壁（x 2500..4000・下地300＝材 3850..4150）が
+// 同じ通りに並ぶ。隔て板の位置（x=2000）を覆うのは薄い壁だけ。切断線は 3930（軸CLの 70 手前）。
+const THIN_FAR_MM = 4050;
+const THICK_FAR_MM = 4150;
+const PARTITION_X_RANGE = [1900, 2100]; // 隔て板の材（1943.75..2050）が入る範囲。面の壁の端の縦線を除く
+const partitionXs = content => lineXs(content).filter(x => x > PARTITION_X_RANGE[0] && x < PARTITION_X_RANGE[1]);
+function makeKneeFaceScene(partitionStartMm, { thickWall = true } = {}) {
+  const scene = makeScene({ partition: { startOffset: partitionStartMm - 4000 } });
+  const { graph } = scene;
+  const H = graph.centerLines.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 4000);
+  const clV = v => graph.centerLines.find(c => c.centerLineType === CenterLineType.VERTICAL && c.value === v)
+    ?? graph.addCenterLine(CenterLineType.VERTICAL, v, { labeled: false, discipline: Discipline.ARCH });
+  const faceWall = (x0, x1, depth) => {
+    const w = graph.addWall(H, 0, false, clV(x0), 0, clV(x1), 0, { isRoomWall: false, backingDepth: depth, backingOffset: 0, wallFinish: 0 });
+    graph.setKneeDropWall(edgeKey(w.axisCL.id, w.clStart.id, w.clEnd.id), { knee: { topHeight: 900 } });
+  };
+  faceWall(0, thickWall ? 2500 : 4000, 100);
+  if (thickWall) faceWall(2500, 4000, 300);
+  // 面の壁を足すと隔て板の端は取り合いで再計算されるので、足し終えてから端を指定位置へ戻す。
+  for (const w of scene.walls) w.startOffset = partitionStartMm - 4000;
+  return scene;
+}
+function buildHallFaceWithRealCL(graph) {
+  const axisCL = graph.centerLines.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === 4000);
+  const line = { isVertical: false, axisValue: 4000 - OFFSET, lo: 0, hi: 4000 };
+  return buildSectionFromLine(line, buildBandLayers(graph), {
+    viewSign: 1, dirSign: 1, zRange: { loZ: 0, hiZ: CH },
+    face: { axisCL },
+    ends: { openLo: false, openHi: false, wallLessLo: false, wallLessHi: false },
+  });
+}
+
+test('【面の壁の奥側の材の面】隔て板の端が、その位置を覆う薄い面の壁の奥側の材の面（軸CLの先）にある: 両面の縦線を描く', () => {
+  const { graph, walls } = makeKneeFaceScene(THIN_FAR_MM);
+  assert.equal(Math.min(...walls.map(w => Math.min(w.coord1, w.coord2))), THIN_FAR_MM, '前提: 端が薄い壁の材の面にある');
+  const lo = Math.min(...walls.map(w => w.materialRange.lo)), hi = Math.max(...walls.map(w => w.materialRange.hi));
+  assert.deepEqual(partitionXs(buildHallFaceWithRealCL(graph).content), [lo, hi]);
+});
+
+test('【失敗系・面の壁の奥側の材の面】端が覆う壁の材の面より奥（+PROBE_EPS を超える）: 縦線は出ない', () => {
+  const { graph } = makeKneeFaceScene(THIN_FAR_MM + 10);
+  assert.deepEqual(partitionXs(buildHallFaceWithRealCL(graph).content), []);
+});
+
+test('【失敗系・面の壁の奥側の材の面】壁厚の違う面の壁が並ぶ: 薄い壁の位置の隔て板は、別の位置の厚い壁の奥側の面（4150）まで許さない', () => {
+  const thickEnd = makeKneeFaceScene(THICK_FAR_MM - 60);
+  assert.deepEqual(partitionXs(buildHallFaceWithRealCL(thickEnd.graph).content), [], '端 4090 は薄い壁の面 4050 より奥＝描かない');
+});
+
+test('【失敗系・面の壁の奥側の材の面】面の壁が無い: 従来どおり軸CLまでで、材の面の位置の端は拾わない', () => {
+  const { graph } = makeScene({ partition: { startOffset: THIN_FAR_MM - 4000 } });
+  assert.deepEqual(lineXs(buildHallFaceWithRealCL(graph).content), [], '面の壁なし→軸CL（4000+5）までしか許さない');
 });
 
 // ---- S4: 階段室の開口越しに見通す（ユーザー指示2026-10-14「ホール C」） ----

@@ -18,6 +18,7 @@ import {
 } from './sectionTypes.js';
 import { openingSectionPrimitives, openingSectionOverhangMm } from '../../openings/openingSection.js';
 import { drawnFloorProfileZMax, drawnFloorProfileZAt } from './floorProfileMath.js';
+import { sameAxisLine } from '../../finish/kneeDropWall.js';
 import {
   mergeIntervals, segmentInsideRect, subtractRectsFromLine, isZeroLengthLine, line, text,
 } from '../elevationPrimitives.js';
@@ -2126,8 +2127,8 @@ function openZRangesAt(columns, x) {
  * 正解」）。面の平面に壁が無い（'open'）範囲の向こうに、面の軸CLから奥へ延びる壁（階段の隔て板等）が
  * 立っていると、それは真横から見え、壁厚ぶんの2本の縦線になる。
  *
- * 対象は自階の層の壁で、(1)面に直交し (2)奥へ延びる側の端が面に接している（切断線〜面の軸CLの間。
- * `cut.face`が無ければ切断線）もの。切断壁（'cut'帯＝切断線を横切る壁）は別経路で描かれ、その位置は
+ * 対象は自階の層の壁で、(1)面に直交し (2)奥へ延びる側の端が面に接している（切断線〜面の壁の奥側の材の面の間。
+ * 直交壁は軸CLでなく材の面に突き当たる。その壁の位置を覆う面の壁が無い・`cut.face`が無ければ切断線〜面の軸CL）もの。切断壁（'cut'帯＝切断線を横切る壁）は別経路で描かれ、その位置は
  * 'open'帯ではないので重ならない。同じ軸CLで端が揃う壁（隔て板の下地壁＋仕上げ薄壁）は1枚として
  * 材の範囲の最小〜最大の外面2本だけ描く。面の端に材が届く壁（面自身の端壁）は`recessLo/Hi`が描くので除く。
  * z範囲は「その位置の'open'帯」∩「壁の存在z範囲」（`wallZRangesOf`。腰壁・天端プロファイル・上階への
@@ -2151,8 +2152,29 @@ export function emitOpenSpanEdgeOnWalls(columns, cut, wallZRangesOf = null, ceil
   const { line, viewSign } = cut;
   const refAxis = cut.face?.axisCL?.effectiveValue ?? line.axisValue;
   const { loX: faceLoX, hiX: faceHiX } = faceRangeX(cut);
-  // 面の壁に接する範囲＝切断線から面の軸CLまで（切断線は仕上げ面の分だけ室内側へ下がっている）。
-  const attachMaxMm = Math.max(0, (refAxis - line.axisValue) * viewSign) + PROBE_EPS_MM;
+  // 面の壁に接する範囲＝切断線から面の壁の奥側の材の面まで（切断線は仕上げ面の分だけ室内側へ下がっている）。
+  // 直交壁は面の壁の軸CLではなく奥側の材の面に突き当たるので、軸CLまでだと取りこぼす。
+  // 直交壁の位置を覆う面の壁（同じ通りの平行壁）が無い・`cut.face`が無いときは従来どおり面の軸CLまで。
+  const faceAxis = cut.face?.axisCL;
+  const faceWalls = faceAxis
+    ? walls.filter(w => w.isVertical === line.isVertical && w.materialRange && sameAxisLine(w.axisCL, faceAxis))
+    : [];
+  // 限界は直交壁ごとに、その壁の位置（材の幅）に接する・覆う面の壁だけから決める（壁厚の違う面の壁が並ぶとき、
+  // 薄い壁の位置に立つ直交壁を厚い壁の奥側の面まで許さない）。端の一致（面の壁の区間の継ぎ目）も覆うとみなす。
+  // 直交壁の位置は面の範囲の内にあるので、面の範囲での事前の絞り込みは要らない（覆う判定が兼ねる）。
+  // 覆う壁が無い（本当の開放スパン）なら面の軸CLまで。
+  const attachMaxFor = pw => {
+    // 直交壁の材の幅（軸方向）。面の壁は直交壁の取り合いで切れるので、直交壁の両脇に端が接する壁も覆うとみなす。
+    const atLo = Math.min(pw.materialRange.lo, pw.materialRange.hi), atHi = Math.max(pw.materialRange.lo, pw.materialRange.hi);
+    const covering = faceWalls.filter(fw => Math.min(fw.coord1, fw.coord2) - COORD_EPS_MM <= atHi
+      && atLo <= Math.max(fw.coord1, fw.coord2) + COORD_EPS_MM);
+    const farEdge = covering.length
+      ? (viewSign > 0
+        ? Math.max(...covering.map(fw => Math.max(fw.materialRange.lo, fw.materialRange.hi)))
+        : Math.min(...covering.map(fw => Math.min(fw.materialRange.lo, fw.materialRange.hi))))
+      : refAxis;
+    return Math.max(0, (farEdge - line.axisValue) * viewSign) + PROBE_EPS_MM;
+  };
   const groups = new Map(); // 軸CL → {walls, lo, hi, depth}
   const crossing = new Set();
   for (const w of walls) {
@@ -2164,7 +2186,7 @@ export function emitOpenSpanEdgeOnWalls(columns, cut, wallZRangesOf = null, ceil
     const key = w.axisCL?.id ?? w.axisCL ?? w.id;
     // 切断線より手前（室内側）へ延びる壁は切断壁（面を横切る壁）——同じ軸CLの壁は組ごと対象外。
     if (gapMm < -PROBE_EPS_MM) { crossing.add(key); continue; }
-    if (gapMm > attachMaxMm) continue;
+    if (gapMm > attachMaxFor(w)) continue;
     const lo = Math.min(w.materialRange.lo, w.materialRange.hi), hi = Math.max(w.materialRange.lo, w.materialRange.hi);
     const g = groups.get(key);
     if (g) { g.walls.push(w); g.lo = Math.min(g.lo, lo); g.hi = Math.max(g.hi, hi); }

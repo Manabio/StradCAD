@@ -170,7 +170,7 @@ if (cornerKneeCheck.valid) {
   graph.setKneeDropWall(cornerKneeKey, { knee: { topHeight: 900 }, drop: null, detailRefs: { [DetailSlot.KNEE_TOP]: KEY_CT }, frontSide });
 } else console.log('WARNING: 端の腰壁を省きます');
 
-// 戸（仕切り壁 y=2300）・窓（LDK 南外壁 x=2000）
+// 戸（仕切り壁 X1 の最初の一片＝洋室側 y 57.5..1442.5 の y 350..1150。実測）・窓（LDK 南外壁 x=2000）
 const partition = graph.walls.find(w => w.isVertical && !w.isExteriorWall && Math.abs(w.axisCL.effectiveValue - 4000) < 1);
 const south = graph.walls.find(w => w.isExteriorWall && !w.isVertical && Math.abs(w.axisCL.effectiveValue - 3000) < 1
   && Math.min(w.coord1, w.coord2) <= 2000 && Math.max(w.coord1, w.coord2) >= 2000);
@@ -178,6 +178,7 @@ check(!!partition && !!south, '仕切り壁と LDK 南外壁が引ける');
 const door = placeOpeningWithDefaults(graph, project, partition, { x: 4000, y: 2300 }, OpeningCategory.FITTING);
 const win = placeOpeningWithDefaults(graph, project, south, { x: 2000, y: 3000 }, OpeningCategory.WINDOW);
 console.log('door:', !!door.opening, door.error ?? '', ' window:', !!win.opening, win.error ?? '');
+if (door.opening) console.log(`door 位置: x=${door.opening.axisCL.effectiveValue} y=${door.opening.coord1}..${door.opening.coord2} 壁の軸CL=${partition.axisCL.effectiveValue} 壁 y=${Math.min(partition.coord1, partition.coord2)}..${Math.max(partition.coord1, partition.coord2)}`);
 check(!!door.opening && !!win.opening, '戸 1・窓 1 を配置');
 
 // 割当て（LDK のみ）
@@ -290,6 +291,26 @@ check(Object.values(withRefs.kneeCapBy).some(c => c['y-750(50下)'] + c['y-780(2
     }
   }
   check(byRoom['洋室'] === 0 && byRoom['納戸'] === 1 && !byRoom['LDK'], '洋室の南面の西端（組込み天板＝形状差が閾値以下）は差し替えず、納戸の北面の西端（カウンター天板）が輪郭 polyline 1 本に差し替わる');
+}
+
+// ---- 開放スパンの直交壁の小口（emitOpenSpanEdgeOnWalls）: 面の壁の奥側の材の面に突き当たる壁も拾う ----
+// LDK の東の面（X1 の仕切り壁）の腰壁（天端 800／900）の上の開放スパンに、洋室|納戸の仕切り壁 Yb（y=1500）が X1 の奥側の材の面で突き当たって見える。
+// その両面（壁厚ぶん離れた 2 本）の縦線が、腰壁の天端より上〜天井（z 900..2400）に中線で引かれる。
+// 位置は帯の面ローカル x なのでグラフから導く: 2 本の間隔＝Yb の壁の材の範囲（lo..hi）の幅。
+{
+  clearOverlays();
+  setOverlay(CatalogKind.DETAIL_FIGURE, { doc: figs, user: detailBuiltins });
+  const st = new ElevationModeState(G, P, { width: 1600, height: 1200 });
+  await st.init();
+  const ybWalls = G.walls.filter(w => !w.isVertical && Math.abs(w.axisCL.effectiveValue - 1500) < 1);
+  const ybWidth = Math.max(...ybWalls.map(w => w.materialRange.hi)) - Math.min(...ybWalls.map(w => w.materialRange.lo));
+  const ldkBand = st.bands.find(b => b.roomId === rl.id);
+  const tall = ldkBand.primitives.filter(p => p.type === 'line' && p.weight === 'medium' && p.x1 === p.x2
+    && Math.min(p.y1, p.y2) === -2400 && Math.max(p.y1, p.y2) === -900);
+  const xs = tall.map(p => p.x1).sort((a, b) => a - b);
+  console.log(`Yb の壁厚=${ybWidth}  LDK の帯の z −2400..−900 の中線の縦線 x:`, JSON.stringify(xs));
+  check(ybWalls.length > 0 && xs.some((x, i) => i + 1 < xs.length && Math.abs(xs[i + 1] - x - ybWidth) < 1e-6),
+    `LDK の帯: 開放スパンに見える Yb の壁の小口が壁厚 ${ybWidth} 離れた中線の縦線 2 本（z −2400..−900）で引かれる`);
 }
 
 // ---- 床の段差（S8b-3）: 小上がりの floorStep の有無で展開の source=detail の差を見る ----
