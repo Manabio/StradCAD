@@ -855,11 +855,14 @@ function appendStepFace(prims, {
   // 従来どおり帯CHへフォールバック。
   const stepCeilY = -(face.ceilAbsMm ?? CH);
   prims.push(line(0, floorY, run, floorY, { weight: stepCutWeight })); // 低い側床線
-  prims.push(line(0, topY,   run, topY,   { weight: stepSilhouetteWeight })); // 高い側床線(見付け上端。中線)
+  // 天井だけの段差見付け面（S8b-4b-1。stepHeightMm:0）には床の段差上端が無い（topY==floorY）
+  if (face.stepHeightMm > 0) prims.push(line(0, topY,   run, topY,   { weight: stepSilhouetteWeight })); // 高い側床線(見付け上端。中線)
   // QA修正（ユーザー明示指示）: 両端縦線（壁断面=CUT）はtopY（見付け上端）で止めず天井まで
   // 描画する——見付け上端はあくまで段差先の床の見えがかり線であり、壁自体は天井まで続くため。
-  prims.push(line(0,   floorY, 0,   stepCeilY, { weight: stepCutWeight }));
-  prims.push(line(run, floorY, run, stepCeilY, { weight: stepCutWeight }));
+  // 壁の無い端（stepEndWallAt0/Run===false。島の下がり天井の角）は CUT の縦線を引かない（小口は下の天井段差で SILHOUETTE）。
+  const wallAt0 = face.stepEndWallAt0 !== false, wallAtRun = face.stepEndWallAtRun !== false;
+  if (wallAt0) prims.push(line(0,   floorY, 0,   stepCeilY, { weight: stepCutWeight }));
+  if (wallAtRun) prims.push(line(run, floorY, run, stepCeilY, { weight: stepCutWeight }));
   prims.push(line(0, stepCeilY, run, stepCeilY, { weight: stepCutWeight })); // 天井線
   // 高い側の部屋の床の段差の部位図（Room.detailRefs の floorStep。S8b-3）から派生する水平線（高い側の床から t 下。面の全幅。開口は無い）
   for (const sp of floorStepLineSpecs(face, { materialMap, scaleDenom })) {
@@ -878,7 +881,34 @@ function appendStepFace(prims, {
   // 垂れ壁の明示指定がある軸だけ）にしか頼っておらず、指定が無い通常の段差見付け面では
   // アキが一切描かれない欠落があった（コミット5f8ec62で段差見付け面を新設した時点から
   // 一貫してこの欠落があり、後続のどのラウンドの変更にも起因しない）。
-  appendGapMark(prims, { x: 0, y: stepCeilY, w: run, h: -stepCeilY + topY }, stepDetailWeight);
+  // 天井の段差見付け（S8b-4b-1。face.ceilingSteps＝面ローカル区間ごとの見付け下端 lowCeilAbsMm）: 見付けの下端（断面の天井より下で
+  // 床〔または段差上端〕より上のとき）を SILHOUETTE、小口（壁の CUT 縦線の無い端）を SILHOUETTE、向こうの床が見る側の床より低ければ
+  // DETAIL＋DASHED で描き、アキは見付け下端の下から始める。
+  const fasciae = (face.ceilingSteps ?? []).filter(cs => -cs.lowCeilAbsMm > stepCeilY + GAP_EPS_MM && -cs.lowCeilAbsMm < topY - GAP_EPS_MM);
+  for (const cs of fasciae) {
+    const lowY = -cs.lowCeilAbsMm;
+    prims.push(line(cs.loX, lowY, cs.hiX, lowY, { weight: stepSilhouetteWeight }));
+    if (!(cs.loX <= GAP_EPS_MM && wallAt0)) prims.push(line(cs.loX, lowY, cs.loX, stepCeilY, { weight: stepSilhouetteWeight }));
+    if (!(cs.hiX >= run - GAP_EPS_MM && wallAtRun)) prims.push(line(cs.hiX, lowY, cs.hiX, stepCeilY, { weight: stepSilhouetteWeight }));
+    if (cs.beyondFloorDeltaMm != null && cs.beyondFloorDeltaMm < face.baseFloorDeltaMm - GAP_EPS_MM) {
+      prims.push(line(cs.loX, -cs.beyondFloorDeltaMm, cs.hiX, -cs.beyondFloorDeltaMm,
+        { weight: stepDetailWeight, dash: ElevationDash.DASHED }));
+    }
+  }
+  if (fasciae.length === 0) {
+    appendGapMark(prims, { x: 0, y: stepCeilY, w: run, h: -stepCeilY + topY }, stepDetailWeight);
+  } else {
+    // x 区間ごとに [見付け下端（ceilingSteps の外では断面の天井）, 床または段差上端] の矩形
+    const xs = [...new Set([0, run, ...fasciae.flatMap(cs => [cs.loX, cs.hiX])])].sort((p, q) => p - q);
+    for (let k = 0; k + 1 < xs.length; k++) {
+      const x0 = xs[k], x1 = xs[k + 1];
+      if (x1 - x0 < GAP_EPS_MM) continue;
+      const mid = (x0 + x1) / 2;
+      const cs = fasciae.find(c => mid > c.loX && mid < c.hiX);
+      const top = cs ? -cs.lowCeilAbsMm : stepCeilY;
+      appendGapMark(prims, { x: x0, y: top, w: x1 - x0, h: topY - top }, stepDetailWeight);
+    }
+  }
   for (const gap of kneeDropGapsOnFace(face, graph, CH)) {
     appendGapMark(prims, gap, stepDetailWeight);
   }

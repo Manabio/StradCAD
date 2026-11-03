@@ -346,7 +346,11 @@ const G1_ALLOWLIST = {
     reason: 'applyCenterLineAbsorptionOnPromote内、復号後のsnapshot.centerLines（保存形式の中間オブジェクト。' +
       'graphインスタンスではない）から吸収する中心線のエントリを除くための走査——lineIdRemap.js' +
       'makeFreshLineIdMapと同じ「snapshot.centerLinesの列挙」であり、種別条件のない全件操作（相手選択ではない）。' },
-  // 以下5件は graphList(graph, 'centerLines')（読み取りスコープ経由の全件列挙）。RE_GRAPHLIST_CENTERLINES で数える。
+  // 以下6件は graphList(graph, 'centerLines')（読み取りスコープ経由の全件列挙）。RE_GRAPHLIST_CENTERLINES で数える。
+  'elevation/elevationStepFace.js': { count: 1, category: 'not-partner-selection',
+    reason: 'findCLOfAnyKind（天井の段差見付け面の軸 CL・端の CL の同定。graphList(graph, \'centerLines\') を向き・座標一致で引く）。' +
+      '天井区画の境界は天伏専用の天井芯の上にもあり、通常の CL（findRunCLAt。天井芯を除く）が無いときの代替として' +
+      '種別を問わず拾う（相手選択ではなく、既にある境界座標に立つ CL の同定）。' },
   'elevation/elevationFloorProfile.js': { count: 1, category: 'not-partner-selection',
     reason: 'findRunCLAt。value 一致の最初を返す走査——種別条件あり（天井芯 isCeilingOnlyKind を除外済み。同座標の天井芯が先に並んでも中心線を返す回帰テストあり）。' },
   'elevation/space/zoneCeiling.js': { count: 1, category: 'not-partner-selection',

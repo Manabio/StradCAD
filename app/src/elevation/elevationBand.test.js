@@ -575,9 +575,12 @@ test('【問題修正2026-08その5】buildRoomBand: 外周壁の向こう側に
     p.type === 'line' && p.dash === 'dashed' && p.weight === 'thin' && p.y1 === p.y2);
   // 問題修正2026-08その6: 段差見付け面（子/親境界の見付けそのもの＝「またぐ面」）には
   // 高い側（親）の天井の破線が出る——外周面（A/B/C/D）には出ない、が本テストの主眼。
-  assert.equal(dashedHoriz.length, 1,
-    `破線は段差見付け面の1本だけで、外周面には出ないはず（実際:${JSON.stringify(dashedHoriz)}）`);
-  assert.equal(dashedHoriz[0].y1, -2400, '見付け面の破線は高い側（親）の天井(-2400)＝天井断面(-2300)の上+100のはず');
+  // S8b-4b-1: 子の天井(2300)が親(2400)より低いので、親側から見る天井の段差見付け面も境界上にできる。
+  // その面には「向こうの床（子の床 +100 の高さ）」の破線が1本出る（外周面には出ない）。
+  assert.equal(dashedHoriz.length, 2,
+    `破線は段差見付け面の1本＋天井の段差見付け面の向こうの床の1本だけで、外周面には出ないはず（実際:${JSON.stringify(dashedHoriz)}）`);
+  assert.deepEqual(dashedHoriz.map(l => l.y1).sort((a, b) => a - b), [-2400, 100],
+    '破線は高い側（親）の天井(-2400)＝天井断面(-2300)の上+100と、天井の段差見付け面の向こうの床(子の床 y=+100)のはず');
 });
 
 // ---- 問題修正2026-08その5: 壁の向こう側に部分指定の子がある面には、その天井の破線が出る ----
@@ -669,15 +672,16 @@ test('【問題修正2026-08その4改・その6】buildRoomBand: 壁面同士�
 
   const band = buildRoomBand(room, graph);
   const vDims = band.primitives.filter(p => p.type === 'dim' && p.dir === 'v');
-  assert.equal(vDims.length, 4,
-    `帯の左1本＋右CH寸法2本(B/D)＋見付け面の左1本の計4本のはず（実際:${JSON.stringify(vDims)}）`);
-  // 壁面同士の継ぎ目由来の左寸法は無く、追加の左寸法は見付け面の1本だけ
+  // S8b-4b-1: 子の天井(2300)が親(2400)より低い境界には天井の段差見付け面（親側から見る。床0・天井2400）もできる。
+  // 帯には床の段差見付け面（床+100・天井2300）と天井の段差見付け面（床0・天井2400）が並び、継ぎ目ごとに起点が変わる側にCH寸法が付く。
+  assert.equal(vDims.length, 6,
+    `帯の左1本＋床の段差見付け面まわりの計5本の計6本のはず（実際:${JSON.stringify(vDims)}）`);
+  // 壁面同士の継ぎ目由来の左寸法は無く、床の段差見付け面の左寸法は1本だけ
   // （床=低い側+100・天井=低い側の天井-2300・値=低い側の実効CH2400）。
   const leftDims = vDims.filter(d => d.at < d.foot);
-  assert.equal(leftDims.length, 2, '左配置は帯先頭＋見付け面の2本のはず');
-  const stepLeft = leftDims.find(d => d.from === -2300 && d.to === 100);
-  assert.ok(stepLeft, '見付け面の左CH寸法(from=-2300,to=100)が見つかるはず');
-  assert.equal(stepLeft.label, 2400, '値は低い側エリアの実効CH(2400)のはず');
+  assert.equal(leftDims.filter(d => d.from === -2300 && d.to === 100).length, 2,
+    '床の段差見付け面の左CH寸法(from=-2300,to=100)が見つかるはず（天井の段差見付け面の次の面ぶんも同形）');
+  assert.ok(leftDims.every(d => d.label === 2400 || d.label === '2400'), '値は実効CH(2400)のはず');
 });
 
 // ==== WP-1: layoutBandFaces の ctx.faceOverride フック ====

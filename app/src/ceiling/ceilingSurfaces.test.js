@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoomFeature, RoomKind, CeilingZone, StairType, CenterLineType, Discipline } from '@core';
-import { roomHasCeiling, ceilingSurfacesOf } from './ceilingSurfaces.js';
+import { roomHasCeiling, ceilingSurfacesOf, ceilingStepEdges } from './ceilingSurfaces.js';
 import { worldToCell, CEILING_CELL_GRID, cellBoundsFromKey } from '../finish/gridCells.js';
 import { ceilingGroupsOf } from './ceilingGroups.js';
 import { buildCeilingCellOwners, ceilingCellOwnersOf } from './ceilingOwners.js';
@@ -428,4 +428,28 @@ test('屋外部屋: feature なしのポーチは天井面が出る（zMm＝FL�
   ]);
   porch.setOverride('exteriorCeiling', '0');
   assert.deepEqual(ceilingSurfacesOf(g.graph), []);
+});
+
+test('ceilingStepEdges: 平らな面どうしが辺を共有し高さが 0.5 を超えて違う区間だけ。highSign は高い側の面が線のどちら側か', () => {
+  const flat = (rects, zMm, shape = 'flat') => ({ rects, zMm, shape });
+  const low = flat([rect(0, 0, 1000, 1000)], 2100), high = flat([rect(1000, 0, 2000, 500), rect(1000, 500, 2000, 1000)], 2400);
+  const edges = ceilingStepEdges([low, high]);
+  assert.equal(edges.length, 2, '高い側の 2 矩形ぶん（隣接する区間は呼び元が結合する）');
+  assert.deepEqual(edges.map(e => [e.isVertical, e.value, e.lo, e.hi, e.highSign]), [
+    [true, 1000, 0, 500, 1],
+    [true, 1000, 500, 1000, 1],
+  ]);
+  assert.ok(edges.every(e => e.low === low && e.high === high));
+  const above = ceilingStepEdges([flat([rect(0, 0, 1000, 1000)], 2400), flat([rect(0, 1000, 1000, 2000)], 2100)]);
+  assert.deepEqual(above.map(e => [e.isVertical, e.value, e.lo, e.hi, e.highSign]), [[false, 1000, 0, 1000, -1]], '高い側が y の小さい側なら −1');
+});
+
+test('ceilingStepEdges: 高さの差が 0.5 以下・傾斜や円弧の面・辺を共有しない面は対象外（空配列）', () => {
+  const rects = [rect(0, 0, 1000, 1000)], next = [rect(1000, 0, 2000, 1000)];
+  assert.deepEqual(ceilingStepEdges([{ rects, zMm: 2400 }, { rects: next, zMm: 2400.5 }]), [], '差 0.5 は同じ高さ');
+  assert.equal(ceilingStepEdges([{ rects, zMm: 2400 }, { rects: next, zMm: 2400.6 }]).length, 1);
+  assert.deepEqual(ceilingStepEdges([{ rects, zMm: 2400 }, { rects: next, zMm: 2000, shape: 'slope' }]), []);
+  assert.deepEqual(ceilingStepEdges([{ rects, zMm: 2400, shape: 'arc' }, { rects: next, zMm: 2000 }]), []);
+  assert.deepEqual(ceilingStepEdges([{ rects, zMm: 2400 }, { rects: [rect(1000, 1000, 2000, 2000)], zMm: 2000 }]), [], '角だけ接する');
+  assert.deepEqual(ceilingStepEdges([]), []);
 });

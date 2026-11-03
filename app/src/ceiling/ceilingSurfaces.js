@@ -128,12 +128,39 @@ export function ceilingSurfacesOf(graph) {
 
 const EPS = CEILING_BOUNDARY_EPS_MM;
 
-// 2 つの矩形が辺を共有するか（辺が EPS 以内で一致し、その辺の方向の重なりが EPS を超える）。
-function rectsShareEdge(a, b) {
-  const yOverlap = Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1);
-  const xOverlap = Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1);
-  return (yOverlap > EPS && (Math.abs(a.x2 - b.x1) <= EPS || Math.abs(a.x1 - b.x2) <= EPS))
-    || (xOverlap > EPS && (Math.abs(a.y2 - b.y1) <= EPS || Math.abs(a.y1 - b.y2) <= EPS));
+/**
+ * 天井の段差の辺の列挙。平らな面（shape が flat／省略）どうしが矩形の辺を共有し（辺が EPS 以内で一致・その辺の方向の重なりが EPS 超）、
+ * 天井の高さ zMm が EPS を超えて違う区間（sameHeightBoundarySegments の補集合と同じ書き方）。傾斜・円弧・ドームの面は対象外。
+ * isVertical＝x=value 上の線（sameHeightBoundarySegments の horizontal:false）。highSign＝高い側の面が線のどちら側か
+ * （線に直交する軸の +1＝座標が大きい側／−1＝小さい側）。展開の段差見付け面の inward（高い側＝見る側）の元。
+ * @param {Array<{rects: Array<{x1:number,y1:number,x2:number,y2:number}>, zMm: number, shape?: string}>} surfaces
+ * @returns {Array<{isVertical:boolean, value:number, lo:number, hi:number, low:object, high:object, highSign:1|-1}>}
+ */
+export function ceilingStepEdges(surfaces) {
+  const out = [];
+  const isFlat = s => (s.shape ?? 'flat') === 'flat';
+  for (let i = 0; i < surfaces.length; i++) {
+    for (let j = i + 1; j < surfaces.length; j++) {
+      const [si, sj] = [surfaces[i], surfaces[j]];
+      if (!isFlat(si) || !isFlat(sj) || !(Math.abs(si.zMm - sj.zMm) > EPS)) continue;
+      const [low, high] = si.zMm < sj.zMm ? [si, sj] : [sj, si];
+      for (const a of low.rects) {
+        for (const b of high.rects) {
+          const yLo = Math.max(a.y1, b.y1), yHi = Math.min(a.y2, b.y2);
+          if (yHi - yLo > EPS) {
+            if (Math.abs(a.x2 - b.x1) <= EPS) out.push({ isVertical: true, value: a.x2, lo: yLo, hi: yHi, low, high, highSign: 1 });
+            if (Math.abs(a.x1 - b.x2) <= EPS) out.push({ isVertical: true, value: a.x1, lo: yLo, hi: yHi, low, high, highSign: -1 });
+          }
+          const xLo = Math.max(a.x1, b.x1), xHi = Math.min(a.x2, b.x2);
+          if (xHi - xLo > EPS) {
+            if (Math.abs(a.y2 - b.y1) <= EPS) out.push({ isVertical: false, value: a.y2, lo: xLo, hi: xHi, low, high, highSign: 1 });
+            if (Math.abs(a.y1 - b.y2) <= EPS) out.push({ isVertical: false, value: a.y1, lo: xLo, hi: xHi, low, high, highSign: -1 });
+          }
+        }
+      }
+    }
+  }
+  return out;
 }
 
 // 同じ家族の部屋か（同じ部屋・参照の親子・同じ親を参照する兄弟）。段差を作る部分指定の子と親、子どうしの境を拾う。
@@ -169,19 +196,12 @@ export function ceilingStepHeightsByOwner(graph) {
   }
   const byOwner = new Map();
   if (owned.size > 0) {
-    const faces = ceilingSurfacesOf(graph).filter(f => (f.shape ?? 'flat') === 'flat');
-    for (let i = 0; i < faces.length; i++) {
-      for (let j = i + 1; j < faces.length; j++) {
-        const [fa, fb] = [faces[i], faces[j]];
-        const dz = Math.abs(fa.zMm - fb.zMm);
-        if (!(dz > EPS) || !sameRoomFamily(graph, fa.roomId, fb.roomId)) continue;
-        if (!fa.rects.some(a => fb.rects.some(b => rectsShareEdge(a, b)))) continue;
-        const low = fa.zMm < fb.zMm ? fa : fb;
-        const key = ceilingStepOwnerKey(low.roomId, low.zoneId);
-        if (!owned.has(key)) continue;
-        if (!byOwner.has(key)) byOwner.set(key, new Set());
-        byOwner.get(key).add(dz);
-      }
+    for (const e of ceilingStepEdges(ceilingSurfacesOf(graph))) {
+      if (!sameRoomFamily(graph, e.low.roomId, e.high.roomId)) continue;
+      const key = ceilingStepOwnerKey(e.low.roomId, e.low.zoneId);
+      if (!owned.has(key)) continue;
+      if (!byOwner.has(key)) byOwner.set(key, new Set());
+      byOwner.get(key).add(e.high.zMm - e.low.zMm);
     }
   }
   return (room, zone = null) => [...(byOwner.get(ceilingStepOwnerKey(room.id, zone?.id ?? null)) ?? [])].sort((a, b) => a - b);

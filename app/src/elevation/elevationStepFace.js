@@ -9,6 +9,9 @@ import { letterOf, DIR_SIGN, perpFaceAt, CORNER_TOL_MM } from './elevationFaces.
 import { roomOwnerByCell, collectRunBreaks, findRunCLAt } from './elevationFloorProfile.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { MIN_FACE_RUN_MM, GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from './elevationStyle.js';
+import { ceilingStepEdgesOf } from './space/zoneCeiling.js';
+import { graphList } from '../graphReadScope.js';
+import { CenterLineType } from '@core';
 // GAP_EPS: 物理的に意味を持たない極小幅(mm)の許容差。CL昇格/降格・再スナップ由来の
 // sub-micron誤差を吸収する目的（elevationFloorProfile.js等と共通。R4）。
 // PROBE_EPS_MM: 輪郭線分から内側/外側へ覗き込むプローブ距離（R4共通定数）。
@@ -116,27 +119,9 @@ function mergeRiserSegments(segs) {
  * @returns {object}
  */
 export function buildStepFaces(seg, wallFaces, graph, parentFL) {
-  const letter = letterOf(seg.isVertical, seg.inward);
-  const dirSign = DIR_SIGN[letter];
-  const axisCL = findAxisCL(graph, seg.isVertical, seg.value);
-  const loFace = perpFaceAt(wallFaces, seg.isVertical, seg.value, seg.lo);
-  const hiFace = perpFaceAt(wallFaces, seg.isVertical, seg.value, seg.hi);
-  let lo = loFace ? loFace.faceValue : seg.lo;
-  let hi = hiFace ? hiFace.faceValue : seg.hi;
-  // QA修正（幅0の展開図バグ）: 元のseg自体が短い（隣接する2つの隅にごく近い）場合、両端の
-  // 隣接壁面のfaceValueへ個別に詰めるとスナップ後にlo>=hiへ反転・退化しうる（例: 短い見付け面の
-  // 両端が異なる方向へスナップされ交差する）。反転・退化したらスナップ前のCL値(seg.lo/hi)へ
-  // フォールバックする——それでも短い場合はcomposeRoomFaces最終段のMIN_FACE_RUN_MMガードが除去する。
-  if (hi - lo < GAP_EPS) { lo = seg.lo; hi = seg.hi; }
+  const base = stepFaceBase(seg, wallFaces, graph);
+  const { letter, dirSign, axisCL, lo, hi, startCLId, endCLId } = base;
   const stepHeightMm = seg.highFL - seg.lowFL;
-  // QA修正（項目4根本原因）: startCLId/endCLIdへ段差自身のaxisCL.id（=面に直交する軸）を
-  // 両端とも詰めていたため、faceBoundaryLocalX（startCLId/endCLIdの位置差でROW1境界を求める）が
-  // 同一CLの差=0という退化した幅0の境界を返していた。通常面と同じ規約
-  // （startCLIdは世界座標loを・endCLIdは世界座標hiを決めるCLのid。elevationOpenSpan.jsの
-  // resolveEndのコメント参照）に合わせ、両端の直交壁面（loFace/hiFace）自身のaxisCL.idを使う
-  // ——見つからなければ段差自身のaxisCL.id（従来どおり。退化はするが少なくとも例外にはしない）。
-  const startCLId = loFace ? loFace.axisCL.id : (axisCL?.id ?? null);
-  const endCLId   = hiFace ? hiFace.axisCL.id : (axisCL?.id ?? null);
   // 問題修正2026-08その6（ユーザー明示指示。実機の「C1」=この見付け面）: 見付け面は
   // 「低い側エリア（例: 部屋3）を見込む展開図」——天井断面はその低い側エリア自身の天井
   // （ceilAbsMm=低い側FL+低い側の解決済みCH）。高い側エリア（親3'等）の天井は
@@ -163,6 +148,41 @@ export function buildStepFaces(seg, wallFaces, graph, parentFL) {
 }
 
 /**
+ * 段差見付け面（床・天井とも）の共通部分: 文字・向き・軸CL・両端を直交壁面のfaceValueへ詰めた範囲・端のCL id。
+ * lo/hiは両端にある直交壁面のfaceValueへ詰める（CORNER_TOL_MM以内に直交壁面が無ければCL値のまま）。
+ * loFace/hiFaceは詰めに使った直交壁面（無ければnull＝その端に壁が無い）。
+ */
+function stepFaceBase(seg, wallFaces, graph, { ceilingOnlyCLs = false } = {}) {
+  const letter = letterOf(seg.isVertical, seg.inward);
+  const dirSign = DIR_SIGN[letter];
+  // ceilingOnlyCLs（天井の段差見付け面）: 天井区画の境界は天伏専用の天井芯の上にもあるので、通常の CL が無ければ天井芯も軸 CL として拾う
+  // （axisCL が null の面は後続の注記・袖壁判定が引けない）。壁の無い端の端 CL も同様に天井芯まで探す（両端が同じ CL の幅 0 の境界を避ける）。
+  const axisCL = findAxisCL(graph, seg.isVertical, seg.value)
+    ?? (ceilingOnlyCLs ? findCLOfAnyKind(graph, seg.isVertical, seg.value) : null);
+  const loFace = perpFaceAt(wallFaces, seg.isVertical, seg.value, seg.lo);
+  const hiFace = perpFaceAt(wallFaces, seg.isVertical, seg.value, seg.hi);
+  let lo = loFace ? loFace.faceValue : seg.lo;
+  let hi = hiFace ? hiFace.faceValue : seg.hi;
+  // QA修正（幅0の展開図バグ）: 元のseg自体が短い（隣接する2つの隅にごく近い）場合、両端の
+  // 隣接壁面のfaceValueへ個別に詰めるとスナップ後にlo>=hiへ反転・退化しうる（例: 短い見付け面の
+  // 両端が異なる方向へスナップされ交差する）。反転・退化したらスナップ前のCL値(seg.lo/hi)へ
+  // フォールバックする——それでも短い場合はcomposeRoomFaces最終段のMIN_FACE_RUN_MMガードが除去する。
+  if (hi - lo < GAP_EPS) { lo = seg.lo; hi = seg.hi; }
+  // QA修正（項目4根本原因）: startCLId/endCLIdへ段差自身のaxisCL.id（=面に直交する軸）を
+  // 両端とも詰めていたため、faceBoundaryLocalX（startCLId/endCLIdの位置差でROW1境界を求める）が
+  // 同一CLの差=0という退化した幅0の境界を返していた。通常面と同じ規約
+  // （startCLIdは世界座標loを・endCLIdは世界座標hiを決めるCLのid。elevationOpenSpan.jsの
+  // resolveEndのコメント参照）に合わせ、両端の直交壁面（loFace/hiFace）自身のaxisCL.idを使う
+  // ——見つからなければ段差自身のaxisCL.id（従来どおり。退化はするが少なくとも例外にはしない）。
+  const endCLOf = (face, pos) => face ? face.axisCL.id
+    : ((ceilingOnlyCLs ? (findAxisCL(graph, !seg.isVertical, pos) ?? findCLOfAnyKind(graph, !seg.isVertical, pos)) : null)?.id
+      ?? axisCL?.id ?? null);
+  const startCLId = endCLOf(loFace, seg.lo);
+  const endCLId   = endCLOf(hiFace, seg.hi);
+  return { letter, dirSign, axisCL, lo, hi, startCLId, endCLId, loFace, hiFace };
+}
+
+/**
  * 床の段差の部位図（Room.detailRefs の floorStep）を持つ部屋ごとに、その部屋が高い側になる段差の高さ（mm・昇順・重複なし）を返す。
  * 通知（fit を試す段差高）の供給元。floorStep を持つ部屋が無ければ stepRiserSegments を呼ばない。
  * @param {object|null} graph
@@ -184,10 +204,136 @@ export function floorStepHeightsByOwner(graph) {
   return room => [...(byOwner.get(room) ?? [])].sort((a, b) => a - b);
 }
 
+// 区間 [lo,hi] から ranges（[a,b][]）が覆う部分を差し引いた残り（幅 GAP_EPS 以上）。
+function subtractRanges(lo, hi, ranges) {
+  let remaining = [[lo, hi]];
+  for (const [a, b] of unionRanges(ranges)) {
+    const next = [];
+    for (const [rlo, rhi] of remaining) {
+      if (b <= rlo + GAP_EPS || a >= rhi - GAP_EPS) { next.push([rlo, rhi]); continue; }
+      if (a > rlo) next.push([rlo, Math.min(a, rhi)]);
+      if (b < rhi) next.push([Math.max(b, rlo), rhi]);
+    }
+    remaining = next.filter(([x, y]) => y - x >= GAP_EPS);
+  }
+  return remaining;
+}
+
+/**
+ * 天井の段差見付け面の元（S8b-4b-1）。parentRoom の帯の家族（自身＋部分指定の子）の平らな天井面どうしが辺を共有し、
+ * 天井の高さが違う区間のうち、境界の上に壁（同軸・同向き・走り範囲が重なる壁。腰壁・垂れ壁も）が無い部分。
+ * 家族の外（隣室）との差は対象外。inward＝高い側（見る側＝空気側）を指す符号（床の段差見付け面の対称）。
+ * 同一 value・inward・低い側の面・高い側の面で隣接する区間は結合する。
+ * @param {import('@core').Room} parentRoom
+ * @param {object} graph
+ * @returns {Array<{isVertical:boolean, value:number, lo:number, hi:number, inward:1|-1,
+ *   lowSurface:object, highSurface:object, lowRoom:object, highRoom:object}>}
+ */
+export function ceilingStepSegments(parentRoom, graph) {
+  const edges = ceilingStepEdgesOf(graph);
+  if (edges.length === 0) return [];
+  const family = new Set([...roomOwnerByCell(parentRoom, graph).values()].map(r => r.id));
+  const walls = graphList(graph, 'walls') ?? [];
+  const out = [];
+  for (const e of edges) {
+    if (!family.has(e.low.roomId) || !family.has(e.high.roomId)) continue;
+    const lowRoom = graph.roomMap?.get(e.low.roomId), highRoom = graph.roomMap?.get(e.high.roomId);
+    if (!lowRoom || !highRoom) continue;
+    const covered = [];
+    for (const w of walls) {
+      if (!!w.isVertical !== e.isVertical) continue;
+      const axis = w.axisCL?.value;
+      if (!Number.isFinite(axis) || Math.abs(axis - e.value) > GAP_EPS) continue;
+      // 壁の走り範囲は端の CL から CL まで（coord1/2 は隅の直交壁の厚みぶん引き戻した仕上げ側の値で、辺の端の隅の四角が漏れる）
+      const [s, t] = [w.clStart?.value, w.clEnd?.value];
+      if (!Number.isFinite(s) || !Number.isFinite(t)) continue;
+      const a = Math.min(s, t), b = Math.max(s, t);
+      if (b > e.lo + GAP_EPS && a < e.hi - GAP_EPS) covered.push([Math.max(a, e.lo), Math.min(b, e.hi)]);
+    }
+    for (const [lo, hi] of subtractRanges(e.lo, e.hi, covered)) {
+      out.push({
+        isVertical: e.isVertical, value: e.value, lo, hi, inward: e.highSign,
+        lowSurface: e.low, highSurface: e.high, lowRoom, highRoom,
+      });
+    }
+  }
+  const sorted = out.sort((a, b) =>
+    a.isVertical - b.isVertical || a.value - b.value || a.inward - b.inward || a.lo - b.lo);
+  const merged = [];
+  for (const s of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && last.isVertical === s.isVertical && last.value === s.value && last.inward === s.inward &&
+        last.lowSurface === s.lowSurface && last.highSurface === s.highSurface && Math.abs(last.hi - s.lo) < GAP_EPS) {
+      last.hi = Math.max(last.hi, s.hi);
+    } else {
+      merged.push({ ...s });
+    }
+  }
+  return merged;
+}
+
+/**
+ * 天井の段差見付けの高さ（帯の親の FL 基準。床の段差見付け面 buildStepFaces と同じ式）。
+ * 床段差込みの zMm は使わない（zoneCeiling.js の規律どおり、各面の chMm と effectiveFloorLevel から組む）。
+ * 見付けの高さ（断面の天井−見付け下端）が正でなければ null。
+ * @returns {{baseFloorDeltaMm:number, ceilAbsMm:number, lowCeilAbsMm:number, ceilStepHeightMm:number, beyondFloorDeltaMm:number}|null}
+ */
+function ceilingStepHeights(seg, graph, parentFL) {
+  const chOf = (surface, room) => (Number.isFinite(surface.chMm) ? surface.chMm : roomCeilingHeight(graph, room).mm);
+  const baseFloorDeltaMm = graph.effectiveFloorLevel(seg.highRoom) - parentFL;
+  const beyondFloorDeltaMm = graph.effectiveFloorLevel(seg.lowRoom) - parentFL;
+  const ceilAbsMm = baseFloorDeltaMm + chOf(seg.highSurface, seg.highRoom);
+  const lowCeilAbsMm = beyondFloorDeltaMm + chOf(seg.lowSurface, seg.lowRoom);
+  const ceilStepHeightMm = ceilAbsMm - lowCeilAbsMm;
+  if (!(ceilStepHeightMm > GAP_EPS)) return null;
+  return { baseFloorDeltaMm, ceilAbsMm, lowCeilAbsMm, ceilStepHeightMm, beyondFloorDeltaMm };
+}
+
+// ceilingSteps の1件（面ローカル区間 [loX,hiX]。lowSurface＝持ち主の面の識別: zoneId≠null→区画・他は部屋。継承なし）。
+function ceilingStepEntry(loX, hiX, h, seg) {
+  return {
+    loX, hiX, lowCeilAbsMm: h.lowCeilAbsMm, ceilStepHeightMm: h.ceilStepHeightMm, beyondFloorDeltaMm: h.beyondFloorDeltaMm,
+    lowSurface: { roomId: seg.lowSurface.roomId, zoneId: seg.lowSurface.zoneId ?? null },
+  };
+}
+
+/**
+ * ceilingStepSegments の1件 → 天井だけの段差見付け面（kind:'step'・stepHeightMm:0・ceilingSteps を1件持つ）。
+ * letter/dirSign/originWorld・隅への詰め・startCLId/endCLId は床の段差見付け面と同じ規則。
+ * 端に直交壁面が無い（島の下がり天井の角）側は stepEndWallAt0/Run を false にする（CUT の縦線を引かず小口だけ描く）。
+ * @param {object} seg - ceilingStepSegments の1件
+ * @param {object[]} wallFaces
+ * @param {object} graph
+ * @param {object} heights - ceilingStepHeights の結果
+ * @returns {object}
+ */
+function buildCeilingStepFace(seg, wallFaces, graph, heights) {
+  const { letter, dirSign, axisCL, lo, hi, startCLId, endCLId, loFace, hiFace } = stepFaceBase(seg, wallFaces, graph, { ceilingOnlyCLs: true });
+  const run = hi - lo;
+  // ローカル0側の世界端は dirSign>0 なら lo 側（originWorld の規約）
+  const [wallAt0, wallAtRun] = dirSign > 0 ? [!!loFace, !!hiFace] : [!!hiFace, !!loFace];
+  return {
+    letter, dirSign, isVertical: seg.isVertical, axisCL, inward: seg.inward,
+    faceValue: seg.value, hasRealWall: true,
+    lo, hi, run, originWorld: dirSign > 0 ? lo : hi,
+    startCLId, endCLId,
+    hasWallAtLocal0: true, hasWallAtLocalRun: true,
+    kind: 'step', stepHeightMm: 0, baseFloorDeltaMm: heights.baseFloorDeltaMm, ceilAbsMm: heights.ceilAbsMm,
+    stepEndWallAt0: wallAt0, stepEndWallAtRun: wallAtRun,
+    ceilingSteps: [ceilingStepEntry(0, run, heights, seg)],
+  };
+}
+
 // R6: axis方向（isVertical面ならVERTICAL）のCL探索は、findRunCLAt（run方向=axis方向の反転）に
 // isVerticalを反転して渡すのと等価なため委譲する（elevationFloorProfile.js）。
 function findAxisCL(graph, isVertical, value) {
   return findRunCLAt(graph, !isVertical, value);
+}
+
+// 種別を問わない CL 探索（天伏専用の天井芯も含む）。isVertical＝x=value の線（VERTICAL の CL）。
+function findCLOfAnyKind(graph, isVertical, value) {
+  const type = isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL;
+  return (graphList(graph, 'centerLines') ?? []).find(cl => cl.centerLineType === type && cl.value === value) ?? null;
 }
 
 /**
@@ -279,15 +425,45 @@ export function subtractOpenSpanCoverage(riserSegs, faces) {
  * @param {object[]} faces
  * @param {import('@core').Room} room
  * @param {object} graph
+ * @param {{ceilingSteps?:boolean}} [opts] ceilingSteps（既定 true）: 天井の段差見付け面（S8b-4b-1）も作る。
+ *   床の段差見付け面と同じ (isVertical, faceValue, inward) で重なる区間はその床の面の ceilingSteps へ合流し、
+ *   残りだけ天井だけの面（stepHeightMm:0）にして床の面の後ろに積む。階段帯は渡さない（先送り）。
  * @returns {object[]}
  */
-export function insertStepFaces(faces, room, graph) {
+export function insertStepFaces(faces, room, graph, { ceilingSteps = true } = {}) {
   const rawRisers = stepRiserSegments(room, graph);
   const risers = subtractOpenSpanCoverage(rawRisers, faces);
-  if (risers.length === 0) return faces;
+  const ceilSegs = ceilingSteps
+    ? subtractOpenSpanCoverage(ceilingStepSegments(room, graph), faces)
+    : [];
+  if (risers.length === 0 && ceilSegs.length === 0) return faces;
 
   const parentFL = graph.effectiveFloorLevel(room);
-  const stepFaces = risers.map(seg => buildStepFaces(seg, faces, graph, parentFL));
+  const floorFaces = risers.map(seg => buildStepFaces(seg, faces, graph, parentFL));
+  const ceilFaces = [];
+  for (const cs of ceilSegs) {
+    const heights = ceilingStepHeights(cs, graph, parentFL);
+    if (!heights) continue;
+    let rest = [[cs.lo, cs.hi]];
+    risers.forEach((rs, k) => {
+      const ff = floorFaces[k];
+      // 同じ線・同じ向きで、見る側の床の高さが一致する床の面へ合流する（R2。面を重複させない）
+      if (rs.isVertical !== cs.isVertical || rs.inward !== cs.inward || Math.abs(rs.value - cs.value) > GAP_EPS) return;
+      if (Math.abs(ff.baseFloorDeltaMm - heights.baseFloorDeltaMm) > GAP_EPS) return;
+      const a = Math.max(cs.lo, rs.lo), b = Math.min(cs.hi, rs.hi);
+      if (b - a < GAP_EPS) return;
+      const xa = (a - ff.originWorld) * ff.dirSign, xb = (b - ff.originWorld) * ff.dirSign;
+      const loX = Math.max(0, Math.min(xa, xb)), hiX = Math.min(ff.run, Math.max(xa, xb));
+      if (hiX - loX < GAP_EPS) return;
+      ff.ceilingSteps = [...(ff.ceilingSteps ?? []), ceilingStepEntry(loX, hiX, heights, cs)]
+        .sort((p, q) => p.loX - q.loX);
+      rest = rest.flatMap(([rlo, rhi]) => subtractRanges(rlo, rhi, [[a, b]]));
+    });
+    for (const [lo, hi] of rest) {
+      ceilFaces.push(buildCeilingStepFace({ ...cs, lo, hi }, faces, graph, heights));
+    }
+  }
+  const stepFaces = [...floorFaces, ...ceilFaces];
   const out = [...faces];
   for (const step of stepFaces) {
     const startWorld = step.dirSign > 0 ? step.lo : step.hi; // local x=0 の世界座標（段差自身の軸上）

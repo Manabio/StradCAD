@@ -138,7 +138,8 @@ export function composeRoomFaces(room, graph, opts = {}) {
   let faces = buildRoomFaces(room, graph, opts.wallFilter);
   faces = extendFacesWithOpenSpans(faces, room, graph);
   faces = splitFacesAtPartitionWalls(faces, room, graph);
-  faces = insertStepFaces(faces, room, graph);
+  // 天井の段差見付け面（S8b-4b-1）は階段帯（keepWallLessFaces）では作らない（先送り）
+  faces = insertStepFaces(faces, room, graph, { ceilingSteps: !opts.keepWallLessFaces });
   // QA修正（幅0の展開図バグ）: 各生成経路（段差見付け面の隅スナップ・袖壁分割の境界計算等）を
   // 個別に堅牢化した上でも、未知の経路から幅0・極小幅の面が漏れ出た場合の最後の砦として、
   // run(実効幅)がMIN_FACE_RUN_MM未満の面をここで除去する。labelFacesより前に行う——除去後の

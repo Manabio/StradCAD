@@ -29,6 +29,7 @@ import { junctionFigure, partFigure, paramLen, fixedLen, move, stepNoseFigure, c
 import { CeilingZone } from '../../src/core/ceilingZone.js';
 import { createZone } from '../../src/ceiling/ceilingZones.js';
 import { ElevationModeState } from '../../src/modes/ElevationModeState.js';
+import { composeRoomFaces } from '../../src/elevation/elevationFaceList.js';
 import { loadDocument } from './loadDoc.mjs';
 
 const args = process.argv.slice(2);
@@ -347,4 +348,19 @@ check(Object.values(withRefs.kneeCapBy).some(c => c['y-750(50下)'] + c['y-780(2
   check(c['洋室'] === 2 && c['LDK'] === 2, `洋室の区画（上辺・下辺の 2 面）と小上がり（LDK の帯の上辺・下辺の 2 面）の天井段差の縦線が輪郭 polyline に差し替わる（${JSON.stringify(c)}）`);
   check(noseCountBy(noZone)['洋室'] === 0 && noseCountBy(noZone)['LDK'] === 2, '区画の割当てを外すと洋室の輪郭が消える（小上がりの分は残る）');
   check(noseCountBy(noRoom)['LDK'] === 0 && noseCountBy(noRoom)['洋室'] === 2, '小上がりの割当てを外すと LDK の帯の輪郭が消える（洋室の分は残る）');
+}
+
+// ---- 天井の段差見付け面（S8b-4b-1）: 割当てに関係なく面ができる。洋室の下がり天井の区画＝天井だけの面・小上がり（床 +300・CH 1800）＝床の面へ合流 ----
+{
+  const faceInfo = r => composeRoomFaces(r, G).filter(f => f.kind === 'step').map(f => ({
+    label: f.label, floor: f.stepHeightMm, run: Math.round(f.run), cs: (f.ceilingSteps ?? []).map(c => [Math.round(c.loX), Math.round(c.hiX), c.lowCeilAbsMm, c.ceilStepHeightMm]),
+  }));
+  const ldk = faceInfo(rl), yoshitsu = faceInfo(ry);
+  console.log('LDK の段差見付け面:', JSON.stringify(ldk));
+  console.log('洋室の段差見付け面:', JSON.stringify(yoshitsu));
+  const ceilingOnly = list => list.filter(f => f.floor === 0 && f.cs.length > 0);
+  check(ceilingOnly(yoshitsu).length === 1 && ceilingOnly(yoshitsu)[0].cs[0][2] === 2100 && ceilingOnly(yoshitsu)[0].cs[0][3] === 300,
+    '洋室: 下がり天井の区画（2100）の境界に天井だけの面が 1 枚（見付け下端 2100・段差 300）');
+  check(ldk.filter(f => f.floor === 300 && f.cs.length === 1 && f.cs[0][2] === 2100).length >= 1 && ceilingOnly(ldk).length === 0,
+    'LDK: 小上がり（床 +300・天井 2100）は床の面に ceilingSteps が合流し、天井だけの面は重ならない');
 }

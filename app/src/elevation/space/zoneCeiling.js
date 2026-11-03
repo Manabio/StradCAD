@@ -15,6 +15,7 @@
 import { buildCeilingHeightField } from '../../ceiling/ceilingHeightField.js';
 import { ceilingShapeSolidZ } from '../../ceiling/ceilingShape.js';
 import { roomHasCeiling } from '../../ceiling/ceilingOwners.js';
+import { ceilingSurfacesOf, ceilingStepEdges } from '../../ceiling/ceilingSurfaces.js';
 import { CenterLineType } from '@core';
 import { scopedValue, graphList } from '../../graphReadScope.js';
 import { isCeilingOnlyKind } from '../../core/centerLineKindPolicy.js';
@@ -63,6 +64,26 @@ function buildField(graph) {
 export function zoneCeilingFieldOf(graph) {
   if (!graph) return null;
   return scopedValue(graph, FIELD_KEY, () => buildField(graph));
+}
+
+const STEP_EDGES_KEY = { name: 'ceilingStepEdges' };
+
+/**
+ * 天井の段差の辺（ceiling/ceilingSurfaces.js ceilingStepEdges）。展開の天井段差見付け面（S8b-4b）の入口。
+ * zoneCeilingFieldOf は使わない（区画つきの面だけを持ち、区画の無い部分指定の子の CH 差を落とすため）。
+ * 読み取りスコープでメモ化。異常な部屋データで展開図全体を巻き添えにしない（例外は []＝段差なし）。
+ * @param {object|null} graph
+ * @returns {ReturnType<typeof ceilingStepEdges>}
+ */
+export function ceilingStepEdgesOf(graph) {
+  if (!graph) return [];
+  return scopedValue(graph, STEP_EDGES_KEY, () => {
+    try {
+      return ceilingStepEdges(ceilingSurfacesOf(graph));
+    } catch {
+      return [];
+    }
+  });
 }
 
 /**

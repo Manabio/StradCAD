@@ -311,7 +311,7 @@ export function buildStairBand(stairRoom, graph, upperGraph, ctx = {}) {
         const upperFaces = composeRoomFaces(upperRoom, upperGraph);
         for (const { face, xCursor: x0 } of layout.faceRuns) {
           const upperFace = upperFaces.find(f =>
-            f.isVertical === face.isVertical && Math.abs(f.axisCL.effectiveValue - face.axisCL.effectiveValue) < CORNER_EPS);
+            f.kind !== 'step' && f.isVertical === face.isVertical && Math.abs(f.axisCL.effectiveValue - face.axisCL.effectiveValue) < CORNER_EPS);
           if (!upperFace) continue;
           primitives.push(translatePrimitive(
             line(0, -floorHeight, face.run, -floorHeight, ElevationLineRole.CUT),
