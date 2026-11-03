@@ -834,6 +834,7 @@
    },
    {
     "h": 30,
+    "source": "detail",
     "type": "rect",
     "w": 169,
     "weight": "thick",
@@ -6415,6 +6416,7 @@
    },
    {
     "h": 30,
+    "source": "detail",
     "type": "rect",
     "w": 169,
     "weight": "thick",

@@ -4,11 +4,16 @@ import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { clearOverlays } from '../catalog/catalogRegistry.js';
+import { clearOverlays, setOverlay } from '../catalog/catalogRegistry.js';
+import { CatalogKind } from '../catalog/catalogKinds.js';
 import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND } from '../error.js';
-import { DetailSlot } from '../core/constants.js';
+import {
+  DetailSlot, PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumRole, DetailDatumKind, DetailAxis, DetailDash,
+  DETAIL_FIGURE_VERSION,
+} from '../core/constants.js';
 import { placeOpeningWithDefaults } from './openingEdit.js';
-import { openingSectionWallRange } from './openingSection.js';
+import { openingSectionWallRange, wallMaterialRangeForOpening } from './openingSection.js';
+import { findHostWall, wallFaceRange } from './openingGeometry.js';
 import { collectDetailFitFailures } from './openingDetailFitCheck.js';
 import { jambFigure, headFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol } from './openingDetailTestFixtures.js';
 
@@ -167,10 +172,112 @@ test('集計: fit できる図・割当て無しの記号・三方枠でない�
   assert.deepEqual(collectDetailFitFailures(graphWithFrames(none).graph), []);
   assert.deepEqual(collectDetailFitFailures(null), []);
   assert.deepEqual(collectDetailFitFailures({ openings: [] }), []);
-  // 三方枠でない建具（片開き戸）に同じ記号が付いていても対象外
+  // 三方枠でも片開き戸でもない建具（引き戸）に同じ記号が付いていても対象外
   const bad = uniqueSymbolKey();
   installFrameSymbol(bad, { [JAMB]: materialBoundFigure('df-chk-notframe') });
   const { graph, openings } = graphWithFrames(bad);
-  runInAction(() => { openings[0].subType = 'singleSwing'; });
+  runInAction(() => { openings[0].subType = 'sliding'; });
   assert.deepEqual(collectDetailFitFailures(graph), []);
+});
+
+// ---- 片開き戸（S8e-2）: 方立（平面）・上枠（展開の断面）の明示の割当てだけが対象 ----
+
+test('片開き戸: 割当て無し（暗黙の既定）は通知の対象外', () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, {});
+  const { graph } = graphWithFrames(sym, 1, [{ subType: 'singleSwing' }]);
+  assert.deepEqual(collectDetailFitFailures(graph), []);
+});
+
+test('片開き戸: 明示の方立の図が fit できない → 平面の方立は面間の壁厚・上枠（方立の流用）は材の範囲の壁厚で、各 slot の行が出る', () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { [JAMB]: materialBoundFigure('df-chk-sw1') });
+  const { graph, openings } = graphWithFrames(sym, 1, [{ subType: 'singleSwing' }]);
+  const host = findHostWall(openings[0], graph);
+  const [flo, fhi] = wallFaceRange(host, graph);
+  const mr = wallMaterialRangeForOpening(openings[0], graph);
+  const failures = collectDetailFitFailures(graph);
+  assert.deepEqual(failures.map(f => f.slot).sort(), [HEAD, JAMB]);
+  const byslot = Object.fromEntries(failures.map(f => [f.slot, f]));
+  assert.deepEqual([byslot[JAMB].wallThickness, byslot[JAMB].faceWidth, byslot[JAMB].projection], [fhi - flo, 30, 12], '平面＝面間・見付は開口半幅で頭打ち（800 なので 30）');
+  assert.deepEqual([byslot[HEAD].wallThickness, byslot[HEAD].faceWidth, byslot[HEAD].projection], [mr.hi - mr.lo, 30, 12], '断面＝材の範囲');
+  assert.ok(byslot[HEAD].message.includes('上枠に合わせられません'));
+});
+
+test('片開き戸: 展開モードの slots=[HEAD] は上枠の行だけ・開口幅 50 の方立の見付は 25 に頭打ち', () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { [JAMB]: materialBoundFigure('df-chk-sw2') });
+  const { graph } = graphWithFrames(sym, 1, [{ subType: 'singleSwing', width: 50 }]);
+  assert.deepEqual(collectDetailFitFailures(graph, new Set(), { slots: [HEAD] }).map(f => f.slot), [HEAD]);
+  assert.equal(collectDetailFitFailures(graph).find(f => f.slot === JAMB).faceWidth, 25);
+});
+
+// 壁・建具を手組みした最小の graph（graphList は graph.walls を読む）
+const stubSwingGraph = (walls, over = {}) => {
+  const axisCL = { id: 'cl1' };
+  const opening = {
+    id: 'o1', category: OpeningCategory.FITTING, subType: 'singleSwing', fixtureType: 'AD', axisCL, isVertical: false,
+    centerCoord: 500, width: 800, coord1: 100, coord2: 900, ...over,
+  };
+  return { openings: [opening], walls: walls.map(([lo, hi]) => ({ isVertical: false, axisCL, coord1: 0, coord2: 1000, materialRange: { lo, hi } })) };
+};
+// 壁厚が 80 以上でないと fit できない上枠（固定 80＋伸縮）。同じ通りに 60 厚の壁が 2 枚＝合併 120 では合うが 1 枚の 60 では合わない
+const needs80Head = key => ({
+  key, version: DETAIL_FIGURE_VERSION, label: '壁厚80以上の上枠',
+  category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.HEAD,
+  strokes: [{
+    id: 'a', closed: true, line: { weightRole: 'medium', dashRole: DetailDash.SOLID },
+    moves: [
+      { dir: PenDir.RIGHT, len: { mm: 30, mode: DetailLenMode.FIXED } },
+      { dir: PenDir.DOWN, len: { mm: 5, mode: DetailLenMode.FIXED } },
+      { dir: PenDir.DOWN, len: { mm: 80, mode: DetailLenMode.FIXED } },
+      { dir: PenDir.DOWN, len: { mm: 50, mode: DetailLenMode.STRETCH } },
+      { dir: PenDir.LEFT, len: { mm: 30, mode: DetailLenMode.FIXED } },
+    ],
+  }],
+  datums: [
+    { id: 'ds0', role: DetailDatumRole.OPENING_OUTER, axis: DetailAxis.S, kind: DetailDatumKind.ORIGIN, offsetMm: 0 },
+    { id: 'dt0', role: DetailDatumRole.WALL_FINISH_FACE, axis: DetailAxis.T, kind: DetailDatumKind.ORIGIN, offsetMm: 0 },
+    { id: 'dt1', role: DetailDatumRole.WALL_FINISH_FACE, axis: DetailAxis.T, kind: DetailDatumKind.END, offsetMm: 0 },
+  ],
+  anchors: [
+    { datumId: 'ds0', strokeId: 'a', vertexIndex: 0 },
+    { datumId: 'dt0', strokeId: 'a', vertexIndex: 2 },
+    { datumId: 'dt1', strokeId: 'a', vertexIndex: 4 },
+  ],
+  provenance: null, note: null,
+});
+
+test('【失敗系】片開き戸: 上枠が合併の壁厚（60+60＝120）には合い、帯の壁 1 枚（60）には合わない → 上枠の行が 1 件（壁厚 60）', () => {
+  setOverlay(CatalogKind.DETAIL_FIGURE, { user: [needs80Head('df-chk-sw-n80')] });
+  const graph = stubSwingGraph([[0, 60], [60, 120]], { detailRefs: { [HEAD]: 'df-chk-sw-n80' } });
+  const failures = collectDetailFitFailures(graph, new Set(), { slots: [HEAD] });
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].slot, HEAD);
+  assert.equal(failures[0].wallThickness, 60);
+  // 壁 1 枚が 100 厚なら合併も 100 で全部合う
+  assert.deepEqual(collectDetailFitFailures(stubSwingGraph([[0, 100]], { detailRefs: { [HEAD]: 'df-chk-sw-n80' } }), new Set(), { slots: [HEAD] }), []);
+});
+
+test('【失敗系】片開き戸: 明示の割当てがあっても壁が引けない（壁なし・通りに壁なし・axisCL なし）なら空で例外も出ない', () => {
+  setOverlay(CatalogKind.DETAIL_FIGURE, { user: [needs80Head('df-chk-sw-n80b')] });
+  const refs = { detailRefs: { [HEAD]: 'df-chk-sw-n80b', [JAMB]: 'df-chk-sw-n80b' } };
+  assert.deepEqual(collectDetailFitFailures(stubSwingGraph([], refs)), []);
+  const other = stubSwingGraph([[0, 60]], refs);
+  other.walls[0].axisCL = { id: 'other' };
+  assert.deepEqual(collectDetailFitFailures(other), []);
+  assert.deepEqual(collectDetailFitFailures(stubSwingGraph([[0, 60]], { ...refs, axisCL: null })), []);
+});
+
+test('片開き戸: 建具個別の detailRefs が参照切れ → 既定へ戻らず「見つかりません」の行（描画は従来）。fit できる図なら空', () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, {});
+  const { graph } = graphWithFrames(sym, 1, [{ subType: 'singleSwing', detailRefs: { [HEAD]: 'df-chk-sw-gone' } }]);
+  const failures = collectDetailFitFailures(graph);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].slot, HEAD);
+  assert.equal(failures[0].label, 'df-chk-sw-gone');
+  const ok = uniqueSymbolKey();
+  installFrameSymbol(ok, { [JAMB]: jambFigure('df-chk-sw-ok'), [HEAD]: headFigure('df-chk-sw-ok-h') });
+  assert.deepEqual(collectDetailFitFailures(graphWithFrames(ok, 1, [{ subType: 'singleSwing' }]).graph), []);
 });

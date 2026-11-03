@@ -8,12 +8,13 @@
 // 建具の姿図（S6b。slot=figure）は全機構の建具が対象で、壁は引かない（collectDetailFigureFailures。立面の入力組み立ても使う）。
 // ================================================================
 
-import { DetailSlot } from '../core/constants.js';
+import { DetailSlot, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM } from '../core/constants.js';
 import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, DETAIL_OWNER_OPENING } from '../error.js';
 import { effectiveFrameFaceWidth, effectiveFrameProjection, effectiveHeight, fixtureSymbolOf } from './openingNumbering.js';
 import { detailFitKey, fitDetailLocalMemo, subTypeDetailFigureRefsFor } from './openingCatalog.js';
 import { clampFrameFaceWidth } from './openingPlanSymbolGeometry.js';
-import { isFrameOnlySection, openingSectionWallRange } from './openingSection.js';
+import { isFrameOnlySection, isSwingLeafSection, openingSectionWallRange, wallMaterialRangeForOpening, wallMaterialRangesOf } from './openingSection.js';
+import { findHostWall, wallFaceRange } from './openingGeometry.js';
 import { resolveDetailFigure, elevationDetailDims } from './openingDetailFit.js';
 
 const FRAME_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot.HEAD]);
@@ -65,6 +66,39 @@ export function collectDetailFigureFailures(openings, seen = new Set()) {
   return failures;
 }
 
+// 片開き戸（S8e-2）の方立（平面）・上枠（展開の断面）。明示の割当て（建具個別の detailRefs ＞ 記号の detailFigures）だけが対象で、
+// 暗黙の既定は resolveDetailFigure が null を返すので構造上ここに来ない（既定の fit 失敗は黙って従来の描きへ戻る）。
+// 試す寸法は描画と同じ式で、壁厚だけ平面と断面で値が違う: 方立＝ホスト壁の両仕上げ面の間（OpeningsLayer の faceLo/faceHi＝wallFaceRange）、
+// 上枠＝展開の断面の帯。帯の経路が 2 つあり壁厚が違う: 隅の断面は同じ通りの実壁の材の範囲の合併（wallMaterialRangeForOpening）、
+// 切断壁の帯は当該部屋側の壁 1 枚の材の範囲（片開き戸は openingWallRange を持たない）。両方の壁厚を試し（重複は除く）、
+// どれかが合わなければ上枠の行は 1 slot につき 1 件（最初に合わなかった壁厚）。見付は方立＝開口幅の半分で頭打ち、上枠＝常に FRAME_JAMB_WIDTH_MM。
+// 壁が引けない slot は試さない。同じ図が片方の寸法にだけ合わないときは、合わない slot の行だけ出る。
+function collectSwingDoorFailures(o, graph, frameSlots, { failures, seen }) {
+  const symbolKey = fixtureSymbolOf(o);
+  const dimsListOf = slot => {
+    if (!o.axisCL) return [];
+    if (slot === DetailSlot.JAMB) {
+      const host = findHostWall(o, graph);
+      if (!host) return [];
+      const [lo, hi] = wallFaceRange(host, graph);
+      return [{ wallThickness: hi - lo, projection: FRAME_OVERHANG_MM, faceWidth: Math.min(FRAME_JAMB_WIDTH_MM, o.width / 2) }];
+    }
+    const merged = wallMaterialRangeForOpening(o, graph);
+    if (!merged) return [];
+    const thicknesses = [merged, ...wallMaterialRangesOf(o, graph)].map(r => r.hi - r.lo);
+    return [...new Set(thicknesses)].map(wallThickness => ({ wallThickness, projection: FRAME_OVERHANG_MM, faceWidth: FRAME_JAMB_WIDTH_MM }));
+  };
+  for (const slot of frameSlots) {
+    const r = resolveDetailFigure({ symbolKey, detailRefs: o.detailRefs ?? null, slot });
+    if (!r) continue;
+    for (const dims of dimsListOf(slot)) {
+      const before = failures.length;
+      pushFailuresOf(r, { failures, seen, ownerKey: symbolKey, slot, dims, extra: { ...dims } });
+      if (failures.length > before) break;
+    }
+  }
+}
+
 /**
  * graph の建具について、詳細図の fit に失敗する（図×寸法）の組と、参照先の図がカタログに無い組を集める。
  * 三方枠の方立・上枠（図×壁厚・出幅・見付）と、全建具の姿図（図×幅・高さ・窓台高さ。collectDetailFigureFailures）。
@@ -79,7 +113,12 @@ export function collectDetailFitFailures(graph, seen = new Set(), { slots = ALL_
   const failures = [];
   const frameSlots = slots.filter(s => FRAME_SLOTS.includes(s));
   for (const o of graph?.openings ?? []) {
-    if (frameSlots.length === 0 || !isFrameOnlySection(o)) continue;
+    if (frameSlots.length === 0) continue;
+    if (isSwingLeafSection(o)) {
+      collectSwingDoorFailures(o, graph, frameSlots, { failures, seen });
+      continue;
+    }
+    if (!isFrameOnlySection(o)) continue;
     const symbolKey = fixtureSymbolOf(o);
     const range = openingSectionWallRange(o, graph);
     if (!range) continue;

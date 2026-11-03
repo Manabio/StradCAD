@@ -13,7 +13,7 @@
  */
 import { effectiveHeight, effectiveFrameProjection, fixtureSymbolOf } from './openingNumbering.js';
 import { OpeningCategory } from '@core';
-import { DetailSlot, SWING_LEAF_SUBTYPE } from '../core/constants.js';
+import { DetailSlot, SWING_LEAF_SUBTYPE, DETAIL_PRIM_SOURCE, DETAIL_FIT_EPS_MM } from '../core/constants.js';
 import { graphList } from '../graphReadScope.js';
 import { rect as rectPrim, line as linePrim, polyline as polylinePrim } from '../elevation/elevationPrimitives.js';
 import { findCatalogEntry, frameProfileFor, OpeningMechanism } from './openingCatalog.js';
@@ -23,7 +23,7 @@ import {
   FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM, FRAME_OVERHANG_MM,
   swingOpenPerpDir, frameOnlyPerpRange, frameOnlyJambProfiles, clampFrameFaceWidth,
 } from './openingPlanSymbolGeometry.js';
-import { resolveDetailFrame } from './openingDetailFit.js';
+import { resolveDetailFrame, resolveSwingDoorFrame } from './openingDetailFit.js';
 
 // 従来の断面帯（枠40＋扉40＋枠40）。描き方の指定が無い建具はこのまま。
 const LEGACY_FRAME_W = 40;
@@ -44,17 +44,30 @@ const FALLBACK_WALL_THICKNESS_MM = 115;
  * @returns {number|null}
  */
 export function wallMaterialRangeForOpening(o, graph) {
-  if (!graph || !o?.axisCL) return null;
   let lo = Infinity, hi = -Infinity;
+  for (const r of wallMaterialRangesOf(o, graph)) {
+    lo = Math.min(lo, r.lo);
+    hi = Math.max(hi, r.hi);
+  }
+  return Number.isFinite(lo) ? { lo, hi } : null;
+}
+
+/**
+ * wallMaterialRangeForOpening の合併の元になる、同じ通りで建具の位置を覆う実壁それぞれの材の範囲。
+ * 展開の切断壁の帯は合併でなく当該部屋側の壁 1 枚の範囲（band.wall.materialRange）で上枠を描くので、通知は両方を試す。
+ * @returns {{lo:number, hi:number}[]}
+ */
+export function wallMaterialRangesOf(o, graph) {
+  if (!graph || !o?.axisCL) return [];
+  const ranges = [];
   for (const w of graphList(graph, 'walls') ?? []) {
     if (w.isVertical !== o.isVertical || w.axisCL?.id !== o.axisCL.id) continue;
     const c1 = Math.min(w.coord1, w.coord2), c2 = Math.max(w.coord1, w.coord2);
     if (o.centerCoord < c1 || o.centerCoord > c2) continue;
     if (!w.materialRange) continue;
-    lo = Math.min(lo, w.materialRange.lo);
-    hi = Math.max(hi, w.materialRange.hi);
+    ranges.push({ lo: w.materialRange.lo, hi: w.materialRange.hi });
   }
-  return Number.isFinite(lo) ? { lo, hi } : null;
+  return ranges;
 }
 
 /**
@@ -104,6 +117,11 @@ export function isFrameOnlySection(o) {
   return methodFor(o) === 'frameOnly';
 }
 
+/** 片開き戸（swingLeaf）の断面の描き方で描く建具か。通知（openingDetailFitCheck.js）が使う。 */
+export function isSwingLeafSection(o) {
+  return methodFor(o) === 'swingLeaf';
+}
+
 /**
  * 枠が壁の両面から室内外へ出る量(mm)。三方枠は出幅の編集値（`effectiveFrameProjection`。未設定・0以下は既定12）、
  * それ以外は `FRAME_OVERHANG_MM`（12 固定）。帯の始点＝壁の材の範囲の下端−この値。
@@ -136,6 +154,37 @@ function sillOf(o) {
   return o.category === OpeningCategory.WINDOW ? (o.sillHeight ?? 0) : 0;
 }
 
+const isAxisAlignedRect = points => points.length === 4 && points.every((p, i) => {
+  const q = points[(i + 1) % 4];
+  return Math.abs(p.along - q.along) <= DETAIL_FIT_EPS_MM || Math.abs(p.perp - q.perp) <= DETAIL_FIT_EPS_MM;
+});
+
+// 片開き戸の断面の上枠（部分詳細図 S8e-2）。建具個別の detailRefs ＞ 記号の detailFigures の head（無ければ jamb の流用。R9）の図があれば
+// この断面の寸法（coord1=上端・coord2=開口下端・見込帯の壁の面＝帯の端から出幅ずつ内側・見付 30）で fit して写し、
+// 無ければ組込みの上枠（暗黙の既定。従来の矩形と同じ出力）。図が引けない（null）・fit できない（error）ときは従来の矩形（source なし）。
+// 断面の帯は常に「壁の面−出幅〜壁の面＋出幅」で見付も常に 30（従来の式に頭打ちが無い）ので、方立の R4 に当たる除外は無い。
+// t の正の側（扉が閉じる側）＝開く側の面は、atFar なら帯の奥（mm の大きい側）＝perp の増える向き。図は coord1 側の 1 組だけ使う。
+// 展開の図は source=DETAIL_PRIM_SOURCE を付ける（R3。輪郭が 4 点の軸平行な矩形なら従来と同じ rect、それ以外は閉じた polyline）。
+function swingHeadPrimitives(o, { top, sillTop, full, atFar, at, rect, polylinePrim, cutWeight, opts }) {
+  const legacy = () => [rect(0, full, top, top + FRAME_JAMB_WIDTH_MM, cutWeight)];
+  const wall = Number.isFinite(opts.wallThicknessMm) ? opts.wallThicknessMm : FALLBACK_WALL_THICKNESS_MM;
+  const resolved = resolveSwingDoorFrame({
+    symbolKey: fixtureSymbolOf(o), detailRefs: o.detailRefs ?? null, slot: DetailSlot.HEAD, coord1: top, coord2: sillTop,
+    faceMin: FRAME_OVERHANG_MM, faceMax: FRAME_OVERHANG_MM + wall, wallThickness: wall,
+    tSign: atFar ? 1 : -1, faceWidth: FRAME_JAMB_WIDTH_MM, projection: FRAME_OVERHANG_MM,
+  });
+  if (resolved === null || resolved.error) return legacy();
+  const source = { source: DETAIL_PRIM_SOURCE };
+  return resolved.sides[0].map(st => {
+    const ps = st.points;
+    if (st.closed && isAxisAlignedRect(ps)) {
+      const perps = ps.map(p => p.perp), alongs = ps.map(p => p.along);
+      return rect(Math.min(...perps), Math.max(...perps), Math.min(...alongs), Math.max(...alongs), cutWeight, source);
+    }
+    return polylinePrim([...ps, ...(st.closed ? [ps[0]] : [])].map(p => [at(p.perp), p.along]), { weight: cutWeight, ...source });
+  });
+}
+
 /**
  * 建具の断面プリミティブ（枠＝CUT・扉＝SILHOUETTE）。
  *
@@ -164,9 +213,9 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
   // 腰高0のとき -0 にしない（-0 は等値比較・テストの落とし穴。elevationFigure.jsの床yと同じ規約）。
   const top = -(sill + h), sillTop = sill ? -sill : 0;
   const at = mm => x0 + dir * mm;
-  const rect = (loMm, hiMm, y1, y2, weight) => rectPrim(
+  const rect = (loMm, hiMm, y1, y2, weight, extra) => rectPrim(
     Math.min(at(loMm), at(hiMm)), Math.min(y1, y2),
-    Math.abs(at(hiMm) - at(loMm)), Math.abs(y2 - y1), { weight },
+    Math.abs(at(hiMm) - at(loMm)), Math.abs(y2 - y1), { weight, ...extra },
   );
 
   if (methodFor(o) === 'swingLeaf') {
@@ -188,7 +237,7 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
     // 扉の上端は戸当たり（かかり代）まで＝上枠の見付のうち本体ぶん（30-10=20）だけ下がる。
     const leafTop = top + (FRAME_JAMB_WIDTH_MM - FRAME_KAKARI_WIDTH_MM);
     return [
-      rect(0, full, top, top + FRAME_JAMB_WIDTH_MM, cutWeight),     // 上枠（竪枠と同じ断面。見付30）
+      ...swingHeadPrimitives(o, { top, sillTop, full, atFar, at, rect, polylinePrim, cutWeight, opts }),
       rect(leafLo, leafLo + leaf, leafTop, sillTop - DOOR_LEAF_BOTTOM_MM, silhouetteWeight), // 扉
       // 扉のない側の枠の縦線。**見えがかりなので細線**（ユーザー明示指示2026-09
       // 「「13」D: 建具建枠の見えがかりは細線」）。呼び出し側が detailWeight を渡さない場合は

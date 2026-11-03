@@ -10,6 +10,7 @@
 // 既存ファイルは上書きしない（再生成は先に削除する）。
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { runInAction } from 'mobx';
 import { Project, CenterLineType, Discipline, OpeningCategory, edgeKey } from '../../src/core.js';
 import { serializeGraph, serializeStructCLs, serializePlanes } from '../../src/graphSnapshot.js';
 import { buildDocumentJson } from '../../src/storage/documentFile.js';
@@ -419,4 +420,32 @@ check(Object.values(withRefs.kneeCapBy).some(c => c['y-750(50下)'] + c['y-780(2
     '洋室の帯の中の細い水平の detail 線: 見付け下端 2100 の上 40・70（見切りの厚の上端と見切りの天端）の y に 1 本ずつ増える（帯全体の数。面の x 範囲での絞り込みは帯が faceRuns を公開しないため不可）');
   check(ldkAdd['-2140'] === 1 && ldkAdd['-2170'] === 1 && Object.keys(ldkAdd).length === 2,
     'LDK の帯の中の細い水平の detail 線: 小上がりの部屋単位の割当てで −2140・−2170 の y に増える（床の面へ合流した面の分。床の派生線 −260・−230 は割当て無しでも残る。帯全体の数）');
+}
+
+// ---- 片開き戸の上枠（S8e-2）: 隅の建具断面の上枠 rect（CUT・見付 30）。組込みの上枠が暗黙の既定 ----
+// 保存した文書の戸は壁の中ほどで、隅（直交壁の端）に断面を描く位置にない。読み戻したグラフの戸を壁の端へ寄せて
+// （メモリ上だけ。保存はしない）、帯に出る上枠 rect の本数を数える。本数は変更前（従来の矩形）と同じで、source=detail が付くだけ（R3）。
+// 割当て無し＝通知なし。戸の位置は変更前の版でも同じ手順で数えた（HEAD の openingSection.js へ差し替えるフックで本数を採った）。
+{
+  const swing = G.openings.find(o => o.subType === 'singleSwing' && o.category === OpeningCategory.FITTING);
+  const wallPiece = G.walls.find(w => w.isVertical && !w.isExteriorWall && Math.abs(w.axisCL.effectiveValue - 4000) < 1);
+  const wallLo = Math.min(wallPiece.coord1, wallPiece.coord2), wallHi = Math.max(wallPiece.coord1, wallPiece.coord2);
+  const originalOffset = swing.refOffset;
+  const headTotals = { all: 0, detail: 0, errors: [] };
+  for (const [label, center] of [['始端', wallLo + swing.width / 2], ['終端', wallHi - swing.width / 2]]) {
+    runInAction(() => { swing.refOffset = originalOffset + (center - swing.centerCoord); });
+    clearOverlays();
+    setOverlay(CatalogKind.DETAIL_FIGURE, { doc: figs, user: detailBuiltins });
+    const st = new ElevationModeState(G, P, { width: 1600, height: 1200 });
+    await st.init();
+    const heads = st.bands.flatMap(b => b.primitives).filter(p => p.type === 'rect' && p.weight === 'thick' && p.h === 30);
+    console.log(`片開き戸を壁の${label}へ: 上枠 rect ${heads.length} 本（source=detail ${heads.filter(p => p.source === DETAIL_PRIM_SOURCE).length}）`);
+    headTotals.all += heads.length;
+    headTotals.detail += heads.filter(p => p.source === DETAIL_PRIM_SOURCE).length;
+    if (st.materialError !== null) headTotals.errors.push(st.materialError);
+  }
+  runInAction(() => { swing.refOffset = originalOffset; });
+  console.log(`片開き戸の上枠 rect 合計 ${headTotals.all} 本（source=detail ${headTotals.detail}）`);
+  check(headTotals.all > 0 && headTotals.detail === headTotals.all, '上枠の rect がすべて source=detail（組込みの上枠が暗黙の既定）');
+  check(headTotals.errors.length === 0, `片開き戸の暗黙の既定は通知しない（${headTotals.errors.join('／')}）`);
 }

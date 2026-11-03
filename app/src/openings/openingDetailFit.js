@@ -104,6 +104,9 @@ const snapNear = (v, refs) => refs.find(r => Math.abs(v - r) <= DETAIL_FIT_EPS_M
  * 割当てが無いときだけ組込みの図（DETAIL_BUILTIN_DOOR_*_KEY）を暗黙の既定にする（source=DEFAULT。通知の対象外）。
  * 図の t は「扉が閉じる側（開く側の面）が正」。tSign はその側が perp の増える向きなら +1、減る向きなら −1（placeDetailSides）。
  * 戻り値の点列は共線の頂点を除く（withoutCollinearPoints）。既定の図は従来の描きと同じ式の値へ丸め誤差を寄せる。
+ * slot=HEAD（展開の断面の上枠。S8e-2）の探索順は resolveDetailFigure のまま（建具個別の head ＞ 記号の head ＞ 建具個別の jamb ＞ 記号の jamb）で、
+ * どれも無いときだけ組込みの上枠（R9 の流用）。明示の方立の図は上枠にも流用される（上枠は同じ戸当たりの断面なので物理的に正しい）が、
+ * 既定の上枠は従来の矩形（R2。方立の既定を流用すると欠き込みが出て従来と一致しない）。
  * @param {object} p resolveDetailFrame と同じ（slot は既定 JAMB）に、faceMax・tSign を加えたもの。wallThickness＝faceMax−faceMin をそのまま渡す
  * @returns {null | {error:{code:string, message:string}, source:string} | {sides: object[][], profiles: object[], source:string}}
  *   null＝従来の描きへ戻る（参照切れ・既定の組込みが引けない）。error＝fit できない（呼び出し側は従来の描きへ。明示の割当てだけ通知の対象）。
@@ -125,6 +128,7 @@ export function resolveSwingDoorFrame({ symbolKey, detailRefs = null, slot = Det
   }
   const fitted = fitDetailLocalMemo({ figureKey: figure.key, slot: figure.slot, wallThickness, projection, faceWidth });
   if (fitted.error) return { error: fitted.error, source };
+  // 寄せ先は 1 組で足りる: 方立の組は上枠の組（帯の両端と壁の面）を含み、上枠は欠き込みが無いので余分な値は偶然一致しない限り効かない。
   const refs = tSign < 0
     ? [faceMax + projection, faceMin + DOOR_LEAF_THICKNESS_MM, faceMin - projection, faceMin, faceMax]
     : [faceMin - projection, faceMax - DOOR_LEAF_THICKNESS_MM, faceMax + projection, faceMin, faceMax];
