@@ -13,7 +13,7 @@
  */
 import { effectiveHeight, effectiveFrameProjection, fixtureSymbolOf } from './openingNumbering.js';
 import { OpeningCategory } from '@core';
-import { DetailSlot } from '../core/constants.js';
+import { DetailSlot, SWING_LEAF_SUBTYPE } from '../core/constants.js';
 import { graphList } from '../graphReadScope.js';
 import { rect as rectPrim, line as linePrim, polyline as polylinePrim } from '../elevation/elevationPrimitives.js';
 import { findCatalogEntry, frameProfileFor, OpeningMechanism } from './openingCatalog.js';
@@ -92,7 +92,7 @@ export function openingSectionWidthMm(o, opts = {}) {
 // ユーザー明示指示2026-09「AW他、描画方法の指定のない片開き戸は全て適用」——建具記号（WD/AW…）
 // では分けず、**片開き戸という種別**に紐づける。三方枠（機構 FRAME_ONLY）は種別（subType）が
 // カタログで増えうるため、表ではなく機構で引く（methodFor。姿図 openingElevationFigure.js と同じ判定）。
-const SECTION_METHODS = { singleSwing: 'swingLeaf' };
+const SECTION_METHODS = { [SWING_LEAF_SUBTYPE]: 'swingLeaf' };
 
 function methodFor(o) {
   if (findCatalogEntry(o?.category, o?.subType)?.mechanism === OpeningMechanism.FRAME_ONLY) return 'frameOnly';

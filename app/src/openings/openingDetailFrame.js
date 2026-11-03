@@ -9,7 +9,7 @@
 // openings/ が引いてよい detail/ は detailPlacement.js だけ（openings/importGraph.test.js で固定）。
 // ================================================================
 
-import { DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam } from '../core/constants.js';
+import { DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam, DETAIL_FIT_EPS_MM } from '../core/constants.js';
 import { placeStrokes } from '../detail/detailPlacement.js';
 import { ERR_DETAIL_DATUM_UNSUPPORTED, DETAIL_TARGET_ELEVATION } from '../error.js';
 
@@ -111,12 +111,40 @@ export function placeDetailElevation(fitted, { sillTop }) {
  * fit 済みの図を開口の両端へ写す。coord1 側は s が along の正方向、coord2 側は s 軸を反転した鏡像
  * （frameOnlyJambProfiles の dir 規約——coord2 側は内側が −along——と同じ）。t は faceMin を 0 として perp へ。
  * @param {{strokes: object[]}} fitted fitLocal の結果（error でないもの）
- * @param {{coord1:number, coord2:number, faceMin:number}} p
+ * @param {{coord1:number, coord2:number, faceMin:number, faceMax?:number, tSign?:1|-1}} p
+ *   tSign＝t 軸の向き。+1（既定）は t が perp の増える向き（t=0 が faceMin）。−1 は t が perp の減る向き（t=0 が faceMax）で、
+ *   開き勝手で t の正の側（扉が閉じる側）が入れ替わる片開き戸の方立が使う（faceMax が要る）。
  * @returns {[{points:{along:number,perp:number}[], closed:boolean}[], {points:{along:number,perp:number}[], closed:boolean}[]]}
  *   [coord1 側のストローク列, coord2 側のストローク列]
  */
-export function placeDetailSides(fitted, { coord1, coord2, faceMin }) {
-  const side = (ox, sx) => placeStrokes(fitted, { ox, oy: faceMin, sx, sy: 0, tx: 0, ty: 1 })
+export function placeDetailSides(fitted, { coord1, coord2, faceMin, faceMax, tSign = 1 }) {
+  const flipped = tSign < 0;
+  const side = (ox, sx) => placeStrokes(fitted, { ox, oy: flipped ? faceMax : faceMin, sx, sy: 0, tx: 0, ty: flipped ? -1 : 1 })
     .map(st => ({ points: st.points.map(([along, perp]) => ({ along, perp })), closed: st.closed }));
   return [side(coord1, 1), side(coord2, -1)];
+}
+
+/**
+ * ストロークの点列から、前後の点と一直線上にあって向きが変わらない中間の頂点を除く（片開き戸の方立 S8e-1。
+ * 組込み図は t の基準を置くために共線の頂点を持つので、従来の六角形と同じ点列に揃える）。三方枠（S3）の出力には使わない。
+ * 判定は前後の点を結ぶ直線からの距離が DETAIL_FIT_EPS_MM 以下かつ前後で同じ向き（折り返しは残す）。開いたストロークの両端は残す。
+ * @param {{along:number, perp:number}[]} points
+ * @param {boolean} closed
+ * @returns {{along:number, perp:number}[]}
+ */
+export function withoutCollinearPoints(points, closed) {
+  const n = points.length;
+  if (n < 3) return points;
+  return points.filter((b, i) => {
+    if (!closed && (i === 0 || i === n - 1)) return true;
+    const a = points[(i + n - 1) % n];
+    const c = points[(i + 1) % n];
+    const abAlong = b.along - a.along, abPerp = b.perp - a.perp;
+    const bcAlong = c.along - b.along, bcPerp = c.perp - b.perp;
+    const cross = abAlong * bcPerp - abPerp * bcAlong;
+    const dot = abAlong * bcAlong + abPerp * bcPerp;
+    const spanLen = Math.hypot(c.along - a.along, c.perp - a.perp);
+    const collinear = dot > 0 && Math.abs(cross) <= DETAIL_FIT_EPS_MM * spanLen;
+    return !collinear;
+  });
 }

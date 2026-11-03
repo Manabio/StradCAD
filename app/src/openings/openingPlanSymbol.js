@@ -60,10 +60,10 @@ import {
   swingDoubleLeafSpecs, swingChildLeafSpecs, fireDoorLeafSpecs, fireFoldLeafSpecs,
   trackOf, trackPerp, resolveSlideLayoutPanels, foldZigzagPoints, frameOnlyJambProfiles,
   frameOnlyPerpRange, clampFrameFaceWidth,
-  DOOR_OPEN_ANGLE_DEG, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
+  DOOR_OPEN_ANGLE_DEG, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
 } from './openingPlanSymbolGeometry.js';
-import { resolveDetailFrame } from './openingDetailFit.js';
-import { DetailSlot } from '../core/constants.js';
+import { resolveDetailFrame, resolveSwingDoorFrame } from './openingDetailFit.js';
+import { DetailSlot, DetailFigureSource, SWING_LEAF_SUBTYPE } from '../core/constants.js';
 import { fixtureSymbolOf, effectiveFrameFaceWidth, effectiveFrameProjection } from './openingNumbering.js';
 import { LodLevel } from '../viewport.js';
 import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
@@ -765,6 +765,34 @@ function swingFramePrimitives(opening, band, pivotPerp, outward, frameWeight) {
   ];
 }
 
+// 片開き戸（SWING・subType が SWING_LEAF_SUBTYPE）の方立を部分詳細図で描く（部分詳細図 S8e-1）。三方枠の frameOnlyPrimitives と同じ流儀で、
+// 建具個別の detailRefs ＞ 記号の detailFigures の方立の図があればそれを壁の面へ fit して写し、無ければ組込みの図
+// （DETAIL_BUILTIN_DOOR_JAMB_KEY。従来の swingFramePrimitives と同じ出力）を暗黙の既定にする。null＝従来の swingFramePrimitives で描く。
+// 図の t は「扉が閉じる側」が正なので、tSign は outward（pivot 面＝開く側の面が perp の増える側か）で決める。
+// 暗黙の既定は従来の描きと同じ前提のときだけ（R4）: 見付が全幅 30（開口幅 60 以上）で、見込帯が壁の面±出幅いっぱい（半外付けでない）。
+// 明示の割当ては R4 を見ず壁の面へ fit する。fit に失敗したら従来の描き（通知は S8e-2）。平面の記号に source は付けない（S3 と同じ）。
+function swingDetailFramePrimitives(opening, band, faceLo, faceHi, outward, frameWeight) {
+  if (opening.subType !== SWING_LEAF_SUBTYPE) return null;
+  if (!Number.isFinite(faceLo) || !Number.isFinite(faceHi)) return null;
+  const faceMin = Math.min(faceLo, faceHi);
+  const faceMax = Math.max(faceLo, faceHi);
+  const jambW = Math.min(FRAME_JAMB_WIDTH_MM, opening.width / 2);
+  const resolved = resolveSwingDoorFrame({
+    symbolKey: fixtureSymbolOf(opening), detailRefs: opening.detailRefs ?? null, slot: DetailSlot.JAMB,
+    coord1: opening.coord1, coord2: opening.coord2, faceMin, faceMax, wallThickness: faceMax - faceMin,
+    tSign: outward > 0 ? 1 : -1, faceWidth: jambW, projection: FRAME_OVERHANG_MM,
+  });
+  if (resolved === null || resolved.error) return null;
+  // R4 は解決の後で見る（既定か明示かは解決しないと分からない。fit はメモ化されるので捨てる場合の再計算は無い）。
+  // 組込みと同じキーの上書きも source は DEFAULT＝R4 の対象（detail-figure-model.md）。
+  if (resolved.source === DetailFigureSource.DEFAULT
+    && !(jambW === FRAME_JAMB_WIDTH_MM && band.lo === faceMin - FRAME_OVERHANG_MM && band.hi === faceMax + FRAME_OVERHANG_MM)) return null;
+  return resolved.profiles.map(jamb => polylinePrim('frame', frameWeight, jamb.points.flatMap(({ along, perp }) => {
+    const p = toWorld(opening.isVertical, along, perp);
+    return [p.x, p.y];
+  }), jamb.closed));
+}
+
 // 蝶番系その1（SWING_GROUP_MECHANISMS）のディスパッチ（J7: jambW・swingOpenPerpDir・
 // planSymbolPlan／J9: SWING専用枝／J11: notched→swingFrame＋innerSpanの移設）。
 // SWINGは「詳細LODで専用inset(FRAME_HINGE_INSET_MM/FRAME_LATCH_INSET_MM)＋閉じた扉」を
@@ -783,7 +811,10 @@ function buildSwingGroupPrimitives(opening, entry, lodLevel, band, detail, axisV
   });
 
   if (entry.mechanism === OpeningMechanism.SWING) {
-    const frame = detail ? swingFramePrimitives(opening, band, plan.pivotPerp, plan.leafOutward, frameWeight) : [];
+    const frame = detail
+      ? (swingDetailFramePrimitives(opening, band, faceLo, faceHi, plan.leafOutward, frameWeight)
+        ?? swingFramePrimitives(opening, band, plan.pivotPerp, plan.leafOutward, frameWeight))
+      : [];
     const leaf = swingPrimitives(opening, plan.pivotPerp, leafWeight, arcWeight,
       detail ? FRAME_HINGE_INSET_MM : 0,
       detail ? FRAME_LATCH_INSET_MM : 0,

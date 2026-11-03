@@ -3,7 +3,7 @@
 部分詳細図（建具の枠・部屋の取り合い・屋根・器具の姿図を、寸法に合わせて各図へ重ねる図）の登録と反映。純モジュールは `detail/`、登録画面は `ui/DetailHelperPanel.jsx`（判断は `ui/detailHelperForm.js`）、割当ては保守パネルの建具記号タブ。用語は `glossary.md`。MVP は三方枠（WF/SF/SSF）の方立（平面）と上枠（展開）だけ。
 
 ## 置き場
-- 新カタログ種別 `detailFigure`（7 種別目）。三層（本体＞ライブラリ＞同梱）の照合・差分通知・上書き印がそのまま効く（`catalog-model.md`）。本体は組込みの巾木 出 10（`df-builtin-baseboard-10`）と天板 厚 20（`df-builtin-kneecap-20`）だけ（`detail/detailBuiltins.js`）。
+- 新カタログ種別 `detailFigure`（7 種別目）。三層（本体＞ライブラリ＞同梱）の照合・差分通知・上書き印がそのまま効く（`catalog-model.md`）。本体は組込みの巾木 出 10（`df-builtin-baseboard-10`）・天板 厚 20（`df-builtin-kneecap-20`）・片開き戸の方立と上枠（`df-builtin-door-jamb-30`・`-head-30`。S8e）だけ（`detail/detailBuiltins.js`）。
 - 同梱するのは**使用中だけ**（建具記号の `detailFigures` から推移展開で届く図）。読み込んだ DXF・PDF とその由来の図（`provenance.source` が `'dxf'` か `'pdf'`）は同梱しない（R10。S7a・S7b で実装済み＝`usedEntries.js` の `isImportedFigure` が推移展開と回復後の再展開で除く）。割当てだけが文書に残り、図を持たない環境では既定の描きに戻る。
 - 参照の担い手は建具記号エントリの任意項目 `detailFigures:{jamb,head}`。三方枠の断面形の選び先 `profile` が既に建具記号にある前例に揃え、FBS を触らずに通す。建具個別の上書き（`opening.detailRefs`）は S6a で永続化（FBS 末尾 28・29、undo は建具編集の EDITABLE、読み替えは walker の rewrite）。建具エディタの select（方立・上枠の 2 つ。先頭は「記号の設定を使う」）と、R16 の明示ボタン「図の寸法を建具へ」（解決後の方立の図の param 束縛 mm を見付・出幅へ写す。undo あり・自動の書き戻しなし）。判断は `openings/openingDetailRefsEdit.js`。
 
@@ -89,6 +89,12 @@
 - 巾木高さは `DetailParam.BASEBOARD_HEIGHT`（`junctionTargets` の `baseboardHeightMm`。呼び出し側が部屋の h を渡し、無ければ param 未解決）。メモの鍵に高さが入る。ヘルパーの試し込みは、図が巾木高さ param を使うときだけ欄（既定 60＝`DEFAULT_BASEBOARD_HEIGHT`）が出る。
 - 既知の差（従来の展開との）: (1) 巾木の派生線は最小描画幅を通る＝h<50 の巾木は分母 100 で 50 に、分母 >120 では 60 が引き上がる（従来の線は調整しなかった）。(2) 巾木の途切れは junction の述語（窓台より巾木が高ければ窓の幅で切れる。従来は床まで達する建具だけ）。(3) 天端下の細線は最小描画幅だけで決まり、実画面の 1px 保証（`kneeCapFaceMm` の scale 依存）は派生線に掛からない。実データ（golden 22 枚）は `source` を除いて全一致（`elevGoldenGate.mjs --ignore-source`）。
 - 一般解（派生線の途切れ・2026-11-03 裁定）: 巾木・廻り縁の派生線を切ってよい理由は「面の壁体が無い区間（wallLessRuns）」と「線の高さを含む建具の開口」の 2 つだけ。腰壁・垂れ壁の記録は同じ壁体の上下端の修飾で壁体の有無を変えない（従来の巾木と同じ）。8a の「腰壁・垂れ壁が覆わない区間を除く」は撤回。開放部の描き方は断面エンジンの担当。
+
+## 片開き戸の方立の暗黙の既定（S8e-1）
+- 片開き戸（subType `SWING_LEAF_SUBTYPE`）の平面・詳細 LOD の方立を、割当て無しなら組込み `df-builtin-door-jamb-30` で描く（従来の `swingFramePrimitives` と同じ出力＝フォールバックに降格。参照切れ・fit 失敗・対象外は従来の描き）。解決は三方枠と同じ `resolveDetailFigure` の後に既定を足す `resolveSwingDoorFrame`。同梱は片開き戸があれば方立と上枠（`df-builtin-door-head-30`。上枠の展開への配線は S8e-2）の 2 件（`implicitDetailFigureKeys`。subType の文字列は catalog/ が openings/ を引けないので constants に置く）。
+- 図は 1 つで、t は「扉が閉じる側（開く側の面）が正」。開き勝手は取り付け側の t 反転（`placeDetailSides` の `tSign`）で表す。既定が使えるのは従来と同じ前提（R4）のときだけ＝見付が全幅 30（開口幅 60 以上）・見込帯が壁の面±出幅（半外付けでない）。明示の割当ては R4 を見ず壁の面へ fit する。組込みと同じキーの上書き（ライブラリ・同梱。S8d）は既定と同じ扱い＝R4 と丸め寄せの対象（上書きの形で描かれるのは R4 を満たす建具だけ。受容）。
+- 図の共線の頂点（t の基準を置くための 2 点）は `withoutCollinearPoints` で除く（従来の六角形と同じ点列にする。三方枠は対象外）。fit・配置の浮動小数の丸め（壁厚 137.7 で 1ULP ずれる実例あり）は、既定の図だけ従来の式の値（面±出幅・面−扉厚）へ寄せる（`DETAIL_FIT_EPS_MM` 以内）。
+- 限界: 上枠の配線・select（S8e-2/3）／扉上端・縦線始点は定数のまま／方立と上枠は別々に上書き／一般 LOD・姿図は対象外／通知は S8e-2（既定は構造上通知の対象外）。
 
 ## ヘルパーの組込み層（S8d）
 - 一覧は組込み＋ライブラリ（`helperLibraryRows`。出所バッジ 組込み／ライブラリ／上書き。同キーは組込みの位置の上書き 1 行）。組込みは読み取り専用で開き、「編集（上書きを作る）」で同キーのまま解錠→保存が `overridesBuiltin` のライブラリ項目になる（`planSave` が builtinList を渡す。同一内容は「変更なし」）。上書きは開いている文書（保存で同梱を外す）と同梱を持たない文書に効く。保存済みの文書は同梱（組込みの写し）が勝ち、合わせ直すまで従来の形（材と同じ規約）。

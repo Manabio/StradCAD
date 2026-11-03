@@ -8,7 +8,9 @@ import {
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { CatalogKind } from './catalogKinds.js';
 import { SNAPSHOT_REF_WALKERS } from './codeNormalization.js';
-import { DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY } from '../core/constants.js';
+import {
+  DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY, DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY, SWING_LEAF_SUBTYPE,
+} from '../core/constants.js';
 
 function baseSnapshot(overrides) {
   return {
@@ -633,6 +635,20 @@ test('collectUsedKeys: 腰壁（hasKnee）の記録があれば組込みの天�
   assert.deepEqual([...collectUsedKeys({ kneeDropWalls: [{ key: 'k', hasKnee: true, hasDrop: false }] }).detailFigure], [DETAIL_BUILTIN_KNEE_CAP_KEY]);
   assert.equal(collectUsedKeys({ kneeDropWalls: [{ key: 'k', hasKnee: false, hasDrop: true }] }).detailFigure.size, 0);
   assert.equal(collectUsedKeys({ kneeDropWalls: [] }).detailFigure.size, 0);
+});
+
+test('collectUsedKeys: 片開き戸（subType が SWING_LEAF_SUBTYPE）が 1 つでもあれば組込みの方立・上枠が入る（S8e）', () => {
+  const used = collectUsedKeys({ openings: [
+    { id: 'o1', category: 'window', subType: 'fixed' },
+    { id: 'o2', category: 'fitting', subType: SWING_LEAF_SUBTYPE },
+  ] });
+  assert.deepEqual([...used.detailFigure].sort(), [DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY].sort());
+});
+
+test('collectUsedKeys: 失敗系＝片開き戸が無い（他の建具だけ・建具なし・subType 欠落）なら方立・上枠は入らない', () => {
+  assert.equal(collectUsedKeys({ openings: [{ id: 'o1', category: 'fitting', subType: 'swingIn' }, { id: 'o2', category: 'window', subType: 'fixed' }] }).detailFigure.size, 0);
+  assert.equal(collectUsedKeys({ openings: [] }).detailFigure.size, 0);
+  assert.equal(collectUsedKeys({ openings: [{ id: 'o3' }, null] }).detailFigure.size, 0);
 });
 
 test('collectUsedKeys: 暗黙の組込みキーは明示の detailRefs と併存し、alias の書換え対象（walker）には現れない', () => {

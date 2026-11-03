@@ -711,6 +711,23 @@ export const DETAIL_BUILTIN_BASEBOARD_KEY = 'df-builtin-baseboard-10';
 /** 部分詳細図の割当ての出どころ。explicit＝利用者が detailRefs へ割り当てた図・default＝割当て無しの暗黙の既定（組込みの巾木・天板。S8c）。通知は explicit だけ。 */
 export const DetailFigureSource = Object.freeze({ EXPLICIT: 'explicit', DEFAULT: 'default' });
 export const DETAIL_BUILTIN_KNEE_CAP_KEY = 'df-builtin-kneecap-20';
+/**
+ * 片開き戸の方立（平面）・上枠（展開）の組込み図のキー（S8e）。subType が SWING_LEAF_SUBTYPE の建具があれば、割当て無しの暗黙の既定として使う。
+ * 方立＝詳細 LOD の平面の方立（従来の描きと同じ出力）・上枠＝展開の断面（S8e-2 で配線）。
+ */
+export const DETAIL_BUILTIN_DOOR_JAMB_KEY = 'df-builtin-door-jamb-30';
+export const DETAIL_BUILTIN_DOOR_HEAD_KEY = 'df-builtin-door-head-30';
+/** 片開き戸の建具種別キー（openingCatalog.js の FITTING_CATALOG）。catalog/ は openings/ を引けないので暗黙の既定の同梱判定（usedEntries.js）と共有できるようここに置く。 */
+export const SWING_LEAF_SUBTYPE = 'singleSwing';
+
+// ---- 平面記号の枠寸法（mm。建具の方立の組込み図と従来の描きが共有する唯一の定義。openings/openingPlanSymbolGeometry.js が再輸出）----
+export const FRAME_OVERHANG_MM     = 12; // 枠が壁面から室内外へ出る量（ユーザー明示指示2026-09で10→12）
+export const FRAME_JAMB_WIDTH_MM   = 30; // 方立の全幅（本体20 + かかり代10）
+export const FRAME_KAKARI_WIDTH_MM = 10; // 方立のうち開口側かかり代（＝戸当たり）
+// 扉厚（平面では「かかり代を欠き込む深さ」）。**平面記号と展開図の建具断面が共有する唯一の定義**
+// ——展開図側（純モジュール）は .jsx を静的に引けないため、レンダラ（OpeningsLayer.jsx）に
+// 置いていた定数を openingPlanSymbolGeometry.js へ移し、さらにここへ移した（ユーザー明示指示2026-09「平面に指定があるので参照のこと」）。
+export const DOOR_LEAF_THICKNESS_MM = 30;
 /** fit の長さ比較の許容（mm）。elevationStyle.js の COORD_EPS_MM と同値だが、detail/ は elevation/ を引けないので別定義。 */
 export const DETAIL_FIT_EPS_MM = 1e-3;
 /** 手の辺に付ける印（Move.edge）。'air'＝空気との境目（室内側の見え掛かりの線。展開図で中線になる。S8a）。 */

@@ -15,6 +15,7 @@ import { CatalogKind, kindDef } from './catalogKinds.js';
 import { emptyBundle, withEntries, bundleEntries } from './catalogBundle.js';
 import {
   DetailLenMode, DetailProvenanceSource, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY,
+  DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY, SWING_LEAF_SUBTYPE,
 } from '../core/constants.js';
 import { parseBaseboardHeightMm } from '../core/baseboardHeight.js';
 import { moveParts } from '../detail/detailModel.js';
@@ -47,7 +48,7 @@ export function collectUsedMaterialCodes(snapshot) {
 /**
  * 暗黙の既定（S8c）で使う組込みの詳細図キー。detailRefs には現れない参照なので SNAPSHOT_REF_WALKERS（alias の書き換えと共有）には
  * 足さず、使用キーの収集だけに数える（上書きがあれば同梱され、別環境でも同じ形で描かれる）。
- * 巾木高さが解析できる部屋が 1 つでもあれば巾木、腰壁（hasKnee）の記録が 1 つでもあれば天板。
+ * 巾木高さが解析できる部屋が 1 つでもあれば巾木、腰壁（hasKnee）の記録が 1 つでもあれば天板、片開き戸が 1 つでもあれば方立と上枠。
  * @param {object|null|undefined} snapshot
  * @returns {string[]}
  */
@@ -57,6 +58,10 @@ function implicitDetailFigureKeys(snapshot) {
     keys.push(DETAIL_BUILTIN_BASEBOARD_KEY);
   }
   if ((snapshot?.kneeDropWalls ?? []).some(kd => kd?.hasKnee)) keys.push(DETAIL_BUILTIN_KNEE_CAP_KEY);
+  // 片開き戸（subType が SWING_LEAF_SUBTYPE）が 1 つでもあれば、方立（平面）・上枠（展開）の組込み図（S8e）。
+  if ((snapshot?.openings ?? []).some(o => o?.subType === SWING_LEAF_SUBTYPE)) {
+    keys.push(DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY);
+  }
   return keys;
 }
 
@@ -72,7 +77,7 @@ function implicitDetailFigureKeys(snapshot) {
  * - fixtureSymbol: openings[].fixtureType（空でない文字列のみ）
  * - detailFigure: openings[].detailRefs の値（建具個別の上書き。S6a）と rooms[].detailRefs の値（部屋の取り合い。S8a）と kneeDropWalls[].detailRefs の値（腰壁の天端・垂れ壁の下端。S8b-1）。
  *   建具記号経由の使用は expandUsedDetailFiguresTransitively が推移展開する。
- *   加えて暗黙の既定で使う組込みキー（巾木高さのある部屋→巾木／腰壁の記録→天板。S8d）も数える（implicitDetailFigureKeys）
+ *   加えて暗黙の既定で使う組込みキー（巾木高さのある部屋→巾木／腰壁の記録→天板。S8d／片開き戸→方立・上枠。S8e）も数える（implicitDetailFigureKeys）
  * @returns {{ interiorMaster: Set<string>, boundaryMaster: Set<string>, section: Set<string>,
  *             openingSubType: Set<string>, fixtureSymbol: Set<string>, detailFigure: Set<string> }}
  */
