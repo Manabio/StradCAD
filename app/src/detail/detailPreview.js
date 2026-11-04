@@ -94,7 +94,10 @@ export function previewPrimitives(figure, opts = {}) {
     for (const a of fig.anchors) {
       const d = datumById.get(a?.datumId);
       if (a?.strokeId !== stroke.id || !d || d.kind !== DetailDatumKind.ORIGIN || !walked[a.vertexIndex]) continue;
-      if (d.axis === DetailAxis.S || d.axis === DetailAxis.T) shift[d.axis] = d.offsetMm - walked[a.vertexIndex][d.axis];
+      if (d.axis === DetailAxis.S || d.axis === DetailAxis.T) {
+        const aOff = Number.isFinite(a.offsetMm) ? a.offsetMm : 0; // 非有限は検証が別に出す
+        shift[d.axis] = d.offsetMm + aOff - walked[a.vertexIndex][d.axis];
+      }
     }
     const pts = walked.map(p => ({ s: p.s + shift[DetailAxis.S], t: p.t + shift[DetailAxis.T] }));
 

@@ -11,7 +11,7 @@
 //   { key, label, category, view, subject,
 //     strokes: [{ id, closed, line, moves: [{ dir, mode, len:'100', param?, code?, field? } | { dir:'V', raw }] }],
 //     datums:  [{ id, role, axis, kind, offset:'0' }],
-//     anchors: [{ datumId, strokeId, vertexIndex }],
+//     anchors: [{ datumId, strokeId, vertexIndex, offsetMm? }],   // offsetMm は数値のまま（DXF から写した下書きだけが持つ）
 //     extra:   { version, provenance, note, ...未知の項目 } }   // エントリのうち編集しない項目（前方互換で保持）
 // 'V'（斜め）は S7（DXF 由来）で入る。UI では作れず、読んだ図はそのまま保持して往復させる。
 // ================================================================
@@ -33,6 +33,7 @@ import {
   ERR_DXF_BINARY, ERR_DXF_BAD_GROUP_CODE, ERR_DXF_TRUNCATED, ERR_DXF_UNEXPECTED, ERR_DXF_NOT_BYTES,
 } from '../error.js';
 import { validateDetailFigure, DetailValidationError } from '../detail/detailModel.js';
+import { penWalk } from '../detail/detailPen.js';
 import { previewPrimitives, airEdgeOverlays, datumGuidePrimitives, PREVIEW_LABEL_OFFSET_MM, PREVIEW_LABEL_SIZE_PX } from '../detail/detailPreview.js';
 import { fitLocal } from '../detail/detailPlacement.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
@@ -705,12 +706,28 @@ export function setDatumField(form, datumId, field, value) {
   return { ...form, datums: form.datums.map(d => (d.id === datumId ? { ...d, [field]: String(value ?? '') } : d)) };
 }
 
-/** 基準にストロークの頂点を載せる。vertexIndex が null／'' なら外す。ストローク・基準が無ければ何もしない。 */
+/** 基準にストロークの頂点を載せる。vertexIndex が null／'' なら外す。ストローク・基準が無ければ何もしない。
+ *  既知の限界: プレビュー値（len.mm）で歩くので、old と new の間に param・material の手があると fit では解決値との差だけずれる
+ *  （DXF 由来の図は全部 fixed なので実害なし）。 */
 export function setAnchor(form, strokeId, datumId, vertexIndex) {
   if (!form.strokes.some(s => s.id === strokeId) || !form.datums.some(d => d.id === datumId)) return form;
   const rest = form.anchors.filter(a => !(a.strokeId === strokeId && a.datumId === datumId));
   if (vertexIndex === null || vertexIndex === undefined || vertexIndex === '') return { ...form, anchors: rest };
-  return { ...form, anchors: [...rest, { datumId, strokeId, vertexIndex: Number(vertexIndex) }] };
+  const next = { datumId, strokeId, vertexIndex: Number(vertexIndex) };
+  const old = form.anchors.find(a => a.strokeId === strokeId && a.datumId === datumId);
+  // 古い Anchor が有限の offsetMm を持つときだけ、図の位置（shift＝基準＋offsetMm−歩いた頂点）を保つ。
+  // 歩けない（長さが未解決・頂点が無い・軸が不明）ときは offset をそのまま引き継ぐ。持たなければ従来どおり（キーを足さない）。
+  if (old && Number.isFinite(old.offsetMm)) {
+    const axis = form.datums.find(d => d.id === datumId)?.axis;
+    const stroke = entryFromForm(form).strokes.find(s => s.id === strokeId);
+    const walked = stroke ? penWalk(stroke, len => (typeof len?.mm === 'number' ? len.mm : null)) : null;
+    const from = Array.isArray(walked) ? walked[old.vertexIndex] : null;
+    const to = Array.isArray(walked) ? walked[next.vertexIndex] : null;
+    next.offsetMm = (from && to && (axis === DetailAxis.S || axis === DetailAxis.T))
+      ? old.offsetMm + (to[axis] - from[axis])
+      : old.offsetMm;
+  }
+  return { ...form, anchors: [...rest, next] };
 }
 
 /** あるストロークがある基準に載せている頂点（無ければ null）。 */
@@ -976,7 +993,7 @@ function fittedDatums(form, fitted) {
     if (d.kind !== DetailDatumKind.ORIGIN) continue;
     const a = entry.anchors.find(x => x.datumId === d.id);
     const v = fitted.strokes.find(st => st.id === a?.strokeId)?.points[a?.vertexIndex];
-    if (v) out.push({ ...d, offsetMm: v[d.axis] });
+    if (v) out.push({ ...d, offsetMm: v[d.axis] - (a.offsetMm ?? 0) }); // 頂点は 基準＋Datum.offsetMm＋Anchor.offsetMm の位置
   }
   return out;
 }
@@ -1206,7 +1223,8 @@ export function dxfPreviewPrimitives(dxf) {
  * 選んだ成分を新規下書きのフォームにする（成分ごとに 1 本以上のストローク・全 LenSpec は fixed・線種は既定）。
  * 分類・基準・stretch はユーザーが後から指定する（基準は軸ごとの原点 2 つ、各ストロークの頂点 0 を載せる）。
  * 出所（provenance）はフォームの extra に載り、保存でそのままエントリへ入る。
- * @returns {{form: object} | {error: string}}
+ * 複数成分の位置関係は Anchor.offsetMm で保つ。basePoint は基準点 P（選んだ成分の bbox 合併の左下。図の座標 mm）。
+ * @returns {{form: object, basePoint: {s:number, t:number}} | {error: string}}
  */
 export function draftFromDxf({ dxf, idFactory }) {
   const picked = dxf.scene.components.filter(c => dxf.selected.includes(c.index));
@@ -1216,10 +1234,20 @@ export function draftFromDxf({ dxf, idFactory }) {
   const base = entryFromForm(newDraft({ idFactory }));
   const strokes = drawn.map((s, i) => ({ id: `${STROKE_ID_PREFIX}${i + 1}`, closed: s.closed, line: defaultLine(), moves: s.moves }));
   const originDatums = base.datums.filter(d => d.kind === DetailDatumKind.ORIGIN);
-  const anchors = strokes.flatMap(s => originDatums.map(d => ({ datumId: d.id, strokeId: s.id, vertexIndex: 0 })));
+  // 位置関係を保つ: 基準点 P＝選んだ成分の bbox の合併の左下（minS, maxT。t は下向き正）。
+  // 各ストロークの頂点 0 は P から (start − P) の位置に置く（Anchor.offsetMm。0 でも書く）。
+  const boxes = picked.map(c => c.bbox).filter(Boolean);
+  const basePoint = {
+    s: Math.min(...boxes.map(b => b.minS)),
+    t: Math.max(...boxes.map(b => b.maxT)),
+  };
+  const anchors = strokes.flatMap((s, i) => originDatums.map(d => ({
+    datumId: d.id, strokeId: s.id, vertexIndex: 0,
+    offsetMm: drawn[i].start[d.axis] - basePoint[d.axis],
+  })));
   const { provenance } = importProvenanceOf(dxf);
   const label = dxf.fileName.replace(/\.[^.]*$/, '');
-  return { form: formFromEntry({ ...base, label, strokes, anchors, provenance }) };
+  return { form: formFromEntry({ ...base, label, strokes, anchors, provenance }), basePoint };
 }
 
 /** DXF から写した下書きの doc（基準なし＝常に未保存。破棄・閉じる前に確認が出る）。 */

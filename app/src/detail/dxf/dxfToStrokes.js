@@ -255,7 +255,7 @@ function hasSelfIntersection(trails, tol) {
  * @param {{a:{s:number,t:number}, b:{s:number,t:number}}[]} segments dxfEntities の segments（layer など余分な項目は見ない）
  * @param {{snapTol?: number, axisTol?: number}} [opts]
  * @returns {{ components: {index:number, segmentCount:number, vertexCount:number, closed:boolean,
- *             trails:{points:object[], closed:boolean}[], strokes:{closed:boolean, moves:object[]}[],
+ *             trails:{points:object[], closed:boolean}[], strokes:{closed:boolean, moves:object[], start:{s:number,t:number}}[],
  *             warnings:{code:string}[], bbox:{minS:number, minT:number, maxS:number, maxT:number}|null}[] }}
  *   bbox は trails の全点の外接矩形（矩形で成分を絞る ui/detailHelperPick.js が使う。DXF・PDF 共通）。
  */
@@ -287,7 +287,11 @@ export function dxfToComponents(segments, { snapTol = DXF_SNAP_TOL_MM, axisTol =
       const points = thin(tr.points, tr.closed, snapTol, pinned);
       return points.length < CLOSED_MIN_VERTICES && tr.closed ? { points, closed: false } : { points, closed: tr.closed };
     });
-    const strokes = trails.map(tr => contourToStrokes(tr.points, { axisTol, closed: tr.closed })).filter(s => s.moves.length > 0);
+    // 各ストロークは頂点 0 の位置 start を持つ（trail の points[0]。位置関係を保って写すため）。
+    // 手が 0 本の trail は落ちるので、ストロークと trail の番号はずれる＝filter の前に start を付ける。
+    const strokes = trails
+      .map(tr => ({ ...contourToStrokes(tr.points, { axisTol, closed: tr.closed }), start: { s: tr.points[0].s, t: tr.points[0].t } }))
+      .filter(s => s.moves.length > 0);
     const warnings = [];
     const closed = trails.length === 1 && trails[0].closed;
     if (!closed) warnings.push({ code: DxfWarning.CONTOUR_OPEN });

@@ -5,6 +5,7 @@
 //     その軸の stretch 1 本にだけ全差分を配る（固定寸法は変えない）。
 //   - 最後に origin の Anchor の頂点が origin の目標に来るよう軸ごとに平行移動する。
 // targets は局所座標（origin の基準 = 0）。各 Datum の offsetMm は目標値に加算する（FL+900 → datums.fl + 900）。
+// Anchor.offsetMm（任意・既定 0）も加算する＝頂点の位置は「基準の目標＋Datum.offsetMm＋Anchor.offsetMm」。
 // 解決できないものは黙って代用せず error を返す。
 // ================================================================
 
@@ -74,7 +75,7 @@ export function fitDetailFigure(plain, targets) {
       for (const a of fig.anchors) {
         if (a.strokeId !== stroke.id) continue;
         const d = datumById.get(a.datumId);
-        if (d.axis === axis && d.kind === kind) return { vertexIndex: a.vertexIndex, datum: d };
+        if (d.axis === axis && d.kind === kind) return { vertexIndex: a.vertexIndex, datum: d, offsetMm: a.offsetMm ?? 0 };
       }
       return null;
     };
@@ -88,7 +89,7 @@ export function fitDetailFigure(plain, targets) {
       const origin = anchorOn(axis, DetailDatumKind.ORIGIN);
       const [stretch] = stretchPartsOf(stroke, axis); // 検証済み: ちょうど 1 本・origin〜end の間
       const orient = end.vertexIndex > origin.vertexIndex ? 1 : -1;
-      const wanted = targetOf.get(end.datum.id) - targetOf.get(origin.datum.id);
+      const wanted = (targetOf.get(end.datum.id) + end.offsetMm) - (targetOf.get(origin.datum.id) + origin.offsetMm);
       const fixedPart = provisional[end.vertexIndex][axis] - provisional[origin.vertexIndex][axis];
       const x = (wanted - fixedPart) / (orient * stretch.sign);
       if (!(x >= DETAIL_FIT_EPS_MM)) {
@@ -103,7 +104,7 @@ export function fitDetailFigure(plain, targets) {
     const shift = {};
     for (const axis of [DetailAxis.S, DetailAxis.T]) {
       const origin = anchorOn(axis, DetailDatumKind.ORIGIN);
-      shift[axis] = targetOf.get(origin.datum.id) - points[origin.vertexIndex][axis];
+      shift[axis] = targetOf.get(origin.datum.id) + origin.offsetMm - points[origin.vertexIndex][axis];
     }
     const fitted = {
       id: stroke.id,

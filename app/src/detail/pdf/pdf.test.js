@@ -278,6 +278,15 @@ const PAGE = {
 };
 const HALF = { x: 0, y: 0, w: 120, h: 100 }; // ページ座標（左上原点）。右の線（x≥150）は外
 
+test('pdfImport: 成分の strokes は start を持ち trail の points[0] と一致する（位置関係を保つ写しの入力。壊れた比較は偽）', () => {
+  const r = buildPdfScene(PAGE, { clip: HALF, scaleDenominator: 6 });
+  const [c] = r.components;
+  assert.ok(c.strokes.length > 0);
+  assert.deepEqual(c.strokes.map(s => s.start), c.trails.map(tr => tr.points[0]));
+  for (const s of c.strokes) assert.ok(Number.isFinite(s.start.s) && Number.isFinite(s.start.t));
+  assert.notDeepEqual(c.strokes[0].start, { s: c.strokes[0].start.s + 1, t: c.strokes[0].start.t }, '対: ずらした値とは一致しない');
+});
+
 test('pdfImport: 通し — 演算子列 → クリップ → mm（1/6）→ 連結成分。矩形 1 つが閉じた 1 ストローク（R・U・L）、y は反転済み', () => {
   const r = buildPdfScene(PAGE, { clip: HALF, scaleDenominator: 6 });
   assert.equal(r.ok, true);

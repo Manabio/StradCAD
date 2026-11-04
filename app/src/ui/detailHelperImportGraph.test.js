@@ -19,7 +19,7 @@ const PDFJS_PACKAGE = 'pdfjs-dist';
 const isForbiddenPackage = spec => FORBIDDEN_PACKAGES.has(spec) || spec === PDFJS_PACKAGE || spec.startsWith(`${PDFJS_PACKAGE}/`);
 const ALLOWED_DIRECT = new Set([
   'core/constants.js',
-  'detail/detailModel.js', 'detail/detailPreview.js', 'detail/detailPlacement.js',
+  'detail/detailModel.js', 'detail/detailPreview.js', 'detail/detailPlacement.js', 'detail/detailPen.js',
   'detail/dxf/dxfImport.js', 'detail/dxf/dxfProvenance.js', 'detail/pdf/pdfProvenance.js', 'error.js',
   'catalog/catalogKinds.js', 'catalog/catalogMaintenance.js',
   'openings/openingCatalog.js', 'openings/openingDetailFrame.js', 'finish/roomDetailTargets.js',

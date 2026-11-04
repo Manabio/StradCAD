@@ -8,7 +8,9 @@
 //   Move   = { dir:'U'|'D'|'L'|'R', len:LenSpec, edge? } | { dir:'V', dx:LenSpec, dy:LenSpec, ss?:1|-1, st?:1|-1, edge? }
 //            'V' の ss は s 軸・st は t 軸の向き（省略時 +1。normalize が埋める）。dx/dy の mm は正のみ。
 //            edge は DetailEdgeMark（'air'＝空気との境目。S8a）。印なしはキーを持たない（normalize は足さない）。
-//   Datum  = { id, role, axis, kind, offsetMm }   Anchor = { datumId, strokeId, vertexIndex }
+//   Datum  = { id, role, axis, kind, offsetMm }   Anchor = { datumId, strokeId, vertexIndex, offsetMm? }
+//   Anchor.offsetMm は「頂点の位置＝基準の目標＋Datum.offsetMm＋Anchor.offsetMm」の第 3 項（既定 0。位置関係を保って写すため）。
+//   normalize は offsetMm のキーを足さない（持たない図のバイト・比較を変えない）。
 // closed の規約: 閉じ辺は描画側が補う。始点へ戻る手は書かない（mm で歩いた終点が始点に一致する closed は CLOSED_RETURNS_TO_START）。
 // 既知の限界: CLOSED_RETURNS_TO_START は LenSpec.mm（プレビュー値）で判定する。param・material・stretch の closed は
 // fit で解決した値では閉じ辺が 0 になる（またはならない）ことがあり、登録時には検出しない。
@@ -42,7 +44,7 @@ export const DetailValidationError = Object.freeze({
   UNKNOWN_WEIGHT:          'unknownWeight',
   UNKNOWN_DASH:            'unknownDash',
   BAD_LENGTH:              'badLength',            // mm が有限かつ正でない
-  BAD_OFFSET:              'badOffset',            // Datum.offsetMm が有限でない
+  BAD_OFFSET:              'badOffset',            // Datum.offsetMm・Anchor.offsetMm（キーがあるとき）が有限でない
   NO_STROKES:              'noStrokes',
   EMPTY_MOVES:             'emptyMoves',
   CLOSED_TOO_FEW:          'closedTooFew',         // closed なのに頂点が 2 以下
@@ -243,6 +245,10 @@ export function validateDetailFigure(input) {
   fig.anchors.forEach((a, ai) => {
     const ap = `anchors[${ai}]`;
     if (!isObj(a)) { push(E.SHAPE, 'Anchor がオブジェクトでない', ap); return; }
+    // 明示した undefined は「キーが無い」と同じ（JSON 往復でキーが消えても判定が変わらない）。null は BAD_OFFSET のまま（作る経路が無いので厳しい側）。
+    if (Object.hasOwn(a, 'offsetMm') && a.offsetMm !== undefined && (typeof a.offsetMm !== 'number' || !Number.isFinite(a.offsetMm))) {
+      push(E.BAD_OFFSET, `Anchor の offsetMm が有限でない: ${String(a.offsetMm)}`, `${ap}.offsetMm`);
+    }
     const d = datumById.get(a.datumId);
     const s = strokeById.get(a.strokeId);
     if (!d) push(E.ANCHOR_DATUM_MISSING, `Anchor の datumId が無い: ${String(a.datumId)}`, `${ap}.datumId`);
