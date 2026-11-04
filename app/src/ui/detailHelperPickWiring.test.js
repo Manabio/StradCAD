@@ -65,13 +65,14 @@ const clearButtonCallsHandler = body => !!body && /onClick=\{onClearPick\}[^>]*>
 const clearWiredForBoth = src => /onClearPick=\{\(\) => setPdf\(p => clearPickRect\(p\)\)\}/.test(src) && /onClearPick=\{\(\) => setDxf\(d => clearPickRect\(d\)\)\}/.test(src);
 // 矩形の確定は pdf があれば pdf、なければ dxf の state へ setPickRect。
 const pickWiredForBoth = src => /onPick=\{r => \(pdf \? setPdf\(p => setPickRect\(p, r\)\) : setDxf\(d => setPickRect\(d, r\)\)\)\}/.test(src);
-// AutoScaledFigure: overlay?.(t) は relative の div の中（EditableDimLabel の後・return の前）で呼び、変換は 1 回だけ作る。
+// AutoScaledFigure: overlay?.(t, …) は relative の div の中（EditableDimLabel の前・return の前）で呼び、変換は 1 回だけ作る
+// （寸法ラベルを層より上に置いてクリックを受けるため。S7d-1 で順序を後→前へ改めた）。
 const figureCallsOverlayInsideRelativeDiv = src => {
   const rel = src.indexOf('position: \'relative\'');
   const ed = src.indexOf('<EditableDimLabel');
-  const ov = src.indexOf('overlay?.(t)');
-  const close = src.indexOf('</div>\n  );', ov);
-  return rel >= 0 && ed > rel && ov > ed && close > ov && (src.match(/makeTransform\(/g) ?? []).length === 1; // import は括弧なしなので呼び出しだけ数える
+  const ov = src.indexOf('overlay?.(t,');
+  const close = src.indexOf('</div>\n  );', ed);
+  return rel >= 0 && ov > rel && ed > ov && close > ed && (src.match(/makeTransform\(/g) ?? []).length === 1; // import は括弧なしなので呼び出しだけ数える
 };
 
 // 矩形の枠は今有効な矩形（imported＝pdf ?? dxf）から作る。
@@ -151,7 +152,7 @@ test('【配線】ImportResult: 一覧は pickedComponentRows を通し、「矩
   assert.ok(pickWiredForBoth(panel()));
 });
 
-test('【配線】AutoScaledFigure: overlay?.(t) を relative の div の中で呼び、変換は 1 回だけ作る', () => {
+test('【配線】AutoScaledFigure: overlay?.(t, …) を relative の div の中で呼び、変換は 1 回だけ作る', () => {
   assert.ok(figureCallsOverlayInsideRelativeDiv(stripComments(readSrc('structural/sectionFigure/AutoScaledFigure.jsx'))));
 });
 
@@ -182,9 +183,11 @@ test('【検出力】判定は壊れた配線を落とす（overlay を常に渡
   assert.equal(clearWiredForBoth('onClearPick={() => setDxf(d => clearPickRect(d))}'), false);
   assert.equal(pickWiredForBoth('onPick={r => setDxf(d => setPickRect(d, r))}'), false);
 
-  const fig = "<div style={{ position: 'relative' }}><EditableDimLabel/>{overlay?.(t)}</div>\n  );\nmakeTransform(a);";
+  const fig = "<div style={{ position: 'relative' }}>{overlay?.(t, { autoScale })}<EditableDimLabel/></div>\n  );\nmakeTransform(a);";
   assert.equal(figureCallsOverlayInsideRelativeDiv(fig), true);
   assert.equal(figureCallsOverlayInsideRelativeDiv(`${fig}makeTransform(b);`), false);
-  assert.equal(figureCallsOverlayInsideRelativeDiv(fig.replace('{overlay?.(t)}', '')), false);
-  assert.equal(figureCallsOverlayInsideRelativeDiv("{overlay?.(t)}<div style={{ position: 'relative' }}><EditableDimLabel/></div>\n  );makeTransform(a);"), false);
+  assert.equal(figureCallsOverlayInsideRelativeDiv(fig.replace('{overlay?.(t, { autoScale })}', '')), false);
+  // 旧順序（EditableDimLabel の後）・relative の div の外は偽
+  assert.equal(figureCallsOverlayInsideRelativeDiv("<div style={{ position: 'relative' }}><EditableDimLabel/>{overlay?.(t, { autoScale })}</div>\n  );makeTransform(a);"), false);
+  assert.equal(figureCallsOverlayInsideRelativeDiv("{overlay?.(t, { autoScale })}<div style={{ position: 'relative' }}><EditableDimLabel/></div>\n  );makeTransform(a);"), false);
 });

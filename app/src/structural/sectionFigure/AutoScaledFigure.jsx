@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { figureBounds, chooseScale, scaleLabel, makeTransform } from './sectionGeometry.js';
+import { viewBounds } from './figureView.js';
 import { NumPad } from '../../ui/NumPad.jsx';
 import { LABEL_ID_SUFFIX } from './layoutStudy.js';
 import { resolveSvgFigureLinePoints } from './svgFigureLineJoin.js';
@@ -47,14 +48,19 @@ const COLOR = { stroke: '#334155', dim: '#2563eb', axis: '#94a3b8', concrete: '#
 // 選択中の要素群を矩形でハイライトする（移動は親が矢印キーで overrides を更新）。
 // boundsPrimitives: 枠・倍率を決める基準プリミティブ（既定は primitives）。配置オフセットで枠や倍率がブレないよう
 // “オフセット適用前”のジオメトリを渡す（位置調整は枠内で要素のみ動く）。
-export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320, maxHeight = 340, onEditDim, study = null, scale: scaleProp = null, overlay }) {
+export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320, maxHeight = 340, onEditDim, study = null, scale: scaleProp = null, overlay, view = null, svgRef }) {
   // 倍率は基準ジオメトリ（移動前）で固定。配置検討では移動後を内包する和でキャンバスを広げ、欄外要素も
   // スクロールで追いかけられるようにする（倍率は不変・原点は和の最小＝負座標を作らない）。
   // scaleProp 指定時はその縮尺を使う（スクリーン空間注記：生成側が形状基準で決めた縮尺をそのまま使い、
   // 注記の隙間が px 一定になるよう仕込まれた図を、同じ縮尺で描く）。
   const baseBounds = figureBounds(boundsPrimitives ?? primitives);
-  const scale = scaleProp ?? chooseScale(baseBounds.width, baseBounds.height, maxWidth, maxHeight);
-  const frameBounds = study ? unionBounds(baseBounds, figureBounds(primitives)) : baseBounds;
+  const autoScale = scaleProp ?? chooseScale(baseBounds.width, baseBounds.height, maxWidth, maxHeight);
+  // view（figureView.js。{scale,cx,cy}）があり study が無いときは、その見え方（ズーム／パン）で描く。
+  // 枠は maxWidth×maxHeight 固定で、はみ出しは div の overflow:hidden で切る。null は従来の自動縮尺。
+  const viewed = !!view && !study;
+  const scale = viewed ? view.scale : autoScale;
+  const frameBounds = viewed ? viewBounds(view, { width: maxWidth, height: maxHeight })
+    : study ? unionBounds(baseBounds, figureBounds(primitives)) : baseBounds;
   const t = makeTransform(frameBounds, scale);
 
   const scrollRef = useRef(null);
@@ -89,8 +95,8 @@ export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320,
   const linePts = resolveSvgFigureLinePoints(primitives, t);
 
   const figureBody = (
-    <div style={{ position: 'relative', width: t.pxWidth, height: t.pxHeight }}>
-      <svg width={t.pxWidth} height={t.pxHeight} style={{ display: 'block' }}>
+    <div style={{ position: 'relative', width: t.pxWidth, height: t.pxHeight, ...(viewed ? { overflow: 'hidden' } : null) }}>
+      <svg ref={svgRef} width={t.pxWidth} height={t.pxHeight} style={{ display: 'block' }}>
         {primitives.map((p, i) => {
           const el = renderPrimitive(p, i, t, interactive, linePts);
           if (study && p.layoutId) {
@@ -112,12 +118,13 @@ export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320,
       </svg>
       {/* 縮尺ラベル */}
       <div style={{ position: 'absolute', right: 2, bottom: 0, fontSize: 10, color: '#94a3b8' }}>{scaleLabel(scale)}</div>
+      {/* 呼び出し側が重ねる層（t は上の描画と同じ変換。第2引数は全体の縮尺と図の範囲。
+          例: 部分詳細図ヘルパーのジェスチャー層）。寸法ラベルを層より上に置きクリックを受けるため前に描く */}
+      {overlay?.(t, { autoScale, contentBounds: baseBounds })}
       {/* 図上の寸法編集（SVGテキストは編集不可のためHTMLを重ねる） */}
       {editableDims.map((dim, i) => (
         <EditableDimLabel key={`ed${i}`} dim={dim} t={t} onCommit={onEditDim} />
       ))}
-      {/* 呼び出し側が重ねる層（t は上の描画と同じ変換。例: 部分詳細図ヘルパーの矩形ドラッグ層） */}
-      {overlay?.(t)}
     </div>
   );
 
