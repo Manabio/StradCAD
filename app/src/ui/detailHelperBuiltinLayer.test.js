@@ -10,6 +10,7 @@ import { detailBuiltinFigures } from '../detail/detailPlacement.js';
 import { detailFigureCatalog } from '../openings/openingCatalog.js';
 import {
   DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY, DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY,
+  DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
 } from '../core/constants.js';
 import {
   formFromEntry, entryFromForm, setMoveLen, planSave, saveContextFor, saveDecision, docContextFor, docFromEntry, unlockDoc,
@@ -27,14 +28,16 @@ const editedBaseboard = () => entryFromForm(setMoveLen(formFromEntry(BASEBOARD),
 const apply = (plan, markDirty = () => {}) => applyCatalogEditPlan(DF, plan, { saveFn: async () => {}, markDirty });
 const withOverlay = fn => async () => { try { await fn(); } finally { clearOverlays(); } };
 
-test('S8d 一覧: 組込み 4 件が出所バッジ「組込み」つきで出る（ライブラリは「ライブラリ」）', withOverlay(() => {
+test('S8d 一覧: 組込み 7 件が出所バッジ「組込み」つきで出る（ライブラリは「ライブラリ」）', withOverlay(() => {
   const rows = helperLibraryRows({ userEntries: [], builtinList: detailBuiltinFigures });
-  assert.deepEqual(rows.map(r => r.key).sort(),
-    [DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY, DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY].sort());
+  assert.deepEqual(rows.map(r => r.key).sort(), [
+    DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY, DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY,
+    DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
+  ].sort());
   assert.ok(rows.every(r => r.origin === LIBRARY_ORIGIN.BUILTIN && r.originLabel === '組込み'));
   const user = { ...BASEBOARD, key: 'df-user', label: 'ユーザー図' };
   const rows2 = helperLibraryRows({ userEntries: [user], builtinList: detailBuiltinFigures });
-  assert.equal(rows2.length, 5);
+  assert.equal(rows2.length, 8);
   assert.equal(rows2.find(r => r.key === 'df-user').originLabel, 'ライブラリ');
 }));
 
@@ -46,7 +49,7 @@ test('S8d 一覧: 組込みと同キーのライブラリは上書き行 1 つ�
   assert.equal(same[0].origin, LIBRARY_ORIGIN.OVERRIDE);
   assert.equal(same[0].originLabel, '上書き');
   assert.equal(same[0].label, '巾木 出 12');
-  assert.equal(rows.length, 4);
+  assert.equal(rows.length, 7);
 }));
 
 test('S8d 操作: 組込み行は rowState=builtin（編集の解錠と複製だけ・削除と戻すは不可）／上書き行は戻す（削除は戻すに置換）／ライブラリ行は従来どおり削除', () => {

@@ -272,6 +272,20 @@ export function frameInnerSpan(coord1, coord2, jambWidth) {
 }
 
 /**
+ * 詳細LODの方立の種別（planSymbolPlan の frame のうち方立を描くもの）。蝶番系＝'notched'（欠き込み）・
+ * 記号自身が枠矩形を描く非蝶番系＝'sashOpen'（コの字）・それ以外＝'sash'（閉じた矩形）。
+ * @param {string} mechanism OpeningMechanism
+ * @returns {'notched'|'sashOpen'|'sash'}
+ */
+export function detailFrameKindOf(mechanism) {
+  return HINGED_MECHANISMS.has(mechanism)
+    ? 'notched'
+    : SASH_OPEN_MECHANISMS.has(mechanism)
+      ? 'sashOpen'
+      : 'sash';
+}
+
+/**
  * 詳細LODディスパッチの「判断」を1箇所に集約する純関数。renderer/OpeningsLayer.jsx は
  * `.jsx`のためnode:testから単体importできず、判断ロジックをそこへ残すと結線ミスが単体テストで
  * 検出できない（QA実測: F1のcenterCoord消失・F2のpivotPerp未クランプが1779/1779緑のまま混入した。
@@ -318,11 +332,7 @@ export function planSymbolPlan({ mechanism, lodLevel, coord1, coord2, axisValue,
   // 三方枠は「STANDARDでも詳細を描く」意図的な例外（frame一覧のJSDoc参照）。lodLevel判定より前に返す。
   if (mechanism === OpeningMechanism.FRAME_ONLY) return { frame: 'frameOnly', innerSpan: null, pivotPerp, leafOutward };
   if (!detail) return { frame: 'none', innerSpan: null, pivotPerp, leafOutward };
-  const frame = HINGED_MECHANISMS.has(mechanism)
-    ? 'notched'
-    : SASH_OPEN_MECHANISMS.has(mechanism)
-      ? 'sashOpen'
-      : 'sash';
+  const frame = detailFrameKindOf(mechanism);
   const innerSpan = frameInnerSpan(coord1, coord2, jambWidth);
   return { frame, innerSpan, pivotPerp, leafOutward };
 }

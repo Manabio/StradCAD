@@ -62,7 +62,7 @@ import {
   frameOnlyPerpRange, clampFrameFaceWidth,
   DOOR_OPEN_ANGLE_DEG, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
 } from './openingPlanSymbolGeometry.js';
-import { resolveDetailFrame, resolveSwingDoorFrame } from './openingDetailFit.js';
+import { resolveDetailFrame, resolveSwingDoorFrame, frameDefaultKey } from './openingDetailFit.js';
 import { DetailSlot, DetailFigureSource, SWING_LEAF_SUBTYPE, WINDOW_FRAME_JAMB_WIDTH_MM } from '../core/constants.js';
 import { fixtureSymbolOf, effectiveFrameFaceWidth, effectiveFrameProjection } from './openingNumbering.js';
 import { LodLevel } from '../viewport.js';
@@ -435,7 +435,8 @@ function buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, ax
 
   if (plan.frame === 'sashOpen') {
     const spanOpening = innerSpanOpening(opening, plan.innerSpan);
-    const frame = sashFrameOpenPrimitives(opening, band, jambW, frameWeight);
+    const frame = windowDetailJambPrimitives(opening, entry.mechanism, band, faceLo, faceHi, plan, frameWeight)
+      ?? sashFrameOpenPrimitives(opening, band, jambW, frameWeight);
     const symbol = sashOpenGroupSymbolPrimitives(entry.mechanism, spanOpening, band, entry, symbolWeight, frameWeight);
     return [...frame, ...symbol];
   }
@@ -578,7 +579,8 @@ function buildSashGroupPrimitives(opening, entry, lodLevel, band, detail, axisVa
 
   if (plan.frame === 'sash') {
     const spanOpening = innerSpanOpening(opening, plan.innerSpan);
-    const frame = sashFramePrimitives(opening, band, jambW, frameWeight);
+    const frame = windowDetailJambPrimitives(opening, entry.mechanism, band, faceLo, faceHi, plan, frameWeight)
+      ?? sashFramePrimitives(opening, band, jambW, frameWeight);
     const symbol = sashGroupSymbolPrimitives(entry.mechanism, spanOpening, band, symbolWeight, exteriorDirOf);
     return [...frame, ...symbol];
   }
@@ -805,6 +807,57 @@ function swingDetailFramePrimitives(opening, band, faceLo, faceHi, outward, fram
   }), jamb.closed));
 }
 
+// 窓の方立（詳細 LOD の平面。3 経路: plan.frame が 'notched'・'sashOpen'・'sash'）を部分詳細図で描く（部分詳細図 S8f-1）。
+// swingDetailFramePrimitives（S8e-1）と同じ流儀: 建具個別の detailRefs ＞ 記号の detailFigures の方立の図があれば壁の面へ fit して写し、
+// 無ければ方立の種別ごとの組込みの図（frameDefaultKey）を暗黙の既定にする。null＝従来の枠（swingFramePrimitives／sashFrameOpenPrimitives／sashFramePrimitives）で描く。
+// 窓（category window）以外・引き違い窓（SLIDE_DOUBLE。この関数を通らない）・面が無いときは null。
+// 暗黙の既定は従来の描きと同じ前提のときだけ（R4 相当）: 見付が全幅 25（開口幅 50 以上）で、見込帯が壁の面±出幅いっぱい（半外付けでない）。
+// 欠き込みの方立はさらに、回転中心 pivotPerp が開く側の面にあること（開く向きが無く軸芯で欠き込むときは従来へ）。
+// 明示の割当ては R4 を見ず壁の面へ fit する。fit に失敗したら従来の描き（通知は S8f-2）。平面の記号に source は付けない。
+// 出力の形は従来に合わせる: sash＝軸に平行な閉じた 4 点なら rect・sashOpen＝closed を渡さない polyline（sashFrameOpenPrimitives と同じ）・notched＝閉じた polyline。
+function windowDetailJambPrimitives(opening, mechanism, band, faceLo, faceHi, plan, frameWeight) {
+  if (opening.category !== OpeningCategory.WINDOW) return null;
+  if (!Number.isFinite(faceLo) || !Number.isFinite(faceHi)) return null;
+  const faceMin = Math.min(faceLo, faceHi);
+  const faceMax = Math.max(faceLo, faceHi);
+  const kind = plan.frame;
+  const jambW = jambWidthFor(opening);
+  const resolved = resolveSwingDoorFrame({
+    symbolKey: fixtureSymbolOf(opening), detailRefs: opening.detailRefs ?? null, slot: DetailSlot.JAMB,
+    coord1: opening.coord1, coord2: opening.coord2, faceMin, faceMax, wallThickness: faceMax - faceMin,
+    tSign: kind === 'notched' && plan.leafOutward < 0 ? -1 : 1, faceWidth: jambW, projection: FRAME_OVERHANG_MM,
+    defaultKey: frameDefaultKey(opening, DetailSlot.JAMB, mechanism),
+  });
+  if (resolved === null || resolved.error) return null;
+  // R4 相当は解決の後で見る（既定か明示かは解決しないと分からない。swingDetailFramePrimitives と同じ）。
+  if (resolved.source === DetailFigureSource.DEFAULT) {
+    const openFace = plan.leafOutward > 0 ? faceMax : faceMin;
+    if (!(jambW === WINDOW_FRAME_JAMB_WIDTH_MM && band.lo === faceMin - FRAME_OVERHANG_MM && band.hi === faceMax + FRAME_OVERHANG_MM)) return null;
+    if (kind === 'notched' && plan.pivotPerp !== openFace) return null;
+  }
+  const worldPoints = points => points.flatMap(({ along, perp }) => {
+    const p = toWorld(opening.isVertical, along, perp);
+    return [p.x, p.y];
+  });
+  return resolved.profiles.map(jamb => {
+    const { points, closed } = jamb;
+    if (kind === 'sash' && closed && isAxisAlignedRect(points)) {
+      const alongs = points.map(p => p.along);
+      const perps = points.map(p => p.perp);
+      return rectPrim('frame', frameWeight, opening.isVertical, Math.min(...alongs), Math.max(...alongs), Math.min(...perps), Math.max(...perps));
+    }
+    return polylinePrim('frame', frameWeight, worldPoints(points), kind === 'sashOpen' && !closed ? undefined : closed);
+  });
+}
+
+// 軸に平行な辺だけの 4 点か（along が同じ辺と perp が同じ辺が交互に並ぶ）。
+function isAxisAlignedRect(points) {
+  if (points.length !== 4) return false;
+  const [a, b, c, d] = points;
+  return (a.perp === b.perp && b.along === c.along && c.perp === d.perp && d.along === a.along)
+    || (a.along === b.along && b.perp === c.perp && c.along === d.along && d.perp === a.perp);
+}
+
 // 蝶番系その1（SWING_GROUP_MECHANISMS）のディスパッチ（J7: jambW・swingOpenPerpDir・
 // planSymbolPlan／J9: SWING専用枝／J11: notched→swingFrame＋innerSpanの移設）。
 // SWINGは「詳細LODで専用inset(FRAME_HINGE_INSET_MM/FRAME_LATCH_INSET_MM)＋閉じた扉」を
@@ -825,6 +878,7 @@ function buildSwingGroupPrimitives(opening, entry, lodLevel, band, detail, axisV
   if (entry.mechanism === OpeningMechanism.SWING) {
     const frame = detail
       ? (swingDetailFramePrimitives(opening, band, faceLo, faceHi, plan.leafOutward, frameWeight)
+        ?? windowDetailJambPrimitives(opening, entry.mechanism, band, faceLo, faceHi, plan, frameWeight)
         ?? swingFramePrimitives(opening, band, plan.pivotPerp, plan.leafOutward, frameWeight))
       : [];
     const leaf = swingPrimitives(opening, plan.pivotPerp, leafWeight, arcWeight,
@@ -837,7 +891,8 @@ function buildSwingGroupPrimitives(opening, entry, lodLevel, band, detail, axisV
   // SWING_IN / PROJECT_V / DREH_KIPP
   if (plan.frame === 'notched') {
     const spanOpening = innerSpanOpening(opening, plan.innerSpan);
-    const frame = swingFramePrimitives(opening, band, plan.pivotPerp, plan.leafOutward, frameWeight);
+    const frame = windowDetailJambPrimitives(opening, entry.mechanism, band, faceLo, faceHi, plan, frameWeight)
+      ?? swingFramePrimitives(opening, band, plan.pivotPerp, plan.leafOutward, frameWeight);
     const leaf = swingPrimitives(spanOpening, plan.pivotPerp, leafWeight, arcWeight, 0, 0, null);
     return [...frame, ...leaf];
   }
@@ -904,7 +959,8 @@ function buildHingeGroup2Primitives(opening, entry, lodLevel, band, detail, axis
 
   if (plan.frame === 'notched') {
     const spanOpening = innerSpanOpening(opening, plan.innerSpan);
-    const frame = swingFramePrimitives(opening, band, plan.pivotPerp, plan.leafOutward, frameWeight);
+    const frame = windowDetailJambPrimitives(opening, entry.mechanism, band, faceLo, faceHi, plan, frameWeight)
+      ?? swingFramePrimitives(opening, band, plan.pivotPerp, plan.leafOutward, frameWeight);
     const leaf = hingeGroup2LeafPrimitives(entry.mechanism, spanOpening, entry, plan.pivotPerp, leafWeight, arcWeight);
     return [...frame, ...leaf];
   }

@@ -8,11 +8,13 @@
 
 import {
   DetailSlot, DetailDash, DETAIL_PRIM_SOURCE, DetailFigureSource, DETAIL_FIT_EPS_MM, DOOR_LEAF_THICKNESS_MM,
-  DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY,
+  DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY, SWING_LEAF_SUBTYPE, OpeningCategory,
+  DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
 } from '../core/constants.js';
+import { detailFrameKindOf } from './openingPlanSymbolGeometry.js';
 import { ElevationLineRole, ElevationDash, weightForRole } from '../elevation/elevationStyle.js';
 import { line, polyline } from '../elevation/elevationPrimitives.js';
-import { detailFigureEntry, detailFigureRefsFor, fitDetailLocalMemo, subTypeDetailFigureRefsFor } from './openingCatalog.js';
+import { OpeningMechanism, detailFigureEntry, detailFigureRefsFor, fitDetailLocalMemo, subTypeDetailFigureRefsFor } from './openingCatalog.js';
 import { placeDetailSides, placeDetailElevation, withoutCollinearPoints } from './openingDetailFrame.js';
 import { effectiveHeight, effectiveSillHeight } from './openingNumbering.js';
 
@@ -101,6 +103,27 @@ export function swingDoorDefaultKey(slot) {
   return SWING_DOOR_DEFAULT_KEYS[slot];
 }
 
+// 窓の方立（平面・詳細 LOD）の暗黙の既定（S8f-1）: 方立の種別（planSymbolGeometry.js detailFrameKindOf）→ 組込み図のキー。
+const WINDOW_JAMB_DEFAULT_KEYS = Object.freeze({
+  notched: DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
+  sashOpen: DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY,
+  sash: DETAIL_BUILTIN_WINDOW_JAMB_KEY,
+});
+
+/**
+ * 枠の暗黙の既定の組込み図のキー（無ければ undefined）。片開き戸＝slot ごと（swingDoorDefaultKey）・窓＝方立（JAMB）だけ方立の種別ごと
+ * （引き違い窓 SLIDE_DOUBLE・三方枠 FRAME_ONLY は対象外）。建具エディタが「同キーの選択＝既定扱い」へ畳む基準にも使える。
+ * @param {{category?:string, subType?:string}} opening
+ * @param {string} slot DetailSlot
+ * @param {string} mechanism OpeningMechanism（窓の方立の種別の判定に使う）
+ */
+export function frameDefaultKey(opening, slot, mechanism) {
+  if (opening?.subType === SWING_LEAF_SUBTYPE) return swingDoorDefaultKey(slot);
+  if (opening?.category !== OpeningCategory.WINDOW || slot !== DetailSlot.JAMB) return undefined;
+  if (mechanism === OpeningMechanism.SLIDE_DOUBLE || mechanism === OpeningMechanism.FRAME_ONLY) return undefined;
+  return WINDOW_JAMB_DEFAULT_KEYS[detailFrameKindOf(mechanism)];
+}
+
 // 組込み図の fit・配置で出る浮動小数の丸め誤差（数 ULP）を、従来の描きと同じ式の値へ寄せる。寄せるのは DETAIL_FIT_EPS_MM 以内だけ。
 const snapNear = (v, refs) => refs.find(r => Math.abs(v - r) <= DETAIL_FIT_EPS_MM) ?? v;
 
@@ -112,16 +135,17 @@ const snapNear = (v, refs) => refs.find(r => Math.abs(v - r) <= DETAIL_FIT_EPS_M
  * slot=HEAD（展開の断面の上枠。S8e-2）の探索順は resolveDetailFigure のまま（建具個別の head ＞ 記号の head ＞ 建具個別の jamb ＞ 記号の jamb）で、
  * どれも無いときだけ組込みの上枠（R9 の流用）。明示の方立の図は上枠にも流用される（上枠は同じ戸当たりの断面なので物理的に正しい）が、
  * 既定の上枠は従来の矩形（R2。方立の既定を流用すると欠き込みが出て従来と一致しない）。
- * @param {object} p resolveDetailFrame と同じ（slot は既定 JAMB）に、faceMax・tSign を加えたもの。wallThickness＝faceMax−faceMin をそのまま渡す
+ * @param {object} p resolveDetailFrame と同じ（slot は既定 JAMB）に、faceMax・tSign を加えたもの。wallThickness＝faceMax−faceMin をそのまま渡す。
+ *   defaultKey＝割当て無しのときの組込み図のキー（省略時は片開き戸の slot 別の既定。窓の方立は frameDefaultKey の結果を渡す。S8f-1）
  * @returns {null | {error:{code:string, message:string}, source:string} | {sides: object[][], profiles: object[], source:string}}
  *   null＝従来の描きへ戻る（参照切れ・既定の組込みが引けない）。error＝fit できない（呼び出し側は従来の描きへ。明示の割当てだけ通知の対象）。
  */
-export function resolveSwingDoorFrame({ symbolKey, detailRefs = null, slot = DetailSlot.JAMB, coord1, coord2, faceMin, faceMax, wallThickness, tSign, faceWidth, projection }) {
+export function resolveSwingDoorFrame({ symbolKey, detailRefs = null, slot = DetailSlot.JAMB, coord1, coord2, faceMin, faceMax, wallThickness, tSign, faceWidth, projection, defaultKey = SWING_DOOR_DEFAULT_KEYS[slot] }) {
   const r = resolveDetailFigure({ symbolKey, detailRefs, slot });
   let figure;
   let source;
   if (r === null) {
-    const key = SWING_DOOR_DEFAULT_KEYS[slot];
+    const key = defaultKey;
     if (key === undefined || detailFigureEntry(key) === null) return null;
     figure = { key, slot };
     source = DetailFigureSource.DEFAULT;

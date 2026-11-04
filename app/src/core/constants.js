@@ -717,6 +717,13 @@ export const DETAIL_BUILTIN_KNEE_CAP_KEY = 'df-builtin-kneecap-20';
  */
 export const DETAIL_BUILTIN_DOOR_JAMB_KEY = 'df-builtin-door-jamb-30';
 export const DETAIL_BUILTIN_DOOR_HEAD_KEY = 'df-builtin-door-head-30';
+/**
+ * 窓の方立（平面・詳細 LOD）の組込み図のキー（S8f-1）。窓（category window）があれば、割当て無しの暗黙の既定として使う。
+ * 平面の方立は 3 経路あり、経路ごとに 1 つ: 閉じた矩形（sash）・開いたコの字（sashOpen）・欠き込みの六角形（開き系 notched）。見付は 25。
+ */
+export const DETAIL_BUILTIN_WINDOW_JAMB_KEY = 'df-builtin-window-jamb-25';
+export const DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY = 'df-builtin-window-jamb-open-25';
+export const DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY = 'df-builtin-window-jamb-notched-25';
 /** 片開き戸の建具種別キー（openingCatalog.js の FITTING_CATALOG）。catalog/ は openings/ を引けないので暗黙の既定の同梱判定（usedEntries.js）と共有できるようここに置く。 */
 export const SWING_LEAF_SUBTYPE = 'singleSwing';
 

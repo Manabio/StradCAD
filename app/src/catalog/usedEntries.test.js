@@ -10,6 +10,7 @@ import { CatalogKind } from './catalogKinds.js';
 import { SNAPSHOT_REF_WALKERS } from './codeNormalization.js';
 import {
   DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY, DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY, SWING_LEAF_SUBTYPE,
+  DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
 } from '../core/constants.js';
 
 function baseSnapshot(overrides) {
@@ -637,16 +638,26 @@ test('collectUsedKeys: 腰壁（hasKnee）の記録があれば組込みの天�
   assert.equal(collectUsedKeys({ kneeDropWalls: [] }).detailFigure.size, 0);
 });
 
-test('collectUsedKeys: 片開き戸（subType が SWING_LEAF_SUBTYPE）が 1 つでもあれば組込みの方立・上枠が入る（S8e）', () => {
+test('collectUsedKeys: 片開き戸（subType が SWING_LEAF_SUBTYPE）が 1 つでもあれば組込みの方立・上枠が入る（S8e）。窓だけなら方立・上枠は入らない', () => {
   const used = collectUsedKeys({ openings: [
-    { id: 'o1', category: 'window', subType: 'fixed' },
     { id: 'o2', category: 'fitting', subType: SWING_LEAF_SUBTYPE },
+    { id: 'o3', category: 'fitting', subType: 'swingIn' },
   ] });
   assert.deepEqual([...used.detailFigure].sort(), [DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY].sort());
 });
 
-test('collectUsedKeys: 失敗系＝片開き戸が無い（他の建具だけ・建具なし・subType 欠落）なら方立・上枠は入らない', () => {
-  assert.equal(collectUsedKeys({ openings: [{ id: 'o1', category: 'fitting', subType: 'swingIn' }, { id: 'o2', category: 'window', subType: 'fixed' }] }).detailFigure.size, 0);
+test('collectUsedKeys: 窓（category window）が 1 つでもあれば窓の方立の組込み 3 つが入る（S8f-1）。片開き戸の図は入らない', () => {
+  const used = collectUsedKeys({ openings: [
+    { id: 'o1', category: 'window', subType: 'fixed' },
+    { id: 'o2', category: 'fitting', subType: 'swingIn' },
+  ] });
+  assert.deepEqual([...used.detailFigure].sort(), [
+    DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
+  ].sort());
+});
+
+test('collectUsedKeys: 失敗系＝片開き戸も窓も無い（他の建具だけ・建具なし・subType／category 欠落）なら組込みの枠の図は入らない', () => {
+  assert.equal(collectUsedKeys({ openings: [{ id: 'o1', category: 'fitting', subType: 'swingIn' }] }).detailFigure.size, 0);
   assert.equal(collectUsedKeys({ openings: [] }).detailFigure.size, 0);
   assert.equal(collectUsedKeys({ openings: [{ id: 'o3' }, null] }).detailFigure.size, 0);
 });
