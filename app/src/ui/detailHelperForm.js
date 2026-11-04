@@ -130,6 +130,8 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   // 矩形で成分を絞る（S7c。DXF・PDF 共通）
   pickHint: 'プレビューをドラッグして、矩形に収まる成分を選んでください', pickClear: '矩形を解除',
   pickSummary: (inRect, total, selected) => `矩形内 ${inRect} ／ 全 ${total} 成分・選択 ${selected}`,
+  // DXF のレイヤ on/off（S7d）
+  layers: 'レイヤ', layersAllOn: '全部 on',
   dxfComponentLabel: n => `成分 ${n}`,
   dxfClosedLabel: '閉', dxfOpenLabel: '開', dxfVertexUnit: '頂点',
 });
@@ -1080,6 +1082,33 @@ export function setDxfUnit(dxf, unitText) {
   const scene = buildDxfScene(dxf.parsed, { unitFactor });
   if (!scene.ok) return { dxf, error: describeDxfReject(scene.error) };
   return { dxf: { ...dxf, unitText: text, scene, selected: [] }, error: null };
+}
+
+/**
+ * off にするレイヤ名の集合を指定し直して成分を作り直す（線分の段階で絞る）。選択は解除し、scene は新しいオブジェクトになる
+ * （S7c の矩形は scene の同一性に結び付くので自動で無効）。単位の指定（unitText）は保つ。失敗は { error } で dxf は変えない。
+ */
+export function setDxfLayers(dxf, hiddenLayers) {
+  const text = dxf.unitText ?? '';
+  const unitFactor = text === '' ? null : parseNumberText(text);
+  const scene = buildDxfScene(dxf.parsed, { unitFactor, hiddenLayers });
+  if (!scene.ok) return { dxf, error: describeDxfReject(scene.error) };
+  return { dxf: { ...dxf, scene, selected: [] }, error: null };
+}
+
+/** レイヤ 1 つの on/off を反転する。 */
+export function toggleDxfLayer(dxf, name) {
+  const hidden = new Set(dxf.scene.hiddenLayers);
+  if (hidden.has(name)) hidden.delete(name); else hidden.add(name);
+  return setDxfLayers(dxf, hidden);
+}
+
+/** レイヤ一覧の行（名前昇順）。レイヤが 1 つ以下なら切り替える意味がないので []。 */
+export function dxfLayerRows(dxf) {
+  const { layers = [], hiddenLayers = [] } = dxf?.scene ?? {};
+  if (layers.length <= 1) return [];
+  const hidden = new Set(hiddenLayers);
+  return layers.map(l => ({ name: l.name, segmentCount: l.segmentCount, visible: !hidden.has(l.name) }));
 }
 
 /** 成分の選択を切り替える（選択は昇順の index 配列）。 */

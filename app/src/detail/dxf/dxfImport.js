@@ -29,17 +29,28 @@ export function readDxf(bytes) {
 
 /**
  * @param {object} parsed readDxf の parsed
- * @param {{unitFactor?: number|null}} [opts]
- * @returns {{ok:true, segments:object[], components:object[], unitFactor:number, unitSource:string, warnings:object[]} | {ok:false, error:object}}
+ * @param {{unitFactor?: number|null, hiddenLayers?: string | string[] | Set<string>}} [opts] hiddenLayers＝off にするレイヤ名（線分の段階で除き、成分を作り直す）
+ * @returns {{ok:true, segments:object[], components:object[], unitFactor:number, unitSource:string, warnings:object[],
+ *            layers:{name:string, segmentCount:number}[], hiddenLayers:string[]} | {ok:false, error:object}}
+ *   segments・components は off のレイヤを除いた残り。layers は全線分から数えた名前昇順の一覧（off のものも含む）。
+ *   hiddenLayers は存在するレイヤ名だけの昇順配列（存在しない名前は捨てる）。
  */
-export function buildDxfScene(parsed, { unitFactor = null } = {}) {
+export function buildDxfScene(parsed, { unitFactor = null, hiddenLayers = [] } = {}) {
   try {
     const ents = dxfEntities(parsed, { unitFactor });
-    const { components } = dxfToComponents(ents.segments);
+    const counts = new Map();
+    for (const seg of ents.segments) counts.set(seg.layer, (counts.get(seg.layer) ?? 0) + 1);
+    const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    const layers = [...counts].map(([name, segmentCount]) => ({ name, segmentCount })).sort((x, y) => byName(x.name, y.name));
+    const hidden = [...new Set(typeof hiddenLayers === 'string' ? [hiddenLayers] : hiddenLayers)].filter(n => counts.has(n)).sort(byName);
+    const hiddenSet = new Set(hidden);
+    const segments = hiddenSet.size === 0 ? ents.segments : ents.segments.filter(seg => !hiddenSet.has(seg.layer));
+    const { components } = dxfToComponents(segments);
     return {
-      ok: true, segments: ents.segments, components,
+      ok: true, segments, components,
       unitFactor: ents.unitFactor, unitSource: ents.unitSource,
       warnings: [...parsed.warnings, ...ents.warnings],
+      layers, hiddenLayers: hidden,
     };
   } catch (e) {
     return unexpected(e);

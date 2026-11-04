@@ -252,7 +252,7 @@ function hasSelfIntersection(trails, tol) {
 }
 
 /**
- * @param {{a:{s:number,t:number}, b:{s:number,t:number}}[]} segments dxfEntities の segments
+ * @param {{a:{s:number,t:number}, b:{s:number,t:number}}[]} segments dxfEntities の segments（layer など余分な項目は見ない）
  * @param {{snapTol?: number, axisTol?: number}} [opts]
  * @returns {{ components: {index:number, segmentCount:number, vertexCount:number, closed:boolean,
  *             trails:{points:object[], closed:boolean}[], strokes:{closed:boolean, moves:object[]}[],

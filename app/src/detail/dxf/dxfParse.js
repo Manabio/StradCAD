@@ -5,8 +5,9 @@
 // それ以外のエンティティは無視して種類ごとの件数だけ UNSUPPORTED_ENTITY で警告する（TEXT・HATCH・SPLINE・DIMENSION 等）。
 //
 // 出力のエンティティは幾何だけの 2 種類（座標は DXF のまま＝単位換算・y 反転はしない。mm 化は dxfEntities.js）:
-//   { kind:'line', a:{x,y}, b:{x,y} }
-//   { kind:'arc',  c:{x,y}, u:{x,y}, v:{x,y}, t0, t1 }   // 点 P(θ) = c + u·cosθ + v·sinθ（θ は t0〜t1・反時計回り）
+//   { kind:'line', a:{x,y}, b:{x,y}, layer }
+//   { kind:'arc',  c:{x,y}, u:{x,y}, v:{x,y}, t0, t1, layer }   // 点 P(θ) = c + u·cosθ + v·sinθ（θ は t0〜t1・反時計回り）
+// layer はレイヤ名（group code 8。無ければ '0'）。ブロック内で '0' の要素は INSERT 側のレイヤを継ぐ。
 // 円・円弧・bulge は全部 arc（円は t1−t0=2π）。INSERT のスケール・回転・ミラーは座標へ焼き込むので、非一様スケールを
 // 受けた円は u・v が直交等長でない楕円弧になる（NONUNIFORM_SCALE を警告。多角形近似は dxfEntities.js）。
 // ブロックは blocks[name] = { base:{x,y}, entities } （INSERT 展開前の生のエンティティ。展開済みは entities 側）。
@@ -30,8 +31,10 @@ const Rec = Object.freeze({
 const Sec = Object.freeze({ HEADER: 'HEADER', BLOCKS: 'BLOCKS', ENTITIES: 'ENTITIES' });
 const G = Object.freeze({
   TYPE: 0, NAME: 2, VAR: 9, X: 10, Y: 20, X2: 11, Y2: 21, RADIUS: 40, SCALE_X: 41, SCALE_Y: 42, BULGE: 42,
-  ANGLE_START: 50, ANGLE_END: 51, ROTATION: 50, FLAGS: 70, SPACE: 67,
+  ANGLE_START: 50, ANGLE_END: 51, ROTATION: 50, FLAGS: 70, SPACE: 67, LAYER: 8,
 });
+/** レイヤ名が無いエンティティの既定（DXF の既定レイヤ名）。ブロック内でこの名前のものは INSERT 側のレイヤを継ぐ。 */
+const DEFAULT_LAYER = '0';
 const HEADER_INSUNITS = '$INSUNITS';
 const CLOSED_FLAG = 1;                 // LWPOLYLINE / POLYLINE の 70: 閉じた折れ線
 const POLYLINE_UNSUPPORTED_FLAGS = 16 | 64; // 3D メッシュ・ポリフェースメッシュ
@@ -227,7 +230,10 @@ function readEntities(records, warnings, budget) {
       ents = entitiesOfRecord(rec);
     }
     if (ents === undefined || ents === null) warnings.unsupported(ents === null ? `${rec.type}（不正）` : rec.type);
-    else out.push(...ents);
+    else {
+      const layer = pairOf(rec, G.LAYER)?.value || DEFAULT_LAYER;
+      out.push(...ents.map(e => ({ ...e, layer })));
+    }
   }
   return out;
 }
@@ -236,16 +242,18 @@ function readEntities(records, warnings, budget) {
  * INSERT を再帰展開して line／arc だけにする（座標へ焼き込む）。
  * depth: 今いる入れ子の段（トップレベルは 0。INSERT はブロックの中身を depth+1 で展開する）。
  */
-function expand(ents, matrix, depth, stack, ctx, blockName) {
+function expand(ents, matrix, depth, stack, ctx, blockName, parentLayer = DEFAULT_LAYER) {
   const { warnings, out, budget } = ctx;
   for (const ent of ents) {
     if (budget.stopped) return;
     if (out.length >= budget.maxOut) { budget.stopped = true; return; }
+    // 実効レイヤ: '0' は包む INSERT のレイヤを継ぐ（DXF の慣習。トップレベルの parentLayer は '0'）。
+    const layer = ent.layer === DEFAULT_LAYER ? parentLayer : ent.layer;
     if (ent.kind === 'line') {
-      out.push(lineEnt(applyPoint(matrix, ent.a), applyPoint(matrix, ent.b)));
+      out.push({ ...lineEnt(applyPoint(matrix, ent.a), applyPoint(matrix, ent.b)), layer });
     } else if (ent.kind === 'arc') {
       if (!isSimilarity(matrix)) warnings.add(DxfWarning.NONUNIFORM_SCALE, { block: blockName });
-      out.push({ kind: 'arc', c: applyPoint(matrix, ent.c), u: applyVector(matrix, ent.u), v: applyVector(matrix, ent.v), t0: ent.t0, t1: ent.t1 });
+      out.push({ kind: 'arc', c: applyPoint(matrix, ent.c), u: applyVector(matrix, ent.u), v: applyVector(matrix, ent.v), t0: ent.t0, t1: ent.t1, layer });
     } else if (ent.kind === 'insert') {
       // 展開回数（空のブロックの入れ子でも指数的に増える）に上限を設ける。未定義・循環・深さ超の INSERT も 1 回に数える。
       if (budget.visitsLeft <= 0) { budget.stopped = true; return; }
@@ -254,7 +262,7 @@ function expand(ents, matrix, depth, stack, ctx, blockName) {
       if (!block) { warnings.unsupported(`${Rec.INSERT}（ブロック未定義）`); continue; }
       if (stack.includes(ent.name)) { warnings.add(DxfWarning.INSERT_CYCLE, { block: ent.name }); continue; }
       if (depth + 1 > budget.maxDepth) { warnings.add(DxfWarning.INSERT_DEPTH, { block: ent.name }); continue; }
-      expand(block.entities, mul(matrix, insertMatrix(ent, block.base)), depth + 1, [...stack, ent.name], ctx, ent.name);
+      expand(block.entities, mul(matrix, insertMatrix(ent, block.base)), depth + 1, [...stack, ent.name], ctx, ent.name, layer);
       if (budget.stopped) return;
     }
   }

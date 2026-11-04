@@ -7,7 +7,9 @@ import {
   loadDxf, setDxfUnit, toggleDxfComponent, setDxfProvenanceField, dxfComponentRows, dxfUnitHint, dxfWarningTexts,
   dxfPreviewPrimitives, draftFromDxf, draftDocOf, provenanceNoticeOf, describeDxfWarning, describeDxfReject,
   validation, saveBlockers, entryFromForm, isDraftDirty, DETAIL_HELPER_MESSAGES, setProvenanceField,
+  toggleDxfLayer, setDxfLayers, dxfLayerRows, DETAIL_HELPER_TEXT,
 } from './detailHelperForm.js';
+import { setPickRect, activePickRect } from './detailHelperPick.js';
 import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
 import { formatDetailProvenance } from '../catalog/catalogMaintenance.js';
 import { isImportedFigure } from '../catalog/usedEntries.js';
@@ -119,6 +121,89 @@ test('setDxfUnit: 係数を指定し直すと成分が mm 換算で作り直さ�
   assert.equal(bad.error, DETAIL_HELPER_MESSAGES.dxfUnitInvalid);
   assert.equal(bad.dxf, dxf);
   assert.equal(setDxfUnit(dxf, 'abc').error, DETAIL_HELPER_MESSAGES.dxfUnitInvalid);
+});
+
+// ---- レイヤ（S7d-0a） ----
+const layered = (extra = []) => new TextEncoder().encode(text([
+  ...section('HEADER', [[9, '$INSUNITS'], [70, 4]]),
+  ...section('ENTITIES', [
+    [0, 'LINE'], [8, 'WALL'], [10, 0], [20, 0], [11, 100], [21, 0],
+    [0, 'LINE'], [8, 'DIM'], [10, 200], [20, 0], [11, 300], [21, 0],
+    [0, 'LINE'], [8, 'DIM'], [10, 300], [20, 0], [11, 300], [21, 50],
+    ...extra,
+  ]),
+  [0, 'EOF'],
+]));
+const loadLayered = async () => {
+  const r = await loadDxf({ bytes: layered(), fileName: 'l.dxf', digest });
+  assert.equal(r.ok, true, r.message);
+  return r.dxf;
+};
+
+test('loadDxf: scene.layers が入る。dxfLayerRows は名前昇順で全部 visible', async () => {
+  const dxf = await loadLayered();
+  assert.deepEqual(dxf.scene.layers, [{ name: 'DIM', segmentCount: 2 }, { name: 'WALL', segmentCount: 1 }]);
+  assert.deepEqual(dxfLayerRows(dxf), [
+    { name: 'DIM', segmentCount: 2, visible: true }, { name: 'WALL', segmentCount: 1, visible: true },
+  ]);
+  assert.equal(DETAIL_HELPER_TEXT.layers, 'レイヤ');
+  assert.equal(DETAIL_HELPER_TEXT.layersAllOn, '全部 on');
+});
+
+test('toggleDxfLayer: off で成分が作り直される（scene は新しく selected は解除）。もう一度で on に戻る', async () => {
+  let dxf = toggleDxfComponent(await loadLayered(), 0);
+  assert.deepEqual(dxf.selected, [0]);
+  const before = dxf.scene;
+  const off = toggleDxfLayer(dxf, 'DIM');
+  assert.equal(off.error, null);
+  assert.notEqual(off.dxf.scene, before);
+  assert.deepEqual(off.dxf.selected, []);
+  assert.equal(off.dxf.scene.components.length, 1);
+  assert.deepEqual(dxfLayerRows(off.dxf).map(r => r.visible), [false, true]);
+  const on = toggleDxfLayer(off.dxf, 'DIM');
+  assert.equal(on.dxf.scene.components.length, 2);
+  assert.deepEqual(on.dxf.scene.hiddenLayers, []);
+});
+
+test('toggleDxfLayer: S7c の矩形は scene が変わるので無効になる。単位の指定は保つ', async () => {
+  let dxf = (await loadLayered());
+  dxf = { ...dxf, pick: null };
+  dxf = setPickRect(dxf, { x: -10, y: -10, w: 500, h: 500 });
+  assert.notEqual(activePickRect(dxf), null);
+  const unit = setDxfUnit(dxf, '2').dxf;
+  const picked = setPickRect(unit, { x: -10, y: -10, w: 900, h: 900 });
+  const off = toggleDxfLayer(picked, 'WALL').dxf;
+  assert.equal(activePickRect(off), null);
+  assert.equal(off.scene.unitFactor, 2);
+  assert.equal(off.unitText, '2');
+});
+
+test('setDxfUnit: 単位を変えるとレイヤは全部 on に戻る（hiddenLayers を引き継がない）', async () => {
+  const off = toggleDxfLayer(await loadLayered(), 'DIM').dxf;
+  assert.deepEqual(off.scene.hiddenLayers, ['DIM']);
+  const re = setDxfUnit(off, '2').dxf;
+  assert.deepEqual(re.scene.hiddenLayers, []);
+  assert.equal(re.scene.components.length, 2);
+});
+
+test('dxfLayerRows: レイヤが 1 つ以下なら []（切り替える意味がない）', async () => {
+  const one = await load();
+  assert.equal(one.scene.layers.length, 1);
+  assert.deepEqual(dxfLayerRows(one), []);
+});
+
+test('【失敗系】dxfLayerRows: PDF の状態（scene null／layers なし）では []・例外なし', () => {
+  assert.deepEqual(dxfLayerRows({ scene: null }), []);
+  assert.deepEqual(dxfLayerRows({ scene: { components: [] } }), []);
+  assert.deepEqual(dxfLayerRows(null), []);
+});
+
+test('【失敗系】setDxfLayers: 存在しないレイヤ名は無視して全部 on と同じ。全部 off は成分 0', async () => {
+  const dxf = await loadLayered();
+  assert.deepEqual(setDxfLayers(dxf, ['NOPE']).dxf.scene.hiddenLayers, []);
+  const none = setDxfLayers(dxf, ['DIM', 'WALL']).dxf;
+  assert.deepEqual(none.scene.components, []);
+  assert.deepEqual(dxfLayerRows(none).map(r => r.visible), [false, false]);
 });
 
 test('draftFromDxf: 矩形の成分 → R100/U50/L100・closed の 1 ストロークの新規下書き。検証が通り、出所（DXF・sha256・メーカー等）が entry に載る', async () => {

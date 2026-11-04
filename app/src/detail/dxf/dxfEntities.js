@@ -5,7 +5,7 @@
 //   - 円弧は弦に分割する。弦と弧の最大のずれ（sagitta）が chordTol 以下になる最少の等分割。円は角度 0 から始め、
 //     最後の点は最初の点と同じ座標にする（端点スナップで閉じた成分になる）。楕円弧（非一様スケール後）も半径の大きい方で近似。
 //   - 線分数の上限（maxSegments）で打ち切り ENTITY_LIMIT。
-// 出力 segments: [{ a:{s,t}, b:{s,t} }]
+// 出力 segments: [{ a:{s,t}, b:{s,t}, layer }]（layer＝元のエンティティのレイヤ名。dxfParse が継承まで解決済み）
 // ================================================================
 
 import {
@@ -72,14 +72,14 @@ export function dxfEntities(parsed, { unitFactor = null, chordTol = DXF_CHORD_TO
     if (ent.kind === 'line') {
       const a = toFig(ent.a);
       const b = toFig(ent.b);
-      if (finitePt(a) && finitePt(b)) segments.push({ a, b }); else invalid += 1;
+      if (finitePt(a) && finitePt(b)) segments.push({ a, b, layer: ent.layer }); else invalid += 1;
     } else if (ent.kind === 'arc') {
       const { pts, truncated } = arcPoints(ent, factor, chordTol, maxSegments - segments.length);
       // arcPoints は既に factor 倍。toFig へは 1/factor を掛けて戻さず、直接 y を反転する。
       const figPts = pts.map(p => ({ s: p.x + 0, t: 0 - p.y }));
       if (!Number.isFinite(factor * Math.hypot(ent.u.x, ent.u.y, ent.v.x, ent.v.y)) || !figPts.every(finitePt)) { invalid += 1; continue; }
       if (truncated) limited = true;
-      for (let i = 0; i + 1 < figPts.length; i++) segments.push({ a: figPts[i], b: figPts[i + 1] });
+      for (let i = 0; i + 1 < figPts.length; i++) segments.push({ a: figPts[i], b: figPts[i + 1], layer: ent.layer });
     }
   }
   if (invalid > 0) warnings.push({ code: DxfWarning.UNSUPPORTED_ENTITY, type: INVALID_COORD_TYPE, count: invalid });

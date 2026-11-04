@@ -78,7 +78,7 @@ test('【失敗系】decode: 先頭が "AutoCAD Binary DXF" のバイナリ DXF 
 test('parse: LINE 4 本の矩形 → line 4 本・警告なし・$INSUNITS を読む', () => {
   const p = parseText(doc(headerSec(4), entitiesSec([line(0, 0, 100, 0), line(100, 0, 100, 50), line(100, 50, 0, 50), line(0, 50, 0, 0)])));
   assert.equal(p.entities.length, 4);
-  assert.deepEqual(p.entities[1], { kind: 'line', a: { x: 100, y: 0 }, b: { x: 100, y: 50 } });
+  assert.deepEqual(p.entities[1], { kind: 'line', a: { x: 100, y: 0 }, b: { x: 100, y: 50 }, layer: '0' });
   assert.equal(p.header.insUnits, 4);
   assert.deepEqual(p.warnings, []);
 });
@@ -194,7 +194,7 @@ test('単位: $INSUNITS が無い／未知（0）→ UNIT_UNKNOWN で係数 1。
 
 test('座標系: DXF の y 上向きは図の t 下向きへ反転する（-0 を作らない）', () => {
   const r = dxfEntities(parseText(doc(headerSec(4), entitiesSec([line(0, 0, 0, 30)]))));
-  assert.deepEqual(r.segments, [{ a: { s: 0, t: 0 }, b: { s: 0, t: -30 } }]);
+  assert.deepEqual(r.segments, [{ a: { s: 0, t: 0 }, b: { s: 0, t: -30 }, layer: '0' }]);
 });
 
 test('弦分割: 半円(R=50)は弦公差 0.05 で 36 分割・0.5 で 12 分割。全弦の弧からのずれは公差以下で、端点は元の頂点に一致', () => {
@@ -477,4 +477,125 @@ test('【失敗系】通し: 途中で切れた DXF・不正な group code は o
   assert.equal(cut.error.code, DxfReject.TRUNCATED);
   assert.equal(readDxf(new TextEncoder().encode('zz\nSECTION\n')).error.code, DxfReject.BAD_GROUP_CODE);
   assert.equal(buildDxfScene(null).error.code, DxfReject.UNEXPECTED);
+});
+
+// ================================================================
+// レイヤ（S7d-0a）
+// ================================================================
+const noLayerLine = (x1, y1, x2, y2) => [[0, 'LINE'], [10, x1], [20, y1], [11, x2], [21, y2]]; // code 8 なし
+const layerOf = (e) => e.layer;
+
+test('layer: エンティティが code 8 のレイヤ名を持つ。code 8 の無いエンティティは既定の "0"', () => {
+  const p = parseText(doc(entitiesSec([line(0, 0, 10, 0, 'WALL'), noLayerLine(0, 0, 0, 10), lwpoly([[0, 0], [5, 5]])])));
+  assert.deepEqual(p.entities.map(layerOf), ['WALL', '0', '0']);
+});
+
+test('layer: INSERT の展開 — ブロック内の "0" は INSERT のレイヤを継ぎ、固有レイヤの要素はそのまま。入れ子でも継ぐ', () => {
+  const insertOn = (name, layer) => insert(name, 0, 0).map(([c, v]) => (c === 8 ? [8, layer] : [c, v]));
+  const t = doc(
+    blocksSec([
+      block('IN', [line(0, 0, 1, 0, '0'), line(0, 1, 1, 1, 'OWN')]),
+      block('OUTER', [insert('IN', 0, 0), line(5, 5, 6, 5, '0')]),
+    ]),
+    entitiesSec([insertOn('IN', 'DOOR'), insertOn('OUTER', 'SASH'), insertOn('IN', '0')]),
+  );
+  const p = parseText(t);
+  assert.deepEqual(p.entities.map(layerOf), [
+    'DOOR', 'OWN',            // IN を DOOR で挿入
+    'SASH', 'OWN', 'SASH',    // OUTER を SASH で挿入: IN の '0' → OUTER の INSERT は '0' なので SASH を継ぎ、OWN はそのまま、OUTER 直下の '0' も SASH
+    '0', 'OWN',               // トップレベルの '0' の INSERT は継ぐものが無く '0'
+  ]);
+});
+
+test('layer: 入れ子の継承は「最も近い 0 でない祖先」— OUTER(SASH) の中で IN を X で挿入すると IN の 0 は X・OWN は OWN・OUTER 直下の 0 は SASH', () => {
+  const insertOn = (name, layer) => insert(name, 0, 0).map(([c, v]) => (c === 8 ? [8, layer] : [c, v]));
+  const t = doc(
+    blocksSec([
+      block('IN', [line(0, 0, 1, 0, '0'), line(0, 1, 1, 1, 'OWN')]),
+      block('OUTER', [insertOn('IN', 'X'), line(5, 5, 6, 5, '0')]),
+    ]),
+    entitiesSec([insertOn('OUTER', 'SASH')]),
+  );
+  assert.deepEqual(parseText(t).entities.map(layerOf), ['X', 'OWN', 'SASH']);
+});
+
+test('layer: code 8 の値が空なら既定の "0" 扱い', () => {
+  const p = parseText(doc(entitiesSec([line(0, 0, 10, 0, '')])));
+  assert.deepEqual(p.entities.map(layerOf), ['0']);
+});
+
+test('layer: POLYLINE の線分は本体のレイヤ（VERTEX の code 8 は見ない）', () => {
+  const poly = [[0, 'POLYLINE'], [8, 'PL'], [66, 1], [70, 0], [0, 'VERTEX'], [8, 'VX'], [10, 0], [20, 0], [0, 'VERTEX'], [8, 'VX'], [10, 10], [20, 0], [0, 'SEQEND']];
+  const s = sceneOf(doc(headerSec(4), entitiesSec([poly])));
+  assert.deepEqual(s.layers, [{ name: 'PL', segmentCount: 1 }]);
+});
+
+test('【失敗系】buildDxfScene: hiddenLayers が文字列 1 個なら 1 つの名前（1 文字に割らない）。数値など不正な型は ok:false（例外にしない）', () => {
+  const s = sceneOf(layerDoc(), { hiddenLayers: 'C' });
+  assert.deepEqual(s.hiddenLayers, ['C']);
+  assert.equal(s.components.length, 1);
+  const multi = doc(headerSec(4), entitiesSec([line(0, 0, 10, 0, 'WALL'), line(0, 5, 10, 5, 'W')]));
+  assert.deepEqual(sceneOf(multi, { hiddenLayers: 'WALL' }).hiddenLayers, ['WALL']);
+  assert.equal(sceneOf(layerDoc(), { hiddenLayers: 5 }).error.code, DxfReject.UNEXPECTED);
+});
+
+test('layer: 線分（segments）へレイヤが渡る。円弧の分割した線分も同じレイヤ', () => {
+  const c = [[0, 'CIRCLE'], [8, 'ROUND'], [10, 0], [20, 0], [40, 50]];
+  const r = dxfEntities(parseText(doc(headerSec(4), entitiesSec([line(0, 0, 10, 0, 'A'), c]))));
+  assert.equal(r.segments[0].layer, 'A');
+  assert.ok(r.segments.length > 2);
+  assert.ok(r.segments.slice(1).every(s => s.layer === 'ROUND'));
+});
+
+const layerDoc = () => doc(headerSec(4), entitiesSec([
+  line(0, 0, 100, 0, 'B'), line(100, 0, 100, 50, 'A'), line(100, 50, 0, 50, 'A'), line(0, 50, 0, 0, 'A'), // 矩形（上辺だけ B）
+  line(300, 0, 400, 0, 'C'),                                                                                 // 別の線
+]));
+const sceneOf = (t, opts) => buildDxfScene(readDxf(new TextEncoder().encode(t)).parsed, opts);
+
+test('buildDxfScene: layers は名前昇順・線分数つき。hiddenLayers なしは従来と同じ（全部 on と deepEqual）', () => {
+  const s = sceneOf(layerDoc());
+  assert.deepEqual(s.layers, [{ name: 'A', segmentCount: 3 }, { name: 'B', segmentCount: 1 }, { name: 'C', segmentCount: 1 }]);
+  assert.deepEqual(s.hiddenLayers, []);
+  assert.deepEqual(sceneOf(layerDoc(), { hiddenLayers: [] }), s);
+  assert.deepEqual(sceneOf(layerDoc(), { hiddenLayers: new Set() }), s);
+  assert.equal(s.components.length, 2);
+});
+
+test('buildDxfScene: レイヤを off にすると線分の段階で絞って成分を作り直す（レイヤをまたぐ成分は半端に消えず開いた輪郭になる）', () => {
+  const s = sceneOf(layerDoc(), { hiddenLayers: ['B'] });
+  assert.equal(s.segments.length, 4);
+  assert.equal(s.components.length, 2);
+  assert.equal(s.components[0].closed, false, '矩形は上辺を失って開く');
+  assert.equal(s.components[0].segmentCount, 3);
+  const noA = sceneOf(layerDoc(), { hiddenLayers: new Set(['C', 'A']) });
+  assert.equal(noA.components.length, 1);
+  assert.deepEqual(noA.hiddenLayers, ['A', 'C']);
+  assert.deepEqual(noA.layers.map(l => l.name), ['A', 'B', 'C'], 'layers は off のものも含む');
+  assert.deepEqual(sceneOf(layerDoc(), { hiddenLayers: ['A', 'B', 'C'] }).components, []);
+});
+
+test('【失敗系】buildDxfScene: 存在しないレイヤ名の hidden は無視（hiddenLayers にも残さない）。重複は 1 つに畳む', () => {
+  const all = sceneOf(layerDoc());
+  const s = sceneOf(layerDoc(), { hiddenLayers: ['NOPE', 'C', 'C'] });
+  assert.deepEqual(s.hiddenLayers, ['C']);
+  const ghost = sceneOf(layerDoc(), { hiddenLayers: ['NOPE'] });
+  assert.deepEqual(ghost, all);
+});
+
+test('layer: Shift_JIS のレイヤ名が壊れず layers に出る（レイヤ＝83 8C 83 43 83 84）', () => {
+  const enc = s => Array.from(new TextEncoder().encode(s));
+  const head = enc('0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n');
+  const tail = enc('\n10\n0\n20\n0\n11\n10\n21\n0\n0\nENDSEC\n0\nEOF\n');
+  const bytes = Uint8Array.from([...head, 0x83, 0x8C, 0x83, 0x43, 0x83, 0x84, ...tail]);
+  const r = readDxf(bytes);
+  assert.equal(r.ok, true);
+  assert.equal(r.encoding, 'shift_jis');
+  assert.deepEqual(buildDxfScene(r.parsed).layers, [{ name: 'レイヤ', segmentCount: 1 }]);
+});
+
+test('layer: PDF の経路は影響を受けない — レイヤの無い segments を dxfToComponents に渡しても従来どおり', () => {
+  const withLayer = dxfToComponents([{ a: { s: 0, t: 0 }, b: { s: 10, t: 0 }, layer: 'X' }]).components;
+  const bare = dxfToComponents([{ a: { s: 0, t: 0 }, b: { s: 10, t: 0 } }]).components;
+  assert.deepEqual(withLayer, bare);
 });
