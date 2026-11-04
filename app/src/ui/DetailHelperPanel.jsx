@@ -24,7 +24,7 @@ import {
   displayLen, strokeLabel, strokeTitle, moveSpanLabel, distanceButtonLabel, offsetButtonLabel, fitDimButtonLabel,
   libraryMetaLabel, wallThicknessNotice,
   helperLibraryRows, libraryOriginOf, libraryRowActions, libraryEntryOf, planRevert, unlockDoc, docForLibraryEntry, LIBRARY_ORIGIN,
-  loadDxf, setDxfUnit, toggleDxfComponent, setDxfProvenanceField, dxfComponentRows, dxfUnitHint, dxfWarningTexts,
+  loadDxf, setDxfUnit, toggleDxfLayer, setDxfLayers, dxfLayerRows, toggleDxfComponent, setDxfProvenanceField, dxfComponentRows, dxfUnitHint, dxfWarningTexts,
   dxfPreviewPrimitives, draftFromDxf, draftDocOf, provenanceNoticeOf, DETAIL_HELPER_TABS, setProvenanceField,
 } from './detailHelperForm.js';
 import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
@@ -89,8 +89,9 @@ function LibraryRow({ row, active, disabled, onSelect }) {
 const sha256OfBytes = bytes => sha256HexWith(globalThis.crypto?.subtle)(bytes);
 
 /** 読込み結果の共通部分（警告・連結成分の一覧・出所欄・下書きへ写す）。DXF と PDF で共用。配線だけ。 */
-function ImportResult({ state, warnings, busy, canCopy, onToggle, onField, onCopy, onClearPick }) {
+function ImportResult({ state, warnings, busy, canCopy, onToggle, onField, onCopy, onClearPick, onToggleLayer, onAllLayersOn }) {
   const rows = state.scene ? pickedComponentRows(state, dxfComponentRows(state)) : [];
+  const layerRows = dxfLayerRows(state);
   const pickSummary = pickSummaryOf(state);
   return (
     <>
@@ -99,6 +100,22 @@ function ImportResult({ state, warnings, busy, canCopy, onToggle, onField, onCop
       )}
       {state.scene && (
         <>
+          {layerRows.length > 0 && (
+            <>
+              <div className="dthlp-block-head">
+                <span>{DETAIL_HELPER_TEXT.layers}</span>
+                <button className="dthlp-btn dthlp-btn--small" disabled={busy || layerRows.every(r => r.visible)} onClick={onAllLayersOn}>{DETAIL_HELPER_TEXT.layersAllOn}</button>
+              </div>
+              <div className="dthlp-layer-list">
+                {layerRows.map(r => (
+                  <label key={r.name} className="dthlp-layer-row">
+                    <input type="checkbox" checked={r.visible} disabled={busy} onChange={() => onToggleLayer(r.name)} />
+                    <span>{`${r.name}（${r.segmentCount}）`}</span>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
           <div className="dthlp-block-head"><span>{DETAIL_HELPER_TEXT.dxfComponents}</span></div>
           <div className="dthlp-dxf-file">{DETAIL_HELPER_TEXT.pickHint}</div>
           {pickSummary && (
@@ -138,7 +155,7 @@ function ImportResult({ state, warnings, busy, canCopy, onToggle, onField, onCop
 }
 
 /** 左ペインの「図面読込み」タブ（DXF）。配線だけ（判断は detailHelperForm.js）。 */
-function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy, onClearPick }) {
+function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy, onClearPick, onToggleLayer, onAllLayersOn }) {
   return (
     <div className="dthlp-dxf">
       <button className="dthlp-btn" disabled={busy} onClick={onOpen}>{DETAIL_HELPER_TEXT.dxfOpen}</button>
@@ -149,7 +166,7 @@ function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy
           <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onUnit}>
             {DETAIL_HELPER_TEXT.dxfUnit}: {displayLen(dxf.unitText)}（{dxfUnitHint(dxf)}）
           </button>
-          <ImportResult state={dxf} warnings={dxfWarningTexts(dxf)} busy={busy} canCopy={dxf.selected.length > 0} onToggle={onToggle} onField={onField} onCopy={onCopy} onClearPick={onClearPick} />
+          <ImportResult state={dxf} warnings={dxfWarningTexts(dxf)} busy={busy} canCopy={dxf.selected.length > 0} onToggle={onToggle} onField={onField} onCopy={onCopy} onClearPick={onClearPick} onToggleLayer={onToggleLayer} onAllLayersOn={onAllLayersOn} />
         </>
       )}
     </div>
@@ -348,12 +365,15 @@ export function DetailHelperPanel({ onClose }) {
     else if (target.kind === 'offset') edit(f => setDatumField(f, target.datumId, 'offset', value));
     else if (target.kind === 'fit') setFitOverrides(o => ({ ...o, [target.field]: value }));
     else if (target.kind === 'dxfUnit') {
-      const r = setDxfUnit(dxf, value);
-      setDxf(r.dxf);
-      setDxfMessage(r.error ? { text: r.error, isError: true } : null);
+      applyDxfResult(setDxfUnit(dxf, value));
     } else if (target.kind === 'pdfPage') applyPdfResult(setPdfPage(pdf, value));
     else if (target.kind === 'pdfScale') { setPdf(setPdfScale(pdf, value)); setDxfMessage(null); }
     else if (target.kind === 'pdfClip') applyPdfResult(setPdfClipField(pdf, target.field, value));
+  }
+  // { dxf, error } を状態へ反映する（単位・レイヤの変更で共用）。
+  function applyDxfResult(r) {
+    setDxf(r.dxf);
+    setDxfMessage(r.error ? { text: r.error, isError: true } : null);
   }
   // { pdf, error } を状態へ反映する（エラーは握って画面に出す）。
   function applyPdfResult(r) {
@@ -618,6 +638,8 @@ export function DetailHelperPanel({ onClose }) {
               onField={(field, value) => setDxf(d => setDxfProvenanceField(d, field, value))}
               onCopy={handleDxfCopy}
               onClearPick={() => setDxf(d => clearPickRect(d))}
+              onToggleLayer={name => applyDxfResult(toggleDxfLayer(dxf, name))}
+              onAllLayersOn={() => applyDxfResult(setDxfLayers(dxf, []))}
             />
           )}
           {!showDxf && (<>

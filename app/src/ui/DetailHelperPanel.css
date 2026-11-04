@@ -53,6 +53,8 @@
 .dthlp-dxf-comp--selected { background: #dbeafe; border-color: #93c5fd; }
 .dthlp-dxf-warn { font-size: 11px; color: #b45309; margin: 0; padding-left: 16px; }
 .dthlp-dxf-warn .dthlp-dxf-warn--red { color: #b91c1c; }
+.dthlp-layer-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; font-size: 12px; }
+.dthlp-layer-row { display: flex; gap: 4px; align-items: center; }
 .dthlp-pdf-page { position: relative; touch-action: none; border: 1px solid #cbd5e1; line-height: 0; cursor: crosshair; }
 .dthlp-pdf-canvas { width: 100%; height: auto; display: block; }
 .dthlp-pdf-clip { position: absolute; border: 2px solid #2563eb; background: rgba(37, 99, 235, 0.12); pointer-events: none; box-sizing: border-box; }
