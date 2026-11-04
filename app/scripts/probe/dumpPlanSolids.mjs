@@ -14,6 +14,9 @@
 //   出力: <出力先>/planSolids-<文書名>-<階名>.json と summary.json
 //   --up（天伏の見上げ）: 各階を自階＋直上階で解く（planSolidsLayerPrimitivesUp）。出力は planSolidsUp-<文書名>-<階名>.json と
 //     summary-up.json。件数は層（自階／上階）×cls×kind と細線／太線の本数、所要時間。下階cut・穴の外の検査は見下げ専用なので行わない。
+//     線には条件付きで role（source.role が 'ceilingStepDetail' のときだけ）・hiddenAtDetail・detailOnly を足す（無いときはキーを出さない）。
+// 文書に同梱の部分詳細図（CatalogKind.DETAIL_FIGURE の doc 層）と組込みの図を文書ごとに overlay へ当て、材マスタ（loadMaterialMap）を
+//   1 回読む（天井段差の部位図の出の確認用）。
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadDocument } from './loadDoc.mjs';
@@ -22,6 +25,10 @@ import { planSolidsLayerPrimitives, planSolidsLayerPrimitivesUp, planSolidsLayer
 import { stairRiserOf } from '../../src/finish/stair/stairDimensions.js';
 import { floorOpeningCellRects } from '../../src/finish/stair/slabOpening.js';
 import { stairFilterFor } from '../../src/structural/openingBeamAxes.js';
+import { CatalogKind } from '../../src/catalog/catalogKinds.js';
+import { setOverlay, clearOverlays } from '../../src/catalog/catalogRegistry.js';
+import detailBuiltins from '../../src/detail/detailBuiltins.js';
+import { loadMaterialMap } from '../../src/finish/wallRegeneration.js';
 
 const UP = process.argv.includes('--up');
 const args = process.argv.slice(2).filter(a => a !== '--up');
@@ -34,11 +41,23 @@ const safe = s => s.replace(/[^\w一-龥ぁ-んァ-ヶー-]/g, '_');
 const r1 = v => Math.round(v * 1000) / 1000;
 const TOL = 1e-3;
 const inRects = (rects, x, y) => rects.some(h => x >= h.x1 - TOL && x <= h.x2 + TOL && y >= h.y1 - TOL && y <= h.y2 + TOL);
+// source.role は既に 'standard'・'outline'・'ridge' 等の別用途で付いている（出力を変えないため、天井段差の部位図の role だけ出す）
+const DETAIL_ROLE = 'ceilingStepDetail';
 const summary = [];
 let bad = 0;
+// 材マスタ（アプリと同じ loadMaterialMap）。planSolidsLayerPrimitivesUp が materialMap を受け取るようになったら、
+// 下の呼び出し（upPrims）の引数へ materialMap を渡す。現時点の関数は受け取らないので渡さない。
+const m0 = performance.now();
+const materialMap = await loadMaterialMap();
+const materialMapMs = Math.round(performance.now() - m0);
+console.log(`材マスタ読み込み: ${materialMap?.size ?? '-'}件 ${materialMapMs}ms`);
 for (const src of sources) {
   const doc = path.basename(src, '.stq');
-  const { project } = loadDocument(src);
+  const { project, doc: envelope } = loadDocument(src);
+  // 文書に同梱の部分詳細図を overlay へ当てる（組込み層はアプリが非同期に載せるので、probe では利用者層に載せて三層合成に通す。
+  // makeJunctionDetailTestDoc.mjs の展開と同じ手順）。文書間で漏らさないよう、文書ごとに先に外し、処理の後でも外す。
+  clearOverlays();
+  setOverlay(CatalogKind.DETAIL_FIGURE, { doc: envelope.catalogs?.catalogs?.[CatalogKind.DETAIL_FIGURE] ?? [], user: detailBuiltins });
   const planes = project.planes; // 採用階（elevation 昇順。屋根専用平面・検討案を除く）
   planes.forEach((plane, idx) => {
     const graph = project.graphMap.get(plane.id);
@@ -61,7 +80,9 @@ for (const src of sources) {
       const upMs = performance.now() - u0;
       const upLines = upPrims.filter(p => p.kind === 'line').map(p => ({
         key: p.key, cls: p.cls, kind: p.source.kind, id: p.source.id, layerFloorZ: p.source.layerFloorZ ?? 0,
-        weight: p.weight, points: p.points.map(r1), ...(p.style ? { style: p.style } : {}), ...(p.detailOnly ? { detailOnly: true } : {}),
+        weight: p.weight, points: p.points.map(r1), ...(p.style ? { style: p.style } : {}),
+        ...(p.source?.role === DETAIL_ROLE ? { role: p.source.role } : {}), ...(p.hiddenAtDetail ? { hiddenAtDetail: true } : {}),
+        ...(p.detailOnly ? { detailOnly: true } : {}),
       })).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
       fs.writeFileSync(path.join(outDir, `planSolidsUp-${safe(doc)}-${safe(plane.name)}.json`), JSON.stringify(upLines, null, 1));
       const upCounts = {};
@@ -110,6 +131,7 @@ for (const src of sources) {
       shortLines: short.map(l => ({ key: l.key, points: l.points })), lower: lower.length, belowCut, outside, stairVoidWalls, ms: Math.round(ms),
     });
   });
+  clearOverlays();
 }
 if (UP) {
   fs.writeFileSync(path.join(outDir, 'summary-up.json'), JSON.stringify(summary, null, 1));
