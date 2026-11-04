@@ -33,6 +33,9 @@ import {
   loadPdf, setPdfPage, stepPdfPage, setPdfPageView, setPdfScale, setPdfClip, setPdfClipField, pdfClipText, pageSizeOf,
   pointToPage, clipFromDrag, clipOverlayStyle, pdfCanExtract, pdfCanCopy, extractPdf, pdfWarningTexts, describePdfReject,
 } from './detailHelperPdf.js';
+import {
+  activePickRect, setPickRect, clearPickRect, pickedComponentRows, pickSummaryOf, figurePointToMm, pickRectFromDrag, pickOverlayStyle,
+} from './detailHelperPick.js';
 import { DXF_PROVENANCE_FIELDS, PdfReject, PDF_MAX_BYTES, PDF_SIGNATURE_SCAN_BYTES, PDF_PREVIEW_SCALE } from '../core/constants.js';
 import { ERR_DXF_FILE_READ_FAILED, ERR_PDF_PAGE_FAILED } from '../error.js';
 
@@ -86,8 +89,9 @@ function LibraryRow({ row, active, disabled, onSelect }) {
 const sha256OfBytes = bytes => sha256HexWith(globalThis.crypto?.subtle)(bytes);
 
 /** 読込み結果の共通部分（警告・連結成分の一覧・出所欄・下書きへ写す）。DXF と PDF で共用。配線だけ。 */
-function ImportResult({ state, warnings, busy, canCopy, onToggle, onField, onCopy }) {
-  const rows = state.scene ? dxfComponentRows(state) : [];
+function ImportResult({ state, warnings, busy, canCopy, onToggle, onField, onCopy, onClearPick }) {
+  const rows = state.scene ? pickedComponentRows(state, dxfComponentRows(state)) : [];
+  const pickSummary = pickSummaryOf(state);
   return (
     <>
       {warnings.length > 0 && (
@@ -96,6 +100,13 @@ function ImportResult({ state, warnings, busy, canCopy, onToggle, onField, onCop
       {state.scene && (
         <>
           <div className="dthlp-block-head"><span>{DETAIL_HELPER_TEXT.dxfComponents}</span></div>
+          <div className="dthlp-dxf-file">{DETAIL_HELPER_TEXT.pickHint}</div>
+          {pickSummary && (
+            <div className="dthlp-row">
+              <span>{DETAIL_HELPER_TEXT.pickSummary(pickSummary.inRect, pickSummary.total, pickSummary.selected)}</span>
+              <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onClearPick}>{DETAIL_HELPER_TEXT.pickClear}</button>
+            </div>
+          )}
           <div className="dthlp-dxf-comps">
             {rows.length === 0 && <div className="dthlp-empty">{DETAIL_HELPER_TEXT.dxfNoComponents}</div>}
             {rows.map(r => (
@@ -127,7 +138,7 @@ function ImportResult({ state, warnings, busy, canCopy, onToggle, onField, onCop
 }
 
 /** 左ペインの「図面読込み」タブ（DXF）。配線だけ（判断は detailHelperForm.js）。 */
-function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy }) {
+function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy, onClearPick }) {
   return (
     <div className="dthlp-dxf">
       <button className="dthlp-btn" disabled={busy} onClick={onOpen}>{DETAIL_HELPER_TEXT.dxfOpen}</button>
@@ -138,9 +149,36 @@ function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy
           <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onUnit}>
             {DETAIL_HELPER_TEXT.dxfUnit}: {displayLen(dxf.unitText)}（{dxfUnitHint(dxf)}）
           </button>
-          <ImportResult state={dxf} warnings={dxfWarningTexts(dxf)} busy={busy} canCopy={dxf.selected.length > 0} onToggle={onToggle} onField={onField} onCopy={onCopy} />
+          <ImportResult state={dxf} warnings={dxfWarningTexts(dxf)} busy={busy} canCopy={dxf.selected.length > 0} onToggle={onToggle} onField={onField} onCopy={onCopy} onClearPick={onClearPick} />
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * 中央プレビューを覆う矩形ドラッグ層（S7c-2）。ドラッグ中の枠は部品内の live だけで持ち、親の state（＝重いプレビューの
+ * 再描画）は離したときの onPick 1 回だけ。t は AutoScaledFigure が描画に使った変換そのもの（overlay の引数）。
+ */
+function PickLayer({ t, pickRect, busy, onPick }) {
+  const dragFrom = useRef(null);
+  const [live, setLive] = useState(null);
+  const pointOf = e => ({ pointerId: e.pointerId, clientX: e.clientX, clientY: e.clientY, mm: figurePointToMm(e, e.currentTarget.getBoundingClientRect(), t) });
+  const style = pickOverlayStyle(live ?? pickRect, t);
+  return (
+    <div className="dthlp-pick-layer"
+      onPointerDown={e => { if (busy || dragFrom.current) return; e.currentTarget.setPointerCapture(e.pointerId); dragFrom.current = pointOf(e); }}
+      onPointerMove={e => { if (dragFrom.current?.pointerId === e.pointerId) setLive(clipFromDrag(dragFrom.current.mm, pointOf(e).mm)); }}
+      onPointerUp={e => {
+        const from = dragFrom.current;
+        if (from?.pointerId !== e.pointerId) return;
+        dragFrom.current = null;
+        setLive(null);
+        const rect = pickRectFromDrag(from, pointOf(e));
+        if (rect) onPick(rect);
+      }}
+      onPointerCancel={e => { if (dragFrom.current?.pointerId !== e.pointerId) return; dragFrom.current = null; setLive(null); }}>
+      {style && <div className="dthlp-pdf-clip" style={style} />}
     </div>
   );
 }
@@ -149,7 +187,7 @@ function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy
  * 左ペインの「図面読込み」タブ（PDF）。ページ選定（番号・前後）→ ページ画像（canvas。表示専用）の上で矩形を 1 回ドラッグ
  * （数値欄と同期）→ 縮尺 → 「抽出」→ 連結成分。配線だけ（判断は detailHelperPdf.js）。
  */
-function PdfPane({ pdf, message, busy, onOpen, onPrev, onNext, onPageNumpad, onScale, onClipField, onClipDrag, onExtract, onToggle, onField, onCopy, renderPage, onView, onRenderError }) {
+function PdfPane({ pdf, message, busy, onOpen, onPrev, onNext, onPageNumpad, onScale, onClipField, onClipDrag, onExtract, onToggle, onField, onCopy, onClearPick, renderPage, onView, onRenderError }) {
   const canvasRef = useRef(null);
   const dragFrom = useRef(null);
   useEffect(() => {
@@ -192,7 +230,7 @@ function PdfPane({ pdf, message, busy, onOpen, onPrev, onNext, onPageNumpad, onS
       </div>
       <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onScale}>{DETAIL_HELPER_TEXT.pdfScale}: {displayLen(pdf.scaleText)}</button>
       <button className="dthlp-btn dthlp-btn--primary" disabled={busy || !pdfCanExtract(pdf)} onClick={onExtract}>{DETAIL_HELPER_TEXT.pdfExtract}</button>
-      <ImportResult state={pdf} warnings={pdfWarningTexts(pdf)} busy={busy} canCopy={pdfCanCopy(pdf)} onToggle={onToggle} onField={onField} onCopy={onCopy} />
+      <ImportResult state={pdf} warnings={pdfWarningTexts(pdf)} busy={busy} canCopy={pdfCanCopy(pdf)} onToggle={onToggle} onField={onField} onCopy={onCopy} onClearPick={onClearPick} />
     </div>
   );
 }
@@ -565,6 +603,7 @@ export function DetailHelperPanel({ onClose }) {
               onToggle={index => setPdf(p => toggleDxfComponent(p, index))}
               onField={(field, value) => setPdf(p => setDxfProvenanceField(p, field, value))}
               onCopy={handleDxfCopy}
+              onClearPick={() => setPdf(p => clearPickRect(p))}
               renderPage={(canvas, pageNo) => pdfLoaderRef.current.renderPdfPage(pdfDocRef.current, pageNo, canvas, PDF_PREVIEW_SCALE)}
               onView={view => setPdf(p => setPdfPageView(p, view))}
               onRenderError={err => setDxfMessage({ text: ERR_PDF_PAGE_FAILED(err instanceof Error ? err.message : String(err)), isError: true })}
@@ -578,6 +617,7 @@ export function DetailHelperPanel({ onClose }) {
               onToggle={index => setDxf(d => toggleDxfComponent(d, index))}
               onField={(field, value) => setDxf(d => setDxfProvenanceField(d, field, value))}
               onCopy={handleDxfCopy}
+              onClearPick={() => setDxf(d => clearPickRect(d))}
             />
           )}
           {!showDxf && (<>
@@ -666,6 +706,10 @@ export function DetailHelperPanel({ onClose }) {
                 maxWidth={PREVIEW_FRAME_PX.width}
                 maxHeight={PREVIEW_FRAME_PX.height}
                 onEditDim={showDxf || fitOn || readOnly ? undefined : (dim, v) => edit(f => setMoveLen(f, dim.editKey, String(v)))}
+                overlay={showDxf && imported?.scene
+                  ? t => <PickLayer t={t} pickRect={activePickRect(imported)} busy={busy}
+                    onPick={r => (pdf ? setPdf(p => setPickRect(p, r)) : setDxf(d => setPickRect(d, r)))} />
+                  : undefined}
               />
             )}
           </div>

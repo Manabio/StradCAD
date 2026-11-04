@@ -47,7 +47,7 @@ const COLOR = { stroke: '#334155', dim: '#2563eb', axis: '#94a3b8', concrete: '#
 // 選択中の要素群を矩形でハイライトする（移動は親が矢印キーで overrides を更新）。
 // boundsPrimitives: 枠・倍率を決める基準プリミティブ（既定は primitives）。配置オフセットで枠や倍率がブレないよう
 // “オフセット適用前”のジオメトリを渡す（位置調整は枠内で要素のみ動く）。
-export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320, maxHeight = 340, onEditDim, study = null, scale: scaleProp = null }) {
+export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320, maxHeight = 340, onEditDim, study = null, scale: scaleProp = null, overlay }) {
   // 倍率は基準ジオメトリ（移動前）で固定。配置検討では移動後を内包する和でキャンバスを広げ、欄外要素も
   // スクロールで追いかけられるようにする（倍率は不変・原点は和の最小＝負座標を作らない）。
   // scaleProp 指定時はその縮尺を使う（スクリーン空間注記：生成側が形状基準で決めた縮尺をそのまま使い、
@@ -116,6 +116,8 @@ export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320,
       {editableDims.map((dim, i) => (
         <EditableDimLabel key={`ed${i}`} dim={dim} t={t} onCommit={onEditDim} />
       ))}
+      {/* 呼び出し側が重ねる層（t は上の描画と同じ変換。例: 部分詳細図ヘルパーの矩形ドラッグ層） */}
+      {overlay?.(t)}
     </div>
   );
 
