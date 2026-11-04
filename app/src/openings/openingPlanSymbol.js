@@ -63,7 +63,7 @@ import {
   DOOR_OPEN_ANGLE_DEG, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
 } from './openingPlanSymbolGeometry.js';
 import { resolveDetailFrame, resolveSwingDoorFrame } from './openingDetailFit.js';
-import { DetailSlot, DetailFigureSource, SWING_LEAF_SUBTYPE } from '../core/constants.js';
+import { DetailSlot, DetailFigureSource, SWING_LEAF_SUBTYPE, WINDOW_FRAME_JAMB_WIDTH_MM } from '../core/constants.js';
 import { fixtureSymbolOf, effectiveFrameFaceWidth, effectiveFrameProjection } from './openingNumbering.js';
 import { LodLevel } from '../viewport.js';
 import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
@@ -141,6 +141,18 @@ const DOOR_HINGE_GAP_MM = 5; // 開いた扉と吊元側の方立との隙間
 export const FRAME_HINGE_INSET_MM = FRAME_JAMB_WIDTH_MM - DOOR_HINGE_GAP_MM;
 // 戸先側後退量: 反対側の方立の「本体20mm」境界にぴったり納まる位置
 const FRAME_LATCH_INSET_MM = FRAME_JAMB_WIDTH_MM - FRAME_KAKARI_WIDTH_MM;
+
+/** 方立の全幅。窓は WINDOW_FRAME_JAMB_WIDTH_MM、建具（category 不明含む）は FRAME_JAMB_WIDTH_MM。開口幅の半分で頭打ち。 */
+export function jambWidthFor(opening) {
+  return Math.min(opening.category === OpeningCategory.WINDOW ? WINDOW_FRAME_JAMB_WIDTH_MM : FRAME_JAMB_WIDTH_MM, opening.width / 2);
+}
+// 開き戸 詳細LODの専用inset（方立の全幅基準。窓は25基準、建具は従来の定数）
+export function hingeInsetFor(opening) {
+  return opening.category === OpeningCategory.WINDOW ? WINDOW_FRAME_JAMB_WIDTH_MM - DOOR_HINGE_GAP_MM : FRAME_HINGE_INSET_MM;
+}
+export function latchInsetFor(opening) {
+  return opening.category === OpeningCategory.WINDOW ? WINDOW_FRAME_JAMB_WIDTH_MM - FRAME_KAKARI_WIDTH_MM : FRAME_LATCH_INSET_MM;
+}
 
 // 記号未実装の機構のティックマーク半長（mm。唯一の定義箇所）。
 const TICK_HALF_MM = 30;
@@ -414,7 +426,7 @@ function sashFrameOpenPrimitives(opening, band, jambWidth, frameWeight) {
 // （HINGED_MECHANISMSに含まれないため）、plan.pivotPerpはaxisValue（詳細LODはband内へ
 // クランプ）のまま——このグループの機構は回転しないためpivotPerp自体は使わない。
 function buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight) {
-  const jambW = Math.min(FRAME_JAMB_WIDTH_MM, opening.width / 2);
+  const jambW = jambWidthFor(opening);
   const openPerpDir = swingOpenPerpDir(opening.isVertical, opening.hingeSide, opening.swingSide, entry.mechanism, entry);
   const plan = planSymbolPlan({
     mechanism: entry.mechanism, lodLevel, coord1: opening.coord1, coord2: opening.coord2,
@@ -557,7 +569,7 @@ function sashGroupSymbolPrimitives(mechanism, opening, band, symbolWeight, exter
 // 構造）。exteriorDirOfはOVERHEAD/EMERGENCYのためにsashGroupSymbolPrimitivesへそのまま引き渡す
 // （呼び出し元buildOpeningPlanSymbolがmemoizeThunk済みのものを渡す。11e）。
 function buildSashGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight, exteriorDirOf) {
-  const jambW = Math.min(FRAME_JAMB_WIDTH_MM, opening.width / 2);
+  const jambW = jambWidthFor(opening);
   const openPerpDir = swingOpenPerpDir(opening.isVertical, opening.hingeSide, opening.swingSide, entry.mechanism, entry);
   const plan = planSymbolPlan({
     mechanism: entry.mechanism, lodLevel, coord1: opening.coord1, coord2: opening.coord2,
@@ -744,12 +756,12 @@ function jambOutlinePoints(isVertical, outerAlong, dir, jambW, kakariW, totalPer
 }
 
 // 開き戸 詳細LOD専用: 両端の方立（縦枠）を描く（旧swingFrameSymbol。リーフ・円弧はswingPrimitives
-// が別途描画）。方立は全幅30mm（本体20mm＋かかり代10mm）だが、扉が通過する位置（pivotPerpから
+// が別途描画）。方立は全幅が建具30mm（本体20mm＋かかり代10mm）・窓25mm（本体15mm＋かかり代10mm）だが、扉が通過する位置（pivotPerpから
 // 室内側へ扉厚ぶん）だけかかり代が欠き込まれた段付き断面になる。pivotPerp・outwardは呼び出し側の
 // planSymbolPlanの結果をそのまま使う（Math.sign(host.axisOffset)は使わない。J9/J11参照）。
 function swingFramePrimitives(opening, band, pivotPerp, outward, frameWeight) {
-  const { coord1, coord2, width, isVertical } = opening;
-  const jambW = Math.min(FRAME_JAMB_WIDTH_MM, width / 2);
+  const { coord1, coord2, isVertical } = opening;
+  const jambW = jambWidthFor(opening);
   const kakariW = Math.min(FRAME_KAKARI_WIDTH_MM, jambW);
   const totalPerpLo = band.lo;
   const totalPerpHi = band.hi;
@@ -803,7 +815,7 @@ function buildSwingGroupPrimitives(opening, entry, lodLevel, band, detail, axisV
   const leafWeight = planSymbolWeightMm('leaf', opening, detail);
   const arcWeight = planSymbolWeightMm('arc', opening, detail);
   const frameWeight = planSymbolWeightMm('frame', opening, detail);
-  const jambW = Math.min(FRAME_JAMB_WIDTH_MM, opening.width / 2);
+  const jambW = jambWidthFor(opening);
   const openPerpDir = swingOpenPerpDir(opening.isVertical, opening.hingeSide, opening.swingSide, entry.mechanism, entry);
   const plan = planSymbolPlan({
     mechanism: entry.mechanism, lodLevel, coord1: opening.coord1, coord2: opening.coord2,
@@ -816,8 +828,8 @@ function buildSwingGroupPrimitives(opening, entry, lodLevel, band, detail, axisV
         ?? swingFramePrimitives(opening, band, plan.pivotPerp, plan.leafOutward, frameWeight))
       : [];
     const leaf = swingPrimitives(opening, plan.pivotPerp, leafWeight, arcWeight,
-      detail ? FRAME_HINGE_INSET_MM : 0,
-      detail ? FRAME_LATCH_INSET_MM : 0,
+      detail ? hingeInsetFor(opening) : 0,
+      detail ? latchInsetFor(opening) : 0,
       detail ? { thickness: DOOR_LEAF_THICKNESS_MM, outward: plan.leafOutward } : null);
     return [...frame, ...leaf];
   }
@@ -883,7 +895,7 @@ function buildHingeGroup2Primitives(opening, entry, lodLevel, band, detail, axis
   const leafWeight = planSymbolWeightMm('leaf', opening, detail);
   const arcWeight = planSymbolWeightMm('arc', opening, detail);
   const frameWeight = planSymbolWeightMm('frame', opening, detail);
-  const jambW = Math.min(FRAME_JAMB_WIDTH_MM, opening.width / 2);
+  const jambW = jambWidthFor(opening);
   const openPerpDir = swingOpenPerpDir(opening.isVertical, opening.hingeSide, opening.swingSide, entry.mechanism, entry);
   const plan = planSymbolPlan({
     mechanism: entry.mechanism, lodLevel, coord1: opening.coord1, coord2: opening.coord2,

@@ -723,6 +723,8 @@ export const SWING_LEAF_SUBTYPE = 'singleSwing';
 // ---- 平面記号の枠寸法（mm。建具の方立の組込み図と従来の描きが共有する唯一の定義。openings/openingPlanSymbolGeometry.js が再輸出）----
 export const FRAME_OVERHANG_MM     = 12; // 枠が壁面から室内外へ出る量（ユーザー明示指示2026-09で10→12）
 export const FRAME_JAMB_WIDTH_MM   = 30; // 方立の全幅（本体20 + かかり代10）
+// 窓の方立の全幅（本体15 + かかり代10）。ユーザー裁定 2026-11-04。建具（fitting）は FRAME_JAMB_WIDTH_MM
+export const WINDOW_FRAME_JAMB_WIDTH_MM = 25;
 export const FRAME_KAKARI_WIDTH_MM = 10; // 方立のうち開口側かかり代（＝戸当たり）
 // 扉厚（平面では「かかり代を欠き込む深さ」）。**平面記号と展開図の建具断面が共有する唯一の定義**
 // ——展開図側（純モジュール）は .jsx を静的に引けないため、レンダラ（OpeningsLayer.jsx）に
