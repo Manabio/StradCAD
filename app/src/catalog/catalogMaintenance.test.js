@@ -2010,6 +2010,12 @@ test('fixtureSymbolFormFieldsFor: パネルのフォーム形{frameOnly:true}の
   assert.equal(fixtureSymbolFormFieldsFor(null).showProfile, false);
 });
 
+test('fixtureSymbolFormFieldsFor: 方立・上枠の割当て欄（showDetailSelects）は frameOnly によらず出す（枠断面と分離）', () => {
+  for (const form of [{ frameOnly: true }, { frameOnly: false }, {}, null]) {
+    assert.equal(fixtureSymbolFormFieldsFor(form).showDetailSelects, true);
+  }
+});
+
 test('【失敗系】fixtureSymbolFormFieldsFor: エントリの形（mechanism:FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM）を渡してもshowProfile:false（フォーム形専用であることの固定）', () => {
   assert.equal(fixtureSymbolFormFieldsFor({ mechanism: FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM }).showProfile, false);
 });
@@ -2193,15 +2199,21 @@ test('detailFigures 往復: 両方空なら項目を持たず、片方だけ・�
   assert.deepEqual(fixtureSymbolFormFromEntry(headOnly).detailHead, 'df-h1');
 });
 
-test('detailFigures: 三方枠専用でない記号は割当てを保存値に持たない（build）・検証でも拒否する（validate）', () => {
-  const entry = buildFixtureSymbolEntry({ key: 'AD', label: 'AD', category: 'fitting', frameOnly: false, detailJamb: 'df-j1' });
-  assert.equal(Object.hasOwn(entry, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD), false);
-  const r = validateFixtureSymbolForm(
-    { key: 'AD', label: 'AD', category: 'fitting', frameOnly: false, detailJamb: 'df-j1' },
-    { isAdding: false, detailFigureList: FIG_LIST },
-  );
-  assert.equal(r.ok, false);
-  assert.match(r.message, /三方枠専用記号/);
+test('detailFigures: 三方枠専用でない記号（片開き戸の記号）も割当てを保存値に持ち（build）・検証を通る（validate）。mechanism は付かない', () => {
+  const entry = buildFixtureSymbolEntry({ key: 'AD', label: 'AD', category: 'fitting', frameOnly: false, detailJamb: 'df-j1', detailHead: 'df-h1' });
+  assert.deepEqual(entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { jamb: 'df-j1', head: 'df-h1' });
+  assert.equal(Object.hasOwn(entry, 'mechanism'), false);
+  assert.deepEqual(buildFixtureSymbolEntry(fixtureSymbolFormFromEntry(entry)), entry, '往復で一致');
+  const form = { key: 'AD', label: 'AD', category: 'fitting', frameOnly: false, detailJamb: 'df-j1' };
+  assert.equal(validateFixtureSymbolForm(form, { isAdding: false, detailFigureList: FIG_LIST }).ok, true);
+});
+
+test('【失敗系】detailFigures: 三方枠専用でなくても、実在しない図・slot に合わない図は拒否する', () => {
+  const form = over => ({ key: 'AD', label: 'AD', category: 'fitting', frameOnly: false, ...over });
+  const missing = validateFixtureSymbolForm(form({ detailJamb: 'df-x' }), { isAdding: false, detailFigureList: FIG_LIST });
+  assert.equal(missing.ok, false);
+  assert.match(missing.message, /部分詳細図（方立）.*df-x/);
+  assert.equal(validateFixtureSymbolForm(form({ detailHead: 'df-j1' }), { isAdding: false, detailFigureList: FIG_LIST }).ok, false);
 });
 
 test('validateFixtureSymbolForm: 三層に無い図のキー（df-x）は拒否・実在すれば通る・図の一覧を渡さなければ全て拒否', () => {
@@ -2236,10 +2248,10 @@ test('detailFigureOptionsFor: 現在の値が一覧に無ければ末尾に足�
   assert.equal(detailFigureOptionsFor(DetailSlot.JAMB, FIG_LIST, 'df-j1').length, 1);
 });
 
-test('fixtureSymbolFormFromEntry: 三方枠専用でない記号が detailFigures を持っていてもフォームの割当ては空で、検証は通る', () => {
+test('fixtureSymbolFormFromEntry: 三方枠専用でない記号の detailFigures もフォームの割当てへ読み、検証は通る', () => {
   const entry = { key: 'AD', label: 'AD', category: 'fitting', [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { jamb: 'df-j1', head: 'df-h1' } };
   const form = fixtureSymbolFormFromEntry(entry);
-  assert.deepEqual([form.detailJamb, form.detailHead], ['', '']);
+  assert.deepEqual([form.detailJamb, form.detailHead], ['df-j1', 'df-h1']);
   assert.equal(validateFixtureSymbolForm(form, { isAdding: false, detailFigureList: FIG_LIST }).ok, true);
 });
 
@@ -2278,10 +2290,10 @@ test('validateOpeningSubTypeForm: 姿図の割当ては図の一覧に実在し 
   assert.equal(validateOpeningSubTypeForm(subTypeForm({}), { isAdding: false }).ok, true);
 });
 
-test('fixtureSymbolFormWithFrameOnly: 外すと割当てを空に戻し、付けると他の値を保つ', () => {
+test('fixtureSymbolFormWithFrameOnly: 外しても割当ては保ち（片開き戸でも使う）、付けると他の値を保つ', () => {
   const form = frameOnlyForm({ detailJamb: 'df-j1', detailHead: 'df-h1' });
   const off = fixtureSymbolFormWithFrameOnly(form, false);
-  assert.deepEqual([off.frameOnly, off.detailJamb, off.detailHead], [false, '', '']);
+  assert.deepEqual([off.frameOnly, off.detailJamb, off.detailHead], [false, 'df-j1', 'df-h1']);
   assert.equal(off.profile, 'bent');
   const on = fixtureSymbolFormWithFrameOnly(off, true);
   assert.equal(on.frameOnly, true);

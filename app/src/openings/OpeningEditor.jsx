@@ -16,7 +16,7 @@ import {
   flippedHingeSides, flippedSwingSide, fixtureTypeAfterSubTypeChange, fixtureSymbolOptions,
 } from './openingEdit.js';
 import { openingTagOf, fixtureSymbolOf, effectiveFrameProjection } from './openingNumbering.js';
-import { openingDetailRefSelects, detailRefsAfterSelect, detailDimensionsToCopy } from './openingDetailRefsEdit.js';
+import { openingDetailRefSelects, detailRefsAfterSelect, detailDimensionsToCopy, frameDetailSlotsApply } from './openingDetailRefsEdit.js';
 import { OPENING_DETAIL_REF_TEXT } from '../catalog/catalogMaintenance.js';
 
 // 数値入力は絶対値化して確定する（幅・高さ・位置・窓台高さ共通の規約。図上のdim編集（onEditDim）・
@@ -151,8 +151,9 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
     });
   });
 
-  // 部分詳細図の上書き（方立・上枠は三方枠だけ=S6a／姿図は全機構=S6b）。変更は他の編集と同じ commitEdit（undo に乗る）。
-  const detailSelects = openingDetailRefSelects(opening, undefined, { frameOnly: isFrameOnly });
+  // 部分詳細図の上書き（方立・上枠は三方枠と片開き戸=S6a・S8e-3／姿図は全機構=S6b）。変更は他の編集と同じ commitEdit（undo に乗る）。
+  // R16（図の寸法を建具へ）は三方枠だけ（片開き戸の見付・出幅は Opening の項目でない＝S8e R5）。
+  const detailSelects = openingDetailRefSelects(opening, undefined, { frameSlots: frameDetailSlotsApply(opening, isFrameOnly) });
   const detailDimensions = isFrameOnly ? detailDimensionsToCopy(opening) : null;
   const onDetailRefChange = (slot) => (e) => commitEdit(() => {
     const next = detailRefsAfterSelect(opening, slot, e.target.value);
@@ -300,7 +301,7 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
         </>
       )}
 
-      {/* 部分詳細図の上書き（S6a 方立・上枠＝三方枠だけ／S6b 姿図＝全機構）。空の選択肢＝この建具は上書きせず
+      {/* 部分詳細図の上書き（S6a 方立・上枠＝三方枠と片開き戸だけ／S6b 姿図＝全機構）。空の選択肢＝この建具は上書きせず
           記号（姿図は建具種別）の設定に従う。判断は openingDetailRefsEdit.js */}
       {detailSelects.map(sel => (
         <div key={sel.slot} style={rowStyle}>

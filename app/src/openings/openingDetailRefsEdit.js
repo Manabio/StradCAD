@@ -7,21 +7,26 @@
 // 6a の select は jamb・head だけ（sill 等はデータとして受けるが UI を出さない。R20）。
 // ================================================================
 
-import { DetailSlot, DetailParam } from '../core/constants.js';
+import { DetailSlot, DetailParam, SWING_LEAF_SUBTYPE } from '../core/constants.js';
 import {
   detailFigureOptionsFor, FIXTURE_SYMBOL_DETAIL_SLOT_TEXT, OPENING_DETAIL_REF_TEXT,
 } from '../catalog/catalogMaintenance.js';
 import { withDetailRef } from '../core/detailRefs.js';
 import { paramMmOf } from '../detail/detailPlacement.js';
-import { resolveDetailFigure } from './openingDetailFit.js';
+import { resolveDetailFigure, swingDoorDefaultKey } from './openingDetailFit.js';
 import { detailFigureRefsFor, subTypeDetailFigureRefsFor, detailFigureCatalog } from './openingCatalog.js';
 import { fixtureSymbolOf } from './openingNumbering.js';
 
-/** 三方枠（FRAME_ONLY）だけに出す slot（方立・上枠）。 */
-export const FRAME_ONLY_DETAIL_REF_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot.HEAD]);
+/** 三方枠（FRAME_ONLY）と片開き戸だけに出す slot（方立・上枠）。 */
+export const FRAME_DETAIL_REF_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot.HEAD]);
 
-/** select を出す slot（表示順）。姿図（S6b）は全機構の建具に出し、方立・上枠は三方枠だけ。 */
-export const OPENING_DETAIL_REF_SLOTS = Object.freeze([...FRAME_ONLY_DETAIL_REF_SLOTS, DetailSlot.FIGURE]);
+/** select を出す slot（表示順）。姿図（S6b）は全機構の建具に出し、方立・上枠は三方枠と片開き戸だけ。 */
+export const OPENING_DETAIL_REF_SLOTS = Object.freeze([...FRAME_DETAIL_REF_SLOTS, DetailSlot.FIGURE]);
+
+/** 方立・上枠の select を出す建具か（三方枠か片開き戸）。建具エディタの絞りの唯一の判断。 */
+export function frameDetailSlotsApply(opening, isFrameOnly) {
+  return isFrameOnly === true || opening?.subType === SWING_LEAF_SUBTYPE;
+}
 
 /** R16: 図の param → 写し先の Opening の項目。 */
 const PARAM_TO_OPENING_FIELD = Object.freeze({
@@ -37,12 +42,13 @@ function detailFigureEntries() {
 /**
  * @param {{detailRefs?: object|null}} opening
  * @param {object[]} [figureList] 詳細図エントリ（省略時は三層合成後）
- * @param {{frameOnly?: boolean}} [opts] frameOnly＝三方枠か（既定 true。false なら方立・上枠の select を出さず姿図だけ）
+ * @param {{frameSlots?: boolean}} [opts] frameSlots＝方立・上枠の select を出すか（既定 true。三方枠・片開き戸で true。
+ *   false なら姿図だけ）
  * @returns {Array<{slot:string, label:string, value:string, options:Array<{value:string,label:string}>}>}
  *   value＝建具個別の上書きのキー（未上書きは ''）。options の先頭は未上書き（記号〔姿図は建具種別〕の設定を使う）。
  */
-export function openingDetailRefSelects(opening, figureList = detailFigureEntries(), { frameOnly = true } = {}) {
-  return OPENING_DETAIL_REF_SLOTS.filter(slot => frameOnly || !FRAME_ONLY_DETAIL_REF_SLOTS.includes(slot)).map(slot => {
+export function openingDetailRefSelects(opening, figureList = detailFigureEntries(), { frameSlots = true } = {}) {
+  return OPENING_DETAIL_REF_SLOTS.filter(slot => frameSlots || !FRAME_DETAIL_REF_SLOTS.includes(slot)).map(slot => {
     const key = opening?.detailRefs?.[slot];
     const value = typeof key === 'string' ? key : '';
     const useBase = slot === DetailSlot.FIGURE ? OPENING_DETAIL_REF_TEXT.useSubType : OPENING_DETAIL_REF_TEXT.useSymbol;
@@ -65,7 +71,8 @@ export function detailRefsAfterSelect(opening, slot, value) {
   const baseRefs = slot === DetailSlot.FIGURE
     ? subTypeDetailFigureRefsFor(opening?.category, opening?.subType)
     : detailFigureRefsFor(fixtureSymbolOf(opening));
-  const baseKey = baseRefs?.[slot];
+  // 片開き戸は記号に割当てが無いとき組込みの既定が基準（同キーの選択は既定扱い＝上書きとして持たない。S8d）
+  const baseKey = baseRefs?.[slot] ?? (opening?.subType === SWING_LEAF_SUBTYPE ? swingDoorDefaultKey(slot) : undefined);
   const folded = typeof value === 'string' && value !== '' && value === baseKey ? '' : value;
   return withDetailRef(opening?.detailRefs ?? null, slot, folded);
 }

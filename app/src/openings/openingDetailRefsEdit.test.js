@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { observable, runInAction } from 'mobx';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '../core.js';
-import { DetailSlot } from '../core/constants.js';
+import { DetailSlot, SWING_LEAF_SUBTYPE, DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY } from '../core/constants.js';
 import { withDetailRef } from '../core/detailRefs.js';
 import { undoManager } from '../undoManager.js';
 import { clearOverlays, setOverlay, composeCatalog } from '../catalog/catalogRegistry.js';
@@ -15,7 +15,7 @@ import { openingSubSignature, openingSignature } from './openingNumbering.js';
 import { collectDetailFitFailures } from './openingDetailFitCheck.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import {
-  openingDetailRefSelects, detailRefsAfterSelect, detailDimensionsToCopy, OPENING_DETAIL_REF_SLOTS,
+  openingDetailRefSelects, detailRefsAfterSelect, detailDimensionsToCopy, OPENING_DETAIL_REF_SLOTS, frameDetailSlotsApply,
 } from './openingDetailRefsEdit.js';
 import {
   jambFigure, headFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol, elevationFigure, subTypeEntry, installElevationFigures,
@@ -54,11 +54,33 @@ test('select: 三方枠は方立・上枠・姿図の 3 つ。先頭は「記号
   assert.equal(sels[1].value, '');
 });
 
-test('select: 三方枠以外（frameOnly:false）は姿図の select だけ', () => {
-  const sels = openingDetailRefSelects({ detailRefs: { [DetailSlot.FIGURE]: 'df-f' } }, [], { frameOnly: false });
+test('select: 三方枠・片開き戸以外（frameSlots:false）は姿図の select だけ。frameSlots:true なら方立・上枠・姿図の 3 本', () => {
+  const sels = openingDetailRefSelects({ detailRefs: { [DetailSlot.FIGURE]: 'df-f' } }, [], { frameSlots: false });
   assert.deepEqual(sels.map(s => s.slot), [DetailSlot.FIGURE]);
   assert.equal(sels[0].value, 'df-f');
   assert.match(sels[0].options.at(-1).label, /見つかりません/, '参照切れは黙って未上書きに見せない');
+  const withFrame = openingDetailRefSelects({ detailRefs: null }, [], { frameSlots: true });
+  assert.deepEqual(withFrame.map(s => s.slot), [DetailSlot.JAMB, DetailSlot.HEAD, DetailSlot.FIGURE]);
+});
+
+test('frameDetailSlotsApply: 三方枠か片開き戸（singleSwing）で真・sliding と null で偽', () => {
+  assert.equal(frameDetailSlotsApply({ subType: SWING_LEAF_SUBTYPE }, false), true);
+  assert.equal(frameDetailSlotsApply({ subType: 'sliding' }, true), true);
+  assert.equal(frameDetailSlotsApply({ subType: 'sliding' }, false), false);
+  assert.equal(frameDetailSlotsApply(null, false), false);
+  const slotsOf = o => openingDetailRefSelects(o, [], { frameSlots: frameDetailSlotsApply(o, false) }).map(s => s.slot);
+  assert.deepEqual(slotsOf({ subType: SWING_LEAF_SUBTYPE, detailRefs: null }), [DetailSlot.JAMB, DetailSlot.HEAD, DetailSlot.FIGURE]);
+  assert.deepEqual(slotsOf({ subType: 'sliding', detailRefs: null }), [DetailSlot.FIGURE]);
+});
+
+test('detailRefsAfterSelect（S8e-3）: 片開き戸は記号の割当て無しなら組込みの既定キーへ畳む。他の図は残す・片開き戸以外は畳まない', () => {
+  const swing = { subType: SWING_LEAF_SUBTYPE, detailRefs: null };
+  assert.equal(detailRefsAfterSelect(swing, JAMB, DETAIL_BUILTIN_DOOR_JAMB_KEY), null);
+  assert.equal(detailRefsAfterSelect(swing, HEAD, DETAIL_BUILTIN_DOOR_HEAD_KEY), null);
+  assert.deepEqual(detailRefsAfterSelect(swing, JAMB, 'df-other'), { [JAMB]: 'df-other' });
+  assert.deepEqual(detailRefsAfterSelect(swing, JAMB, DETAIL_BUILTIN_DOOR_HEAD_KEY), { [JAMB]: DETAIL_BUILTIN_DOOR_HEAD_KEY }, '別 slot の既定キーは畳まない');
+  const other = { subType: 'sliding', detailRefs: null };
+  assert.deepEqual(detailRefsAfterSelect(other, JAMB, DETAIL_BUILTIN_DOOR_JAMB_KEY), { [JAMB]: DETAIL_BUILTIN_DOOR_JAMB_KEY });
 });
 
 test('【失敗系】select: 無いキーを持つ建具は「見つかりません」の行を足し、黙って未上書きに見せない。上書き無しは value が空', () => {

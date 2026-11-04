@@ -33,7 +33,7 @@ import {
   validateOpeningSubTypeForm, openingSubTypeFormFieldsFor, openingSubTypeRowDisabledReason,
   formatMechanismLabel, collectExportableEntries, formatBuiltinSource,
   detailFigureOptionsFor, fixtureSymbolFormWithFrameOnly,
-  FIXTURE_SYMBOL_DETAIL_FORM_FIELDS, FIXTURE_SYMBOL_DETAIL_SLOT_TEXT, CATALOG_IN_USE_LABEL,
+  FIXTURE_SYMBOL_DETAIL_FORM_FIELDS, FIXTURE_SYMBOL_DETAIL_SLOT_TEXT, FIXTURE_SYMBOL_DETAIL_HINT, CATALOG_IN_USE_LABEL,
   formatCatalogUsageError,
 } from '../catalog/catalogMaintenance.js';
 import { parseSectionSpecList } from '../structural/sectionCatalog.js';
@@ -1660,7 +1660,7 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
     ? lockedFieldsFor(CatalogKind.FIXTURE_SYMBOL, selectedRow.entry.key, { builtinKeys })
     : new Set();
   const disabledReason = form ? fixtureSymbolRowDisabledReason({ isAdding, editState }) : null;
-  const { showProfile } = fixtureSymbolFormFieldsFor(form);
+  const { showProfile, showDetailSelects } = fixtureSymbolFormFieldsFor(form);
   // 詳細図の割当て先候補（三層合成後＝組込み＋ライブラリ＋同梱。overlay は世代キーのメモで毎レンダー最新）。
   const detailFigureList = [...detailFigureCatalog().values()];
 
@@ -1943,7 +1943,7 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
               </div>
             )}
 
-            {showProfile && Object.keys(FIXTURE_SYMBOL_DETAIL_FORM_FIELDS).map(slot => {
+            {showDetailSelects && Object.keys(FIXTURE_SYMBOL_DETAIL_FORM_FIELDS).map(slot => {
               const field = FIXTURE_SYMBOL_DETAIL_FORM_FIELDS[slot];
               const text = FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[slot];
               return (
@@ -1959,6 +1959,11 @@ function FixtureSymbolTab({ materialList, onLibraryChanged }) {
                       <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
                   </select>
+                  {slot === DetailSlot.JAMB && (
+                    <span className="catmnt-diff-note" style={{ color: '#64748b', fontSize: 11 }}>
+                      （{FIXTURE_SYMBOL_DETAIL_HINT}）
+                    </span>
+                  )}
                 </div>
               );
             })}

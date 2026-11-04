@@ -1328,10 +1328,12 @@ export function collectKnownCatalogKeys(kind, builtinList) {
  * （`mechanism:FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM`）を渡す呼び出しは無い（フォーム側が
  * entry→formの変換（fixtureSymbolFormFromEntry）を経てからこの関数を呼ぶため）。
  * @param {{ frameOnly?: boolean }|null} form フォーム値。
- * @returns {{ showProfile: boolean }}
+ * 方立・上枠の詳細図の割当て欄（showDetailSelects）は記号の機構によらず全記号に出す（記号は機構を持たない。
+ * 割当ては三方枠と片開き戸で使い、他の機構の建具では無視される）。
+ * @returns {{ showProfile: boolean, showDetailSelects: boolean }}
  */
 export function fixtureSymbolFormFieldsFor(form) {
-  return { showProfile: form?.frameOnly === true };
+  return { showProfile: form?.frameOnly === true, showDetailSelects: true };
 }
 
 /** 閲覧タブの行バッジ「使用中」（現在の文書が参照しているエントリ。buildCatalogRows の inUse）。 */
@@ -1350,6 +1352,9 @@ export const FIXTURE_SYMBOL_DETAIL_SLOT_TEXT = Object.freeze({
   // 建具種別タブの姿図（S6b）と、建具エディタの姿図の上書き欄。建具記号フォームの割当て欄（FIXTURE_SYMBOL_DETAIL_FORM_FIELDS）には載らない。
   [DetailSlot.FIGURE]: Object.freeze({ label: '部分詳細図（姿図）', unassigned: 'なし' }),
 });
+
+/** 建具記号フォームの方立・上枠の割当て欄に添える説明（どの建具で効くか）。 */
+export const FIXTURE_SYMBOL_DETAIL_HINT = '三方枠・片開き戸で使う';
 
 /**
  * 建具エディタ（openings/OpeningEditor.jsx）の詳細図の上書き欄の文言（S6a）。select の見出しは上の
@@ -1397,15 +1402,13 @@ export function detailFigureOptionsFor(slot, list, currentKey = '') {
 }
 
 /**
- * 「三方枠専用記号にする」の切替をフォームへ反映する。外したら詳細図の割当てを空に戻す
- * （割当て欄は三方枠専用記号のときだけ出る＝出ていない欄の値が残って検証に落ちないように）。
+ * 「三方枠専用記号にする」の切替をフォームへ反映する。詳細図の割当ては全記号が持てる
+ * （片開き戸でも使う）ので切替では触らない。
  * @param {object} form
  * @param {boolean} frameOnly
  */
 export function fixtureSymbolFormWithFrameOnly(form, frameOnly) {
-  if (frameOnly) return { ...form, frameOnly: true };
-  const cleared = Object.fromEntries(Object.values(FIXTURE_SYMBOL_DETAIL_FORM_FIELDS).map(f => [f, '']));
-  return { ...form, ...cleared, frameOnly: false };
+  return { ...form, frameOnly: frameOnly === true };
 }
 
 /**
@@ -1432,14 +1435,14 @@ export function buildFixtureSymbolEntry({
   if (frameOnly) {
     entry.mechanism = FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM;
     if (FIXTURE_SYMBOL_PROFILES.includes(profile)) entry.profile = profile;
-    // 詳細図の割当て（三方枠専用記号だけ。両方空なら項目ごと持たない）。
-    const detailFigures = {};
-    const jamb = (detailJamb ?? '').trim();
-    const head = (detailHead ?? '').trim();
-    if (jamb !== '') detailFigures[DetailSlot.JAMB] = jamb;
-    if (head !== '') detailFigures[DetailSlot.HEAD] = head;
-    if (Object.keys(detailFigures).length > 0) entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD] = detailFigures;
   }
+  // 詳細図の割当て（全記号。三方枠と片開き戸で使う。両方空なら項目ごと持たない）。
+  const detailFigures = {};
+  const jamb = (detailJamb ?? '').trim();
+  const head = (detailHead ?? '').trim();
+  if (jamb !== '') detailFigures[DetailSlot.JAMB] = jamb;
+  if (head !== '') detailFigures[DetailSlot.HEAD] = head;
+  if (Object.keys(detailFigures).length > 0) entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD] = detailFigures;
   const glass = (defaultMaterialGlass ?? '').trim();
   if (glass !== '') entry.defaultMaterialGlass = glass;
   return entry;
@@ -1466,9 +1469,7 @@ export function fixtureSymbolFormFromEntry(entry) {
     defaultMaterialGlass: entry?.defaultMaterialGlass ?? '',
     ...Object.fromEntries(FIXTURE_SYMBOL_DETAIL_SLOTS.map(slot => {
       const key = entry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]?.[slot];
-      // 三方枠専用でない記号は割当てを持てない（fixtureSymbolFormWithFrameOnly と同じ扱い）ので空で読む。
-      const assigned = entry?.mechanism === FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM && typeof key === 'string';
-      return [FIXTURE_SYMBOL_DETAIL_FORM_FIELDS[slot], assigned ? key : ''];
+      return [FIXTURE_SYMBOL_DETAIL_FORM_FIELDS[slot], typeof key === 'string' ? key : ''];
     })),
   };
 }
@@ -1495,7 +1496,7 @@ export function fixtureSymbolPreviewEntry(form) {
  * いるため、ここでの重複検査は不要（keyは変わらない）。label必須・category必須は追加・編集の
  * 両方で検査する（planSaveEntry側のkindDef.validateでも検査されるが、フォーム表示用の日本語
  * メッセージをここで先に出す——他種別のvalidateMaterialEntryと同じ役割分担）。
- * 詳細図の割当て（detailJamb／detailHead）: 三方枠専用記号のときだけ持てる。指定するキーは
+ * 詳細図の割当て（detailJamb／detailHead）: 全記号が持てる（三方枠と片開き戸で使う）。指定するキーは
  * detailFigureList（三層合成後の詳細図エントリ）の中に、そのslotの絞り込み（detailFigureOptionsFor）で
  * 残る図として存在すること。detailFigureList を省略した場合は「図が1つも無い」扱い＝指定は全て拒否
  * （存在を確かめられないキーを黙って通さない）。
@@ -1514,9 +1515,6 @@ export function validateFixtureSymbolForm(form, { isAdding, allKeys = new Set(),
     const figureKey = (form?.[FIXTURE_SYMBOL_DETAIL_FORM_FIELDS[slot]] ?? '').trim();
     if (figureKey === '') continue;
     const text = FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[slot].label;
-    if (form?.frameOnly !== true) {
-      return { ok: false, message: `${text}は三方枠専用記号にだけ割り当てられます` };
-    }
     if (!detailFigureOptionsFor(slot, detailFigureList).some(o => o.value === figureKey)) {
       return { ok: false, message: `${text}に指定した図が見つかりません: ${figureKey}` };
     }

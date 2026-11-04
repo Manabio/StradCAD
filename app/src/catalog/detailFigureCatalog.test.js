@@ -231,6 +231,17 @@ test('推移展開: 使用中の建具記号 WF の detailFigures.jamb=df-1 と�
   assert.deepEqual([...used.get(FS)], ['WF']);
 });
 
+test('推移展開（S8e-3）: 三方枠専用でない記号（mechanism なし。片開き戸用）の detailFigures も、詳細図とその材を同梱へ展開する', () => {
+  const { wf } = setupLibrary();
+  setOverlay(FS, { user: [{ key: 'WD', label: '記号WD', category: 'fitting', [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: wf[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD] }] });
+  const kinds = [MAT, FS, DF];
+  const used = expandUsedMaterialsTransitively(
+    expandUsedDetailFiguresTransitively(rawUsed(kinds, ['WD']), resolvedAll(kinds)), resolvedAll(kinds),
+  );
+  assert.deepEqual([...used.get(DF)], ['df-1']);
+  assert.deepEqual([...used.get(MAT)], [MAT_X]);
+});
+
 test('推移展開: 使用中の建具記号が無ければ詳細図も材も増えない', () => {
   setupLibrary();
   const kinds = [MAT, FS, DF];

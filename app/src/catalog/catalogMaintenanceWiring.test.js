@@ -1876,10 +1876,12 @@ test('【不変条件・部分詳細図S2】CatalogMaintenancePanel.jsx: READONL
 });
 
 // ---- 部分詳細図 S5: 割当て UI・プレビューの detailRefs・使用中の 1 回取得（コメント除去後の本体を検査）----
-test('【不変条件・部分詳細図S5】FixtureSymbolTab: 割当て select は showProfile の下で slot ごとに描かれ、選択肢は detailFigureOptionsFor、保存前検証へ図の一覧を渡す', () => {
+test('【不変条件・部分詳細図S5】FixtureSymbolTab: 割当て select は showDetailSelects の下（枠断面は showProfile）で slot ごとに描かれ、選択肢は detailFigureOptionsFor、保存前検証へ図の一覧を渡す', () => {
   const body = extractBalancedBody(stripComments(readSrc('ui/CatalogMaintenancePanel.jsx')), 'function FixtureSymbolTab({ materialList, onLibraryChanged }) {');
   assert.ok(body, 'FixtureSymbolTab が見つからない');
-  assert.ok(/showProfile && Object\.keys\(FIXTURE_SYMBOL_DETAIL_FORM_FIELDS\)\.map\(/.test(body), '割当て select が showProfile の条件下で slot ごとに描かれていない');
+  assert.ok(/showDetailSelects && Object\.keys\(FIXTURE_SYMBOL_DETAIL_FORM_FIELDS\)\.map\(/.test(body), '割当て select が showDetailSelects の条件下で slot ごとに描かれていない');
+  assert.ok(/showProfile && \(\s*<div className="catmnt-form-row">\s*<span className="catmnt-form-label">枠断面/.test(body), '枠断面の select が showProfile の条件下にない');
+  assert.ok(/FIXTURE_SYMBOL_DETAIL_HINT/.test(body), '割当て欄の説明を文言表から引いていない');
   assert.ok(/detailFigureOptionsFor\(slot, detailFigureList, form\[field\]\)/.test(body), 'select の選択肢が detailFigureOptionsFor で絞られていない');
   assert.equal((body.match(/validateFixtureSymbolForm\([^)]*detailFigureList/g) ?? []).length, 2, '追加・編集の両方の検証へ detailFigureList を渡していない');
   assert.ok(/fixtureSymbolFormWithFrameOnly\(f, e\.target\.checked\)/.test(body), '三方枠専用の切替が fixtureSymbolFormWithFrameOnly を通っていない');

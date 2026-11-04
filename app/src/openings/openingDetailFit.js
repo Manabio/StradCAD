@@ -96,6 +96,11 @@ const SWING_DOOR_DEFAULT_KEYS = Object.freeze({
   [DetailSlot.HEAD]: DETAIL_BUILTIN_DOOR_HEAD_KEY,
 });
 
+/** 片開き戸の暗黙の既定の組込み図のキー（slot が方立・上枠でなければ undefined）。建具エディタが「同キーの選択＝既定扱い」へ畳む基準に使う。 */
+export function swingDoorDefaultKey(slot) {
+  return SWING_DOOR_DEFAULT_KEYS[slot];
+}
+
 // 組込み図の fit・配置で出る浮動小数の丸め誤差（数 ULP）を、従来の描きと同じ式の値へ寄せる。寄せるのは DETAIL_FIT_EPS_MM 以内だけ。
 const snapNear = (v, refs) => refs.find(r => Math.abs(v - r) <= DETAIL_FIT_EPS_MM) ?? v;
 

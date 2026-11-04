@@ -1,11 +1,11 @@
 # 部分詳細図の設計意図
 
-部分詳細図（建具の枠・部屋の取り合い・屋根・器具の姿図を、寸法に合わせて各図へ重ねる図）の登録と反映。純モジュールは `detail/`、登録画面は `ui/DetailHelperPanel.jsx`（判断は `ui/detailHelperForm.js`）、割当ては保守パネルの建具記号タブ。用語は `glossary.md`。MVP は三方枠（WF/SF/SSF）の方立（平面）と上枠（展開）だけ。
+部分詳細図（建具の枠・部屋の取り合い・屋根・器具の姿図を、寸法に合わせて各図へ重ねる図）の登録と反映。純モジュールは `detail/`、登録画面は `ui/DetailHelperPanel.jsx`（判断は `ui/detailHelperForm.js`）、割当ては保守パネルの建具記号タブ。用語は `glossary.md`。方立（平面）・上枠（展開）の割当ては三方枠（WF/SF/SSF）と片開き戸で使う（MVP は三方枠だけ。片開き戸は S8e）。
 
 ## 置き場
 - 新カタログ種別 `detailFigure`（7 種別目）。三層（本体＞ライブラリ＞同梱）の照合・差分通知・上書き印がそのまま効く（`catalog-model.md`）。本体は組込みの巾木 出 10（`df-builtin-baseboard-10`）・天板 厚 20（`df-builtin-kneecap-20`）・片開き戸の方立と上枠（`df-builtin-door-jamb-30`・`-head-30`。S8e）だけ（`detail/detailBuiltins.js`）。
 - 同梱するのは**使用中だけ**（建具記号の `detailFigures` から推移展開で届く図）。読み込んだ DXF・PDF とその由来の図（`provenance.source` が `'dxf'` か `'pdf'`）は同梱しない（R10。S7a・S7b で実装済み＝`usedEntries.js` の `isImportedFigure` が推移展開と回復後の再展開で除く）。割当てだけが文書に残り、図を持たない環境では既定の描きに戻る。
-- 参照の担い手は建具記号エントリの任意項目 `detailFigures:{jamb,head}`。三方枠の断面形の選び先 `profile` が既に建具記号にある前例に揃え、FBS を触らずに通す。建具個別の上書き（`opening.detailRefs`）は S6a で永続化（FBS 末尾 28・29、undo は建具編集の EDITABLE、読み替えは walker の rewrite）。建具エディタの select（方立・上枠の 2 つ。先頭は「記号の設定を使う」）と、R16 の明示ボタン「図の寸法を建具へ」（解決後の方立の図の param 束縛 mm を見付・出幅へ写す。undo あり・自動の書き戻しなし）。判断は `openings/openingDetailRefsEdit.js`。
+- 参照の担い手は建具記号エントリの任意項目 `detailFigures:{jamb,head}`。三方枠の断面形の選び先 `profile` が既に建具記号にある前例に揃え、FBS を触らずに通す。建具個別の上書き（`opening.detailRefs`）は S6a で永続化（FBS 末尾 28・29、undo は建具編集の EDITABLE、読み替えは walker の rewrite）。建具エディタの select（方立・上枠の 2 つ。三方枠と片開き戸だけに出る。先頭は「記号の設定を使う」）と、R16 の明示ボタン（三方枠だけ。片開き戸の見付・出幅は Opening の項目でない＝R5）「図の寸法を建具へ」（解決後の方立の図の param 束縛 mm を見付・出幅へ写す。undo あり・自動の書き戻しなし）。判断は `openings/openingDetailRefsEdit.js`。
 
 ## 図の表現
 - **ペン命令列（上下左右に指定距離進む一筆書き）をソースに保存**し、点列は描くたびに導出する。寸法をはめ直すには「どの区間が伸縮し、どの頂点が基準に載るか」の意味が要り、プリミティブ保存では失われる。
@@ -94,7 +94,10 @@
 - 片開き戸（subType `SWING_LEAF_SUBTYPE`）の平面・詳細 LOD の方立を、割当て無しなら組込み `df-builtin-door-jamb-30` で描く（従来の `swingFramePrimitives` と同じ出力＝フォールバックに降格。参照切れ・fit 失敗・対象外は従来の描き）。解決は三方枠と同じ `resolveDetailFigure` の後に既定を足す `resolveSwingDoorFrame`。同梱は片開き戸があれば方立と上枠（`df-builtin-door-head-30`。展開の断面の上枠。S8e-2）の 2 件（`implicitDetailFigureKeys`。subType の文字列は catalog/ が openings/ を引けないので constants に置く）。
 - 図は 1 つで、t は「扉が閉じる側（開く側の面）が正」。開き勝手は取り付け側の t 反転（`placeDetailSides` の `tSign`）で表す。既定が使えるのは従来と同じ前提（R4）のときだけ＝見付が全幅 30（開口幅 60 以上）・見込帯が壁の面±出幅（半外付けでない）。明示の割当ては R4 を見ず壁の面へ fit する。組込みと同じキーの上書き（ライブラリ・同梱。S8d）は既定と同じ扱い＝R4 と丸め寄せの対象（上書きの形で描かれるのは R4 を満たす建具だけ。受容）。
 - 図の共線の頂点（t の基準を置くための 2 点）は `withoutCollinearPoints` で除く（従来の六角形と同じ点列にする。三方枠は対象外）。fit・配置の浮動小数の丸め（壁厚 137.7 で 1ULP ずれる実例あり）は、既定の図だけ従来の式の値（面±出幅・面−扉厚）へ寄せる（`DETAIL_FIT_EPS_MM` 以内）。
-- 限界: select（S8e-3）／扉上端・縦線始点は定数のまま／方立と上枠は別々に上書き／一般 LOD・姿図は対象外。
+- select（S8e-3）: 建具エディタは singleSwing にも方立・上枠を出す（R16 は三方枠だけ＝R5）。保守パネルの建具記号タブは方立・上枠の割当て欄を**全記号**に出す（R6。記号は機構を持たず、割当ては三方枠と片開き戸で使い他は無視。枠断面 `profile` だけ三方枠専用のまま）。記号の `detailFigures` は mechanism によらず保存・検証・同梱される。
+- 建具エディタで片開き戸が組込みの既定キー（記号に割当て無しのとき）を選ぶと上書きとして持たず「記号の設定を使う」へ畳む（S8d の「同キーの上書き＝既定扱い」と揃える。`detailRefsAfterSelect`）。
+- 限界: 保守パネルの作図プレビューは標準 LOD なので、三方枠でない記号は方立・上枠を割り当てても見た目が変わらない（片開き戸の方立は詳細 LOD のみ）／扉上端・縦線始点は定数のまま／方立と上枠は別々に上書き／一般 LOD・姿図は対象外。
+- 先送り（S8f 候補）: 窓の 4 方枠（方立・上枠・下枠）を同じ仕組みへ（ユーザー指摘 2026-11-04）。
 
 ### 上枠の配線・R9・通知（S8e-2）
 - 展開の断面（`openingSection.js` の swingLeaf）の上枠だけを図で描く。`resolveSwingDoorFrame` を slot=HEAD で呼ぶ（座標＝coord1 上端・coord2 開口下端・壁の面＝帯の端から出幅ずつ内側・見付 30 固定・tSign＝開く側が帯の奥（atFar）なら +1）。扉の四角と扉のない側の縦線は定数のまま。方立の R4 に当たる除外は無い（断面の帯は常に壁の面±出幅・見付は常に 30）。
