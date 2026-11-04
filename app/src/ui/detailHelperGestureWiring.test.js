@@ -60,7 +60,7 @@ const wheelFactorDirection = body => !!body
 // ホイールの確定: 全体のときの基準は枠(PREVIEW_FRAME_PX)つき viewOfTransform、zoomViewAt の後に panView(…, 0, 0, 図の範囲) で範囲へ寄せる。全体へ戻るなら onView(null)。
 const wheelCommit = body => {
   const flush = /const flush = \(\) => \{([\s\S]*?)\n {4}\};/.exec(body ?? '')?.[1] ?? '';
-  return /const next = wheelZoomedView\(\{\s*view: cur\.view, t: cur\.t, frame: PREVIEW_FRAME_PX, client: w, rect: el\.getBoundingClientRect\(\),/.test(flush)
+  return /const next = wheelZoomedView\(\{\s*view: cur\.view, t: cur\.t, frame: cur\.frame, client: w, rect: el\.getBoundingClientRect\(\),/.test(flush)
     && /autoScale: cur\.info\.autoScale, contentBounds: cur\.info\.contentBounds,/.test(flush)
     && /if \(next === null\) \{ if \(cur\.view\) cur\.onView\(null\); return; \}/.test(flush)
     && /cur\.onView\(next\);/.test(flush)
@@ -74,7 +74,7 @@ const wheelIgnoredWhileDragging = body => {
 };
 // ホイールが読む最新の props は layout effect で更新する（連続ホイールの次のフレームが commit 前の古い view を読まない）。
 const latestUpdatedInLayout = body => !!body
-  && /useLayoutEffect\(\(\) => \{ latest\.current = \{ t, info, view, onView, busy \}; \}\);/.test(body);
+  && /useLayoutEffect\(\(\) => \{ latest\.current = \{ t, info, frame, view, onView, busy \}; \}\);/.test(body);
 // ピンチの仮表示の倍率は確定（pinchView）と同じ範囲 [min/base, max/base] に収める。
 const pinchPreviewClamped = body => !!body
   && /const k = Math\.min\(g\.limits\.maxScale \/ g\.base\.scale, Math\.max\(g\.limits\.minScale \/ g\.base\.scale, Math\.hypot\(/.test(body);
@@ -100,15 +100,18 @@ const armedAndLostCapture = body => !!body
   && (body.match(/setArmed\(false\)/g) ?? []).length >= 2;
 // ドラッグ中は div を枠の大きさに広げ（全体表示は小さい div なので切られる）、終わったら描画の大きさに戻す。
 const hostResizedWhileDragging = body => !!body
-  && /host\.style\.width = `\$\{PREVIEW_FRAME_PX\.width\}px`;/.test(body)
+  && /host\.style\.overflow = 'hidden';/.test(body)
+  && !/host\.style\.overflow = viewNow/.test(body)
+  && /host\.style\.width = `\$\{frame\.width\}px`;/.test(body)
+  && /host\.style\.height = `\$\{frame\.height\}px`;/.test(body)
   && /host\.style\.width = `\$\{tNow\.pxWidth\}px`;/.test(body)
   && /host\.style\.height = `\$\{tNow\.pxHeight\}px`;/.test(body);
 // 押下: 全体のときの基準 view は枠つき viewOfTransform、ピンチの startT は transformOfView(base, 枠)（auto の t を使わない）、2 本目で進行中の操作を捨てる。
 const downBases = body => {
   const h = innerFn(body, 'onPointerDown');
   return h !== null
-    && /const base = view \?\? viewOfTransform\(t, PREVIEW_FRAME_PX\);/.test(h)
-    && /startT: transformOfView\(base, PREVIEW_FRAME_PX\)/.test(h)
+    && /const base = view \?\? viewOfTransform\(t, frame\);/.test(h)
+    && /startT: transformOfView\(base, frame\)/.test(h)
     && /pointers\.current\.size === 2\) \{\s*cancelDrag\(\);/.test(h)
     && /limits: viewLimitsOf\(info\.autoScale\)/.test(h);
 };
@@ -135,7 +138,7 @@ const viewAllButton = src => /<button className="dthlp-btn" disabled=\{busy \|\|
 // ［矩形に寄せる］は図読込みタブで、有効な矩形があるときだけ。fitViewToRect に枠と全体の縮尺つき範囲を渡す。
 const fitRectButton = src => /const canFitRect = !busy && !!pickRectNow && shownPrims\.length > 0;/.test(src)
   && /disabled=\{!canFitRect\}/.test(src)
-  && /setShownView\(fitViewToRect\(pickRectNow, PREVIEW_FRAME_PX, viewLimitsOf\(figureMetrics\.autoScale\)\)\)/.test(src)
+  && /setShownView\(fitViewToRect\(pickRectNow, frame, viewLimitsOf\(figureMetrics\.autoScale\)\)\)/.test(src)
   && /\{DETAIL_HELPER_TEXT\.viewFitRect\}/.test(src);
 const hintFromTextTable = src => /<span className="dthlp-hint">\{showDxf \? DETAIL_HELPER_TEXT\.gestureHint : DETAIL_HELPER_TEXT\.gestureHintPen\}/.test(src);
 // CSS: 層のルールに grab・選択禁止・iOS の長押しメニュー禁止。
@@ -202,7 +205,7 @@ test('【検出力】判定は壊れた配線を落とす', () => {
     '      if (!cur || cur.busy) return;',
     '      if (gesture.current) return;',
     '      const next = wheelZoomedView({',
-    '        view: cur.view, t: cur.t, frame: PREVIEW_FRAME_PX, client: w, rect: el.getBoundingClientRect(),',
+    '        view: cur.view, t: cur.t, frame: cur.frame, client: w, rect: el.getBoundingClientRect(),',
     '        factor, autoScale: cur.info.autoScale, contentBounds: cur.info.contentBounds,',
     '      });',
     '      if (next === null) { if (cur.view) cur.onView(null); return; }',
@@ -223,7 +226,7 @@ test('【検出力】判定は壊れた配線を落とす', () => {
   assert.equal(wheelFactorDirection(wheelOk), true);
   assert.equal(wheelFactorDirection(wheelOk.replace('e.deltaY < 0', 'e.deltaY > 0')), false);
   assert.equal(wheelCommit(wheelOk), true);
-  assert.equal(wheelCommit(wheelOk.replace('frame: PREVIEW_FRAME_PX', 'frame: cur.t')), false); // 枠が違うと最初のズームで図が跳ぶ
+  assert.equal(wheelCommit(wheelOk.replace('frame: cur.frame', 'frame: cur.t')), false); // 枠が違うと最初のズームで図が跳ぶ
   assert.equal(wheelCommit(wheelOk.replace('t: cur.t,', 't: otherT,')), false); // 別の t で中心を換算しない
   assert.equal(wheelCommit(wheelOk.replace('view: cur.view,', 'view: null,')), false);
   assert.equal(wheelCommit(wheelOk.replace('{ if (cur.view) cur.onView(null); return; }', 'return;')), false); // 全体へ戻らない
@@ -231,10 +234,11 @@ test('【検出力】判定は壊れた配線を落とす', () => {
   assert.equal(wheelIgnoredWhileDragging(wheelOk), true);
   assert.equal(wheelIgnoredWhileDragging(wheelOk.replace('if (gesture.current) return;', '')), false);
   assert.equal(wheelIgnoredWhileDragging(wheelOk.replace('if (gesture.current) return;', "if (gesture.current && gesture.current.kind !== 'press') return;")), false); // 長押し待ちのホイールを通すと押下時の基準が古くなる
-  const latestOk = 'useEffect(() => { longPressRef.current = longPress; });\n  useLayoutEffect(() => { latest.current = { t, info, view, onView, busy }; });';
+  const latestOk = 'useEffect(() => { longPressRef.current = longPress; });\n  useLayoutEffect(() => { latest.current = { t, info, frame, view, onView, busy }; });';
   assert.equal(latestUpdatedInLayout(latestOk), true);
   assert.equal(latestUpdatedInLayout(latestOk.replace('useLayoutEffect(() => { latest.current', 'useEffect(() => { latest.current')), false);
   assert.equal(latestUpdatedInLayout(latestOk.replace('view, onView, busy', 'onView, busy')), false);
+  assert.equal(latestUpdatedInLayout(latestOk.replace('info, frame, view', 'info, view')), false); // 枠が古いまま換算しない
   const pinchOk = 'const k = Math.min(g.limits.maxScale / g.base.scale, Math.max(g.limits.minScale / g.base.scale, Math.hypot(a, b) / d0));';
   assert.equal(pinchPreviewClamped(pinchOk), true);
   assert.equal(pinchPreviewClamped('const k = Math.hypot(a, b) / d0;'), false);
@@ -254,16 +258,22 @@ test('【検出力】判定は壊れた配線を落とす', () => {
   assert.equal(armedAndLostCapture(armedOk.replace(' onLostPointerCapture={e => onPointerEnd(e, false)}', '')), false);
   assert.equal(armedAndLostCapture(armedOk.replace('armed && canPick', 'armed')), false);
   assert.equal(armedAndLostCapture(armedOk.replace(' setArmed(false);', '')), false);
-  const hostOk = 'host.style.width = `${PREVIEW_FRAME_PX.width}px`; host.style.width = `${tNow.pxWidth}px`; host.style.height = `${tNow.pxHeight}px`;';
+  const hostOk = 'host.style.overflow = \'hidden\'; host.style.width = `${frame.width}px`; host.style.height = `${frame.height}px`; host.style.width = `${tNow.pxWidth}px`; host.style.height = `${tNow.pxHeight}px`;';
   assert.equal(hostResizedWhileDragging(hostOk), true);
   assert.equal(hostResizedWhileDragging(hostOk.replace('host.style.height = `${tNow.pxHeight}px`;', '')), false);
-  assert.equal(hostResizedWhileDragging(hostOk.replace('${PREVIEW_FRAME_PX.width}', '${tNow.pxWidth}')), false);
+  // 終了時の overflow は無条件（fill は view が null でも hidden が要る）
+  assert.equal(hostResizedWhileDragging(hostOk.replace("host.style.overflow = 'hidden';", "host.style.overflow = viewNow ? 'hidden' : '';")), false);
+  assert.equal(hostResizedWhileDragging(`${hostOk} host.style.overflow = viewNow ? 'hidden' : '';`), false);
+  assert.equal(hostResizedWhileDragging(hostOk.replace('${frame.width}', '${tNow.pxWidth}')), false);
+  assert.equal(hostResizedWhileDragging(hostOk.replace('${frame.height}', '${tNow.pxHeight}')), false);
+  assert.equal(hostResizedWhileDragging(hostOk.replace('${frame.width}', '${PREVIEW_FRAME_PX.width}')), false); // 既定の枠に戻さない
 
-  const downOk = '  function onPointerDown(e) {\n    const base = view ?? viewOfTransform(t, PREVIEW_FRAME_PX);\n    const common = { limits: viewLimitsOf(info.autoScale) };\n'
-    + '    } else if (pointers.current.size === 2) {\n      cancelDrag();\n      const g = { startT: transformOfView(base, PREVIEW_FRAME_PX) };\n    }\n  }\n';
+  const downOk = '  function onPointerDown(e) {\n    const base = view ?? viewOfTransform(t, frame);\n    const common = { limits: viewLimitsOf(info.autoScale) };\n'
+    + '    } else if (pointers.current.size === 2) {\n      cancelDrag();\n      const g = { startT: transformOfView(base, frame) };\n    }\n  }\n';
   assert.equal(downBases(downOk), true);
-  assert.equal(downBases(downOk.replace('viewOfTransform(t, PREVIEW_FRAME_PX)', 'viewOfTransform(t, t)')), false);
-  assert.equal(downBases(downOk.replace('transformOfView(base, PREVIEW_FRAME_PX)', 't')), false); // 自動縮尺の t は不可
+  assert.equal(downBases(downOk.replace('viewOfTransform(t, frame)', 'viewOfTransform(t, t)')), false);
+  assert.equal(downBases(downOk.replace('viewOfTransform(t, frame)', 'viewOfTransform(t, PREVIEW_FRAME_PX)')), false); // 測った枠を使う
+  assert.equal(downBases(downOk.replace('transformOfView(base, frame)', 't')), false); // 自動縮尺の t は不可
   assert.equal(downBases(downOk.replace('cancelDrag();', '')), false);
   assert.equal(downBases(downOk.replace('viewLimitsOf(info.autoScale)', 'info')), false);
 
@@ -297,8 +307,9 @@ test('【検出力】判定は壊れた配線を落とす', () => {
   assert.equal(viewAllButton(allOk.replace('setShownView(null)', 'setShownView(shownView)')), false);
   assert.equal(viewAllButton(allOk.replace('{DETAIL_HELPER_TEXT.viewAll}', '全体')), false);
 
-  const fitOk = 'const canFitRect = !busy && !!pickRectNow && shownPrims.length > 0;\n<button disabled={!canFitRect} onClick={() => setShownView(fitViewToRect(pickRectNow, PREVIEW_FRAME_PX, viewLimitsOf(figureMetrics.autoScale)))}>{DETAIL_HELPER_TEXT.viewFitRect}</button>';
+  const fitOk = 'const canFitRect = !busy && !!pickRectNow && shownPrims.length > 0;\n<button disabled={!canFitRect} onClick={() => setShownView(fitViewToRect(pickRectNow, frame, viewLimitsOf(figureMetrics.autoScale)))}>{DETAIL_HELPER_TEXT.viewFitRect}</button>';
   assert.equal(fitRectButton(fitOk), true);
+  assert.equal(fitRectButton(fitOk.replace('pickRectNow, frame,', 'pickRectNow, PREVIEW_FRAME_PX,')), false);
   assert.equal(fitRectButton(fitOk.replace('!!pickRectNow && ', '')), false);
   assert.equal(fitRectButton(fitOk.replace(' disabled={!canFitRect}', '')), false);
   assert.equal(fitRectButton(fitOk.replace('viewLimitsOf(figureMetrics.autoScale)', '{}')), false);

@@ -7,7 +7,7 @@
 import { isValidClip } from '../detail/pdf/pdfClip.js';
 import { clipFromDrag } from './detailHelperPdf.js';
 import { isTapDistance } from '../interaction/holdGesture.js';
-import { viewOfTransform, zoomViewAt, panView, viewLimitsOf } from '../structural/sectionFigure/figureView.js';
+import { viewOfTransform, zoomViewAt, panView, viewLimitsOf, isFrameUsable } from '../structural/sectionFigure/figureView.js';
 
 /** bbox が矩形（{x,y,w,h}。x=s・y=t・t 下向き正。境界を含む）に完全に収まる成分の index（昇順）。矩形が無効なら []。bbox の無い成分は対象外。 */
 export function componentsInRect(components, rect) {
@@ -86,6 +86,17 @@ export function bindView(owner, view) {
 /** 今有効な view。オーナーが変わった（単位変更・再抽出・別の下書き）か無いときは null（＝全体）。 */
 export function activeView(binding, owner) {
   return binding && owner != null && binding.owner === owner ? binding.view : null;
+}
+
+/**
+ * 測定した描画域の内寸(px。ResizeObserver の contentRect)からプレビューの枠を作る。小数は切り捨て。
+ * 測定前（null）・0 以下・余白以下・非有限（測定の途中で 0 が返る瞬間など）は fallback（既定の枠）へ落とす
+ * ＝viewBounds などの RangeError に届かない。
+ */
+export function previewFrameOf(measured, fallback) {
+  if (!measured) return fallback;
+  const frame = { width: Math.floor(measured.width), height: Math.floor(measured.height) };
+  return isFrameUsable(frame) ? frame : fallback;
 }
 
 /**

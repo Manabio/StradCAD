@@ -194,7 +194,7 @@ const here = import.meta.dirname;
 const stripComments = s => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 const figureSrc = stripComments(fs.readFileSync(path.join(here, 'AutoScaledFigure.jsx'), 'utf8'));
 
-test('【配線】AutoScaledFigure: view は study が無いときだけ viewBounds で枠を作り、makeTransform は 1 回・overflow hidden は view のときだけ', () => {
+test('【配線】AutoScaledFigure: view は study が無いときだけ viewBounds で枠を作り、makeTransform は 1 回・overflow hidden は view か fill のとき', () => {
   assert.match(figureSrc, /const viewed = !!view && !study;/);
   assert.match(figureSrc, /viewed \? viewBounds\(view, \{ width: maxWidth, height: maxHeight \}\)/);
   assert.match(figureSrc, /const scale = viewed \? view\.scale : autoScale;/);

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { figureBounds, chooseScale, scaleLabel, makeTransform } from './sectionGeometry.js';
-import { viewBounds } from './figureView.js';
+import { viewBounds, fillBounds, isFrameUsable } from './figureView.js';
 import { NumPad } from '../../ui/NumPad.jsx';
 import { LABEL_ID_SUFFIX } from './layoutStudy.js';
 import { resolveSvgFigureLinePoints } from './svgFigureLineJoin.js';
@@ -48,7 +48,7 @@ const COLOR = { stroke: '#334155', dim: '#2563eb', axis: '#94a3b8', concrete: '#
 // 選択中の要素群を矩形でハイライトする（移動は親が矢印キーで overrides を更新）。
 // boundsPrimitives: 枠・倍率を決める基準プリミティブ（既定は primitives）。配置オフセットで枠や倍率がブレないよう
 // “オフセット適用前”のジオメトリを渡す（位置調整は枠内で要素のみ動く）。
-export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320, maxHeight = 340, onEditDim, study = null, scale: scaleProp = null, overlay, view = null, svgRef }) {
+export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320, maxHeight = 340, onEditDim, study = null, scale: scaleProp = null, overlay, fill = false, view = null, svgRef }) {
   // 倍率は基準ジオメトリ（移動前）で固定。配置検討では移動後を内包する和でキャンバスを広げ、欄外要素も
   // スクロールで追いかけられるようにする（倍率は不変・原点は和の最小＝負座標を作らない）。
   // scaleProp 指定時はその縮尺を使う（スクリーン空間注記：生成側が形状基準で決めた縮尺をそのまま使い、
@@ -59,7 +59,12 @@ export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320,
   // 枠は maxWidth×maxHeight 固定で、はみ出しは div の overflow:hidden で切る。null は従来の自動縮尺。
   const viewed = !!view && !study;
   const scale = viewed ? view.scale : autoScale;
+  // fill（view も study も無いとき）: svg を枠(maxWidth×maxHeight)いっぱいに描き、図の中心を枠の中央に置く。
+  // 枠が余白以下（測定直後の 0 など）なら viewBounds が使えないので fill を諦めて従来の描画へ落とす（例外にしない）。
+  const frameUsable = isFrameUsable({ width: maxWidth, height: maxHeight });
+  const filled = fill && !viewed && !study && frameUsable;
   const frameBounds = viewed ? viewBounds(view, { width: maxWidth, height: maxHeight })
+    : filled ? fillBounds(baseBounds, autoScale, { width: maxWidth, height: maxHeight })
     : study ? unionBounds(baseBounds, figureBounds(primitives)) : baseBounds;
   const t = makeTransform(frameBounds, scale);
 
@@ -95,7 +100,7 @@ export function AutoScaledFigure({ primitives, boundsPrimitives, maxWidth = 320,
   const linePts = resolveSvgFigureLinePoints(primitives, t);
 
   const figureBody = (
-    <div style={{ position: 'relative', width: t.pxWidth, height: t.pxHeight, ...(viewed ? { overflow: 'hidden' } : null) }}>
+    <div style={{ position: 'relative', width: t.pxWidth, height: t.pxHeight, ...(viewed ? { overflow: 'hidden' } : null), ...(filled ? { overflow: 'hidden' } : null) }}>
       <svg ref={svgRef} width={t.pxWidth} height={t.pxHeight} style={{ display: 'block' }}>
         {primitives.map((p, i) => {
           const el = renderPrimitive(p, i, t, interactive, linePts);

@@ -36,9 +36,14 @@ function assertLimits(limits) {
   if (limits.minScale > limits.maxScale) throw new RangeError(`minScale(${limits.minScale}) > maxScale(${limits.maxScale})`);
 }
 
+/** 枠として使えるか（有限で、各辺が余白×2 より大きい）。使えない枠は viewBounds などが RangeError にする。 */
+export function isFrameUsable(frame) {
+  return !!frame && finite(frame.width, frame.height)
+    && frame.width > 2 * FIGURE_MARGIN_PX && frame.height > 2 * FIGURE_MARGIN_PX;
+}
+
 function assertFrame(frame) {
-  if (!frame || !finite(frame.width, frame.height)
-    || frame.width <= 2 * FIGURE_MARGIN_PX || frame.height <= 2 * FIGURE_MARGIN_PX) {
+  if (!isFrameUsable(frame)) {
     throw new RangeError(`frame が余白(${FIGURE_MARGIN_PX}px×2)以下: ${JSON.stringify(frame)}`);
   }
 }
@@ -66,6 +71,14 @@ export function viewBounds(view, frame) {
   const minX = view.cx - width / 2;
   const minY = view.cy - height / 2;
   return { minX, minY, maxX: minX + width, maxY: minY + height, width, height };
+}
+
+/**
+ * 図の範囲 baseBounds を枠(frame)の中央に置く fill 表示の bounds（makeTransform に渡すと pxWidth＝frame.width・pxHeight＝frame.height）。
+ * 中心は baseBounds の中心。scale が不正・枠が余白以下は RangeError（viewBounds と同じ）。
+ */
+export function fillBounds(baseBounds, scale, frame) {
+  return viewBounds({ scale, cx: (baseBounds.minX + baseBounds.maxX) / 2, cy: (baseBounds.minY + baseBounds.maxY) / 2 }, frame);
 }
 
 /** view で描いたときの変換 t（AutoScaledFigure が view のときに作るものと同じ。pinchView の startT に渡す）。 */

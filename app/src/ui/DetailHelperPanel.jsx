@@ -36,7 +36,7 @@ import {
 import {
   activePickRect, setPickRect, clearPickRect, pickedComponentRows, pickSummaryOf, figurePointToMm, pickRectFromDrag, pickOverlayStyle,
   dragKindOf, bindView, activeView, reconcileView, panDeltaPx, pinchArgsOf, wheelZoomedView,
-  DETAIL_BASE_SNAP_PX, previewVertexPoints, nearestPointWithin, draftViewOfImport,
+  DETAIL_BASE_SNAP_PX, previewVertexPoints, nearestPointWithin, draftViewOfImport, previewFrameOf,
 } from './detailHelperPick.js';
 import { isTapDistance } from '../interaction/holdGesture.js';
 import {
@@ -180,13 +180,22 @@ function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy
   );
 }
 
+// 要素の内寸（ResizeObserver の contentRect と同じ。padding を除く。border は clientWidth/Height に入らない）。
+function contentSizeOf(el) {
+  const cs = getComputedStyle(el);
+  return {
+    width: el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+    height: el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom),
+  };
+}
+
 /**
  * 中央プレビューを覆うジェスチャー層（S7c-2 の矩形ドラッグ＋S7d-2 のズーム／パン）。t・info は AutoScaledFigure が描画に使った
  * 変換と全体の縮尺・図の範囲（overlay の引数）。1 本指のドラッグ＝移動、長押し後のドラッグ＝矩形（canPick のとき）、2 本指＝ピンチ、
  * ホイール＝拡大縮小。ドラッグ中は部品内の state と svg の CSS だけを動かし、親の state（＝重いプレビューの再描画）は
  * 離したとき（ホイールはフレームごと）の onView／onPick 1 回だけ。
  */
-function FigureGestureLayer({ t, info, view, onView, svgRef, canPick, pickRect, onPick, busy, basePointMode, vertexPoints, onBasePoint }) {
+function FigureGestureLayer({ t, info, frame, view, onView, svgRef, canPick, pickRect, onPick, busy, basePointMode, vertexPoints, onBasePoint }) {
   const layerRef = useRef(null);
   const pointers = useRef(new Map()); // 押している指: pointerId → { clientX, clientY }
   const gesture = useRef(null);       // 進行中の操作（押下時の t・view・rect を持ち、終わるまでその値で計算する）
@@ -198,7 +207,7 @@ function FigureGestureLayer({ t, info, view, onView, svgRef, canPick, pickRect, 
   const longPress = useLongPress({ onFire: () => setArmed(true) });
   const longPressRef = useRef(longPress);
   useEffect(() => { longPressRef.current = longPress; });
-  useLayoutEffect(() => { latest.current = { t, info, view, onView, busy }; }); // 連続ホイールの次のフレームが commit 前の古い view を読まないよう layout で更新
+  useLayoutEffect(() => { latest.current = { t, info, frame, view, onView, busy }; }); // 連続ホイールの次のフレームが commit 前の古い view を読まないよう layout で更新
   useEffect(() => () => longPressRef.current.abort(), []);
 
   // ドラッグ中の見た目は svg の CSS だけ（親の state＝重いプレビューの再描画は離したときの 1 回）。はみ出しは div で切る。
@@ -209,8 +218,8 @@ function FigureGestureLayer({ t, info, view, onView, svgRef, canPick, pickRect, 
     dragStyled.current = true;
     const host = svg.parentElement;
     host.style.overflow = 'hidden';
-    host.style.width = `${PREVIEW_FRAME_PX.width}px`;
-    host.style.height = `${PREVIEW_FRAME_PX.height}px`;
+    host.style.width = `${frame.width}px`;
+    host.style.height = `${frame.height}px`;
     svg.style.transformOrigin = '0 0';
   }
   // viewNow・tNow: そのときの view と変換（div の overflow・大きさは AutoScaledFigure の描画に戻す）。
@@ -220,7 +229,7 @@ function FigureGestureLayer({ t, info, view, onView, svgRef, canPick, pickRect, 
     const host = svg.parentElement;
     svg.style.transform = '';
     svg.style.transformOrigin = '';
-    host.style.overflow = viewNow ? 'hidden' : '';
+    host.style.overflow = 'hidden'; // 図は枠いっぱい（fill）か view のどちらかで、はみ出しは切る
     host.style.width = `${tNow.pxWidth}px`;
     host.style.height = `${tNow.pxHeight}px`;
     dragStyled.current = false;
@@ -242,7 +251,7 @@ function FigureGestureLayer({ t, info, view, onView, svgRef, canPick, pickRect, 
       if (!cur || cur.busy) return;
       if (gesture.current) return; // 押下中（長押し待ちを含む）のホイールは無視（押下時の t・view で確定するため、途中で view を変えると古い基準で上書きされる）
       const next = wheelZoomedView({
-        view: cur.view, t: cur.t, frame: PREVIEW_FRAME_PX, client: w, rect: el.getBoundingClientRect(),
+        view: cur.view, t: cur.t, frame: cur.frame, client: w, rect: el.getBoundingClientRect(),
         factor, autoScale: cur.info.autoScale, contentBounds: cur.info.contentBounds,
       });
       if (next === null) { if (cur.view) cur.onView(null); return; }
@@ -285,14 +294,14 @@ function FigureGestureLayer({ t, info, view, onView, svgRef, canPick, pickRect, 
     e.currentTarget.setPointerCapture(e.pointerId);
     pointers.current.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
     const rect = e.currentTarget.getBoundingClientRect();
-    const base = view ?? viewOfTransform(t, PREVIEW_FRAME_PX);
+    const base = view ?? viewOfTransform(t, frame);
     const common = { rect, t, base, limits: viewLimitsOf(info.autoScale), contentBounds: info.contentBounds };
     if (pointers.current.size === 1) {
       longPress.begin(e.clientX, e.clientY);
       gesture.current = { ...common, kind: 'press', id: e.pointerId, viewed: !!view, from: { clientX: e.clientX, clientY: e.clientY, mm: figurePointToMm(e, rect, t) } };
     } else if (pointers.current.size === 2) {
       cancelDrag(); // 進行中の 1 本指の操作は捨てる
-      const g = { ...common, kind: 'pinch', ids: [...pointers.current.keys()], startT: transformOfView(base, PREVIEW_FRAME_PX) };
+      const g = { ...common, kind: 'pinch', ids: [...pointers.current.keys()], startT: transformOfView(base, frame) };
       [g.p0a, g.p0b] = fingersOf(g);
       gesture.current = g;
       beginDragStyle();
@@ -484,8 +493,22 @@ export function DetailHelperPanel({ onClose }) {
   // 図読込みの鍵は読込みごとのトークン viewEpoch（単位変更・読み直しで変わり、レイヤ切替では保つ。PDF は scene）。
   // レイヤ切替で図の範囲と全体の縮尺が変わるので、残した view は reconcileView で新しい図に合わせる。
   const viewOwner = showDxf ? (imported?.viewEpoch ?? imported?.scene) : form.key;
+  // プレビューの枠＝中央ペインの描画域の内寸（ResizeObserver で測る）。測定前・0 以下の軸は既定の枠。枠が変わっても view は保ち、
+  // 全体の縮尺が変わるので reconcileView が全体以下なら全体へ・範囲外なら寄せる。
+  const previewRef = useRef(null);
+  const [measured, setMeasured] = useState(null); // { width, height }（contentRect の内寸）
+  useLayoutEffect(() => {
+    const el = previewRef.current;
+    if (!el) return undefined;
+    const keep = r => setMeasured(m => (m && m.width === r.width && m.height === r.height ? m : { width: r.width, height: r.height }));
+    keep(contentSizeOf(el)); // 初回の描画の前に 1 回測る（既定の枠で描いてから測った枠へ跳ねない）
+    const ro = new ResizeObserver(entries => keep(entries[entries.length - 1].contentRect));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const frame = useMemo(() => previewFrameOf(measured, PREVIEW_FRAME_PX), [measured]);
   const figureMetrics = useMemo(() => (shownPrims.length > 0
-    ? { autoScale: autoScaleOfPrimitives(shownPrims, PREVIEW_FRAME_PX), contentBounds: contentBoundsOfPrimitives(shownPrims) } : null), [shownPrims]);
+    ? { autoScale: autoScaleOfPrimitives(shownPrims, frame), contentBounds: contentBoundsOfPrimitives(shownPrims) } : null), [shownPrims, frame]);
   const keptView = activeView(showDxf ? importView : draftView, viewOwner);
   const shownView = useMemo(
     () => (keptView && figureMetrics ? reconcileView(keptView, figureMetrics.autoScale, figureMetrics.contentBounds) : null),
@@ -935,7 +958,7 @@ export function DetailHelperPanel({ onClose }) {
             <button className="dthlp-btn" disabled={busy || !shownView} onClick={() => setShownView(null)}>{DETAIL_HELPER_TEXT.viewAll}</button>
             {showDxf && (
               <button className="dthlp-btn" disabled={!canFitRect}
-                onClick={() => setShownView(fitViewToRect(pickRectNow, PREVIEW_FRAME_PX, viewLimitsOf(figureMetrics.autoScale)))}>
+                onClick={() => setShownView(fitViewToRect(pickRectNow, frame, viewLimitsOf(figureMetrics.autoScale)))}>
                 {DETAIL_HELPER_TEXT.viewFitRect}
               </button>
             )}
@@ -950,19 +973,20 @@ export function DetailHelperPanel({ onClose }) {
           </div>
           {!showDxf && fitOn && wallNotice && <div className="dthlp-error">{wallNotice}</div>}
           {!showDxf && fitted?.error && <div className="dthlp-error">{fitted.error.message}</div>}
-          <div className="dthlp-preview">
+          <div className="dthlp-preview" ref={previewRef}>
             {shownPrims.length === 0 ? (
               <div className="dthlp-empty">{showDxf ? DETAIL_HELPER_TEXT.dxfEmptyPreview : DETAIL_HELPER_MESSAGES.emptyPreview}</div>
             ) : (
               <AutoScaledFigure
                 primitives={shownPrims}
-                maxWidth={PREVIEW_FRAME_PX.width}
-                maxHeight={PREVIEW_FRAME_PX.height}
+                maxWidth={frame.width}
+                maxHeight={frame.height}
+                fill
                 onEditDim={showDxf || fitOn || readOnly ? undefined : (dim, v) => edit(f => setMoveLen(f, dim.editKey, String(v)))}
                 view={shownView}
                 svgRef={figureSvgRef}
                 overlay={(t, info) => (
-                  <FigureGestureLayer t={t} info={info} view={shownView} onView={setShownView} svgRef={figureSvgRef}
+                  <FigureGestureLayer t={t} info={info} frame={frame} view={shownView} onView={setShownView} svgRef={figureSvgRef}
                     canPick={showDxf && !!imported?.scene} pickRect={pickRectNow} busy={busy}
                     basePointMode={basePointMode} vertexPoints={vertexPoints} onBasePoint={handleBasePoint}
                     onPick={r => (pdf ? setPdf(p => setPickRect(p, r)) : setDxf(d => setPickRect(d, r)))} />
