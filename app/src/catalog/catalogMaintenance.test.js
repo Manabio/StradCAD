@@ -23,6 +23,7 @@ import {
   DEFAULT_PANEL_X, DEFAULT_PANEL_Y, materialFormHasDimensions, materialFormHasBackingClass,
   initialMaterialDimensions, materialFormWithCategory, validateMaterialFormDimensions,
   detailFigureOptionsFor, fixtureSymbolFormWithFrameOnly, FIXTURE_SYMBOL_DETAIL_HINT,
+  FIXTURE_SYMBOL_DETAIL_FORM_FIELDS, FIXTURE_SYMBOL_DETAIL_SLOT_TEXT,
 } from './catalogMaintenance.js';
 import { DetailSlot, DETAIL_SLOT_TARGETS, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap, composeCatalog, markOverlayUntrusted } from './catalogRegistry.js';
@@ -2016,8 +2017,14 @@ test('fixtureSymbolFormFieldsFor: 方立・上枠の割当て欄（showDetailSel
   }
 });
 
-test('FIXTURE_SYMBOL_DETAIL_HINT（S8f-2）: 注記は三方枠・片開き戸（方立・上枠）・窓（方立）で使うと書く', () => {
-  assert.equal(FIXTURE_SYMBOL_DETAIL_HINT, '三方枠・片開き戸（方立・上枠）・窓（方立）で使う');
+test('FIXTURE_SYMBOL_DETAIL_HINT（S8f-3c）: 注記は三方枠・片開き戸（方立・上枠）・窓（方立・上枠・下枠）で使うと書く', () => {
+  assert.equal(FIXTURE_SYMBOL_DETAIL_HINT, '三方枠・片開き戸（方立・上枠）・窓（方立・上枠・下枠）で使う');
+});
+
+test('S8f-3c: 下枠の欄は全記号の割当てフォームに出る（項目名 detailSill・見出し「部分詳細図（下枠）」・未割当て「なし」）', () => {
+  assert.equal(FIXTURE_SYMBOL_DETAIL_FORM_FIELDS[DetailSlot.SILL], 'detailSill');
+  assert.deepEqual(Object.keys(FIXTURE_SYMBOL_DETAIL_FORM_FIELDS), [DetailSlot.JAMB, DetailSlot.HEAD, DetailSlot.SILL]);
+  assert.deepEqual(FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.SILL], { label: '部分詳細図（下枠）', unassigned: 'なし' });
 });
 
 test('【失敗系】fixtureSymbolFormFieldsFor: エントリの形（mechanism:FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM）を渡してもshowProfile:false（フォーム形専用であることの固定）', () => {
@@ -2173,7 +2180,7 @@ test('fixtureSymbolFormFromEntry: entryのmechanism/profile/defaultMaterialGlass
   const form = fixtureSymbolFormFromEntry({ key: 'AD', label: 'AD', category: 'fitting' });
   assert.deepEqual(form, {
     key: 'AD', label: 'AD', category: 'fitting', frameOnly: false, profile: '', defaultMaterialGlass: '',
-    detailJamb: '', detailHead: '',
+    detailJamb: '', detailHead: '', detailSill: '',
   });
 });
 
@@ -2201,6 +2208,25 @@ test('detailFigures 往復: 両方空なら項目を持たず、片方だけ・�
   const headOnly = buildFixtureSymbolEntry(frameOnlyForm({ detailHead: 'df-h1' }));
   assert.deepEqual(fixtureSymbolFormFromEntry(headOnly).detailJamb, '');
   assert.deepEqual(fixtureSymbolFormFromEntry(headOnly).detailHead, 'df-h1');
+});
+
+test('detailFigures（S8f-3c）: 窓の下枠 detailSill は sill の slot に往復し、sill の図だけ通る。slot 違い（方立の図・上枠の図）・実在しない図は拒否', () => {
+  const entry = buildFixtureSymbolEntry({ key: 'AW', label: 'AW', category: 'window', detailJamb: 'df-j1', detailHead: 'df-h1', detailSill: ' df-s1 ' });
+  assert.deepEqual(entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { jamb: 'df-j1', head: 'df-h1', sill: 'df-s1' });
+  const sillOnly = buildFixtureSymbolEntry({ key: 'AW', label: 'AW', category: 'window', detailSill: 'df-s1' });
+  assert.deepEqual(sillOnly[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { sill: 'df-s1' });
+  for (const e of [entry, sillOnly]) assert.deepEqual(buildFixtureSymbolEntry(fixtureSymbolFormFromEntry(e)), e, '往復で一致');
+  assert.equal(fixtureSymbolFormFromEntry(sillOnly).detailSill, 'df-s1');
+  const form = over => ({ key: 'AW', label: 'AW', category: 'window', frameOnly: false, ...over });
+  const check = f => validateFixtureSymbolForm(f, { isAdding: false, detailFigureList: FIG_LIST });
+  assert.equal(check(form({ detailSill: 'df-s1' })).ok, true);
+  assert.equal(check(form({ detailSill: 'df-j1' })).ok, false, '方立の図を下枠に割り当てられない');
+  assert.equal(check(form({ detailSill: 'df-h1' })).ok, false, '上枠の図を下枠に割り当てられない');
+  assert.equal(check(form({ detailJamb: 'df-s1' })).ok, false, '下枠の図を方立に割り当てられない');
+  const missing = check(form({ detailSill: 'df-x' }));
+  assert.equal(missing.ok, false);
+  assert.match(missing.message, /部分詳細図（下枠）.*df-x/);
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.SILL, FIG_LIST), [{ value: 'df-s1', label: '図df-s1（df-s1）' }]);
 });
 
 test('detailFigures: 三方枠専用でない記号（片開き戸の記号）も割当てを保存値に持ち（build）・検証を通る（validate）。mechanism は付かない', () => {

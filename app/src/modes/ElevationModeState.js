@@ -198,12 +198,12 @@ export class ElevationModeState {
    */
   _detailFitMessage() {
     try {
-      // 展開の断面が実際に使う上枠（head の図があれば head、無ければ jamb の流用。平面の方立は対象外）と、
-      // 建具の姿図（S6b）の分だけ試す。
+      // 展開の断面が実際に使う上枠（head の図があれば head、無ければ jamb の流用。平面の方立は対象外）・下枠
+      // （窓台のある窓。下枠は sill だけ）と、建具の姿図（S6b）の分だけ試す。
       // 部屋の取り合い（Room.detailRefs の floorWall・wallCeiling。S8a-2）の参照切れ・壁厚に合わない図も同じ 1 回の通知へ合流する。
       const seen = new Set();
       const failures = [
-        ...collectDetailFitFailures(this.graph, undefined, { slots: [DetailSlot.HEAD, DetailSlot.FIGURE] }),
+        ...collectDetailFitFailures(this.graph, undefined, { slots: [DetailSlot.HEAD, DetailSlot.SILL, DetailSlot.FIGURE] }),
         // 壁厚は描画と同じ「面ごとの壁」（隣室が生成した壁を含む）でも試す
         ...collectRoomJunctionFailures(this.graph, seen, {
           materialMap: this._materialMap ?? null, faceWallsOf: room => junctionFaceWallsOf(room, this.graph),

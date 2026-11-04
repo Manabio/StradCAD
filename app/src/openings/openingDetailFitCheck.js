@@ -8,16 +8,16 @@
 // 建具の姿図（S6b。slot=figure）は全機構の建具が対象で、壁は引かない（collectDetailFigureFailures。立面の入力組み立ても使う）。
 // ================================================================
 
-import { DetailSlot, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM } from '../core/constants.js';
+import { DetailSlot, FRAME_OVERHANG_MM } from '../core/constants.js';
 import { clampFrameFaceWidth, jambWidthFor } from './openingPlanSymbolGeometry.js';
 import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, DETAIL_OWNER_OPENING } from '../error.js';
 import { effectiveFrameFaceWidth, effectiveFrameProjection, effectiveHeight, fixtureSymbolOf } from './openingNumbering.js';
 import { detailFitKey, fitDetailLocalMemo, subTypeDetailFigureRefsFor, findCatalogEntry } from './openingCatalog.js';
-import { isFrameOnlySection, isSwingLeafSection, openingSectionWallRange, wallMaterialRangeForOpening, wallMaterialRangesOf } from './openingSection.js';
+import { isFrameOnlySection, isSwingLeafSection, isWindowSection, sectionFrameFaceWidthFor, openingSectionWallRange, wallMaterialRangeForOpening, wallMaterialRangesOf } from './openingSection.js';
 import { findHostWall, wallFaceRange } from './openingGeometry.js';
 import { resolveDetailFigure, elevationDetailDims, frameDefaultKey } from './openingDetailFit.js';
 
-const FRAME_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot.HEAD]);
+const FRAME_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot.HEAD, DetailSlot.SILL]);
 const ALL_SLOTS = Object.freeze([...FRAME_SLOTS, DetailSlot.FIGURE]);
 
 // 1つの解決結果 r（resolveDetailFigure の戻り値）の失敗（参照先の図が無い・fit できない）を failures に積む。
@@ -71,9 +71,10 @@ export function collectDetailFigureFailures(openings, seen = new Set()) {
 // 試す寸法は描画と同じ式で、壁厚だけ平面と断面で値が違う: 方立＝ホスト壁の両仕上げ面の間（OpeningsLayer の faceLo/faceHi＝wallFaceRange）、
 // 上枠＝展開の断面の帯。帯の経路が 2 つあり壁厚が違う: 隅の断面は同じ通りの実壁の材の範囲の合併（wallMaterialRangeForOpening）、
 // 切断壁の帯は当該部屋側の壁 1 枚の材の範囲（片開き戸は openingWallRange を持たない）。両方の壁厚を試し（重複は除く）、
-// どれかが合わなければ上枠の行は 1 slot につき 1 件（最初に合わなかった壁厚）。見付は方立＝開口幅の半分で頭打ち、上枠＝常に FRAME_JAMB_WIDTH_MM。
+// どれかが合わなければ上枠の行は 1 slot につき 1 件（最初に合わなかった壁厚）。見付は方立＝開口幅の半分で頭打ち、上枠・下枠＝sectionFrameFaceWidthFor（片開き戸 30・窓 min(25, 高さ/2)）。
 // 壁が引けない slot は試さない。同じ図が片方の寸法にだけ合わないときは、合わない slot の行だけ出る。
-// 窓（S8f-2）は方立（平面）だけで、見付は jambWidthFor（窓 25・建具 30。開口幅の半分で頭打ち）。窓の上枠・下枠は S8f-3。
+// 窓は方立（平面。S8f-2。見付は jambWidthFor＝窓 25・建具 30、開口幅の半分で頭打ち）に加え、上枠・下枠（断面。S8f-3c）。
+// 上枠・下枠の見付は sectionFrameFaceWidthFor（窓 min(25, 高さ/2)）。窓でどの slot を試すかは呼び出し側が frameDefaultKey で絞る。
 function collectFrameFailures(o, graph, frameSlots, { failures, seen }) {
   const symbolKey = fixtureSymbolOf(o);
   const dimsListOf = slot => {
@@ -84,10 +85,11 @@ function collectFrameFailures(o, graph, frameSlots, { failures, seen }) {
       const [lo, hi] = wallFaceRange(host, graph);
       return [{ wallThickness: hi - lo, projection: FRAME_OVERHANG_MM, faceWidth: jambWidthFor(o) }];
     }
+    // 上枠・下枠（断面）。見付は片開き戸 30・窓 min(25, 高さ/2)（描画と同じ sectionFrameFaceWidthFor）
     const merged = wallMaterialRangeForOpening(o, graph);
     if (!merged) return [];
     const thicknesses = [merged, ...wallMaterialRangesOf(o, graph)].map(r => r.hi - r.lo);
-    return [...new Set(thicknesses)].map(wallThickness => ({ wallThickness, projection: FRAME_OVERHANG_MM, faceWidth: FRAME_JAMB_WIDTH_MM }));
+    return [...new Set(thicknesses)].map(wallThickness => ({ wallThickness, projection: FRAME_OVERHANG_MM, faceWidth: sectionFrameFaceWidthFor(o) }));
   };
   for (const slot of frameSlots) {
     const r = resolveDetailFigure({ symbolKey, detailRefs: o.detailRefs ?? null, slot });
@@ -102,11 +104,11 @@ function collectFrameFailures(o, graph, frameSlots, { failures, seen }) {
 
 /**
  * graph の建具について、詳細図の fit に失敗する（図×寸法）の組と、参照先の図がカタログに無い組を集める。
- * 三方枠の方立・上枠、片開き戸の方立・上枠、窓の方立（図×壁厚・出幅・見付）と、全建具の姿図（図×幅・高さ・窓台高さ。collectDetailFigureFailures）。
+ * 三方枠の方立・上枠、片開き戸の方立・上枠、窓の方立・上枠・下枠（図×壁厚・出幅・見付）と、全建具の姿図（図×幅・高さ・窓台高さ。collectDetailFigureFailures）。
  * @param {object|null} graph
  * @param {Set<string>} [seen] 重複排除の鍵の集合。複数階で共有すると階をまたいで同じ組を1回にできる（破壊的に更新する）
- * @param {{slots?: string[]}} [opts] slots＝試す枠。既定は方立（平面）・上枠（展開）・姿図。展開モードは
- *   断面が実際に使う上枠（head の図があれば head、無ければ jamb の流用）と姿図だけ [DetailSlot.HEAD, DetailSlot.FIGURE] を渡す
+ * @param {{slots?: string[]}} [opts] slots＝試す枠。既定は方立（平面）・上枠（展開）・下枠（展開。窓だけ）・姿図。展開モードは
+ *   断面が実際に使う上枠（head の図があれば head、無ければ jamb の流用）・下枠と姿図だけ [DetailSlot.HEAD, DetailSlot.SILL, DetailSlot.FIGURE] を渡す
  * @returns {{key:string, symbolKey:string, slot:string, label:string, reason:string, message:string,
  *            wallThickness?:number, projection?:number, faceWidth?:number, dims?:Object<string,number>}[]}
  */
@@ -115,13 +117,16 @@ export function collectDetailFitFailures(graph, seen = new Set(), { slots = ALL_
   const frameSlots = slots.filter(s => FRAME_SLOTS.includes(s));
   for (const o of graph?.openings ?? []) {
     if (frameSlots.length === 0) continue;
+    // 下枠は窓だけ（片開き戸・三方枠は方立・上枠）
+    const nonSillSlots = frameSlots.filter(s => s !== DetailSlot.SILL);
     if (isSwingLeafSection(o)) {
-      collectFrameFailures(o, graph, frameSlots, { failures, seen });
+      collectFrameFailures(o, graph, nonSillSlots, { failures, seen });
       continue;
     }
-    // 窓（引き違い・三方枠を除く）は方立だけ。既定の方立を持つかは frameDefaultKey に寄せる
-    if (frameDefaultKey(o, DetailSlot.JAMB, findCatalogEntry(o.category, o.subType)?.mechanism) !== undefined) {
-      collectFrameFailures(o, graph, frameSlots.filter(s => s === DetailSlot.JAMB), { failures, seen });
+    // 窓は方立・上枠・下枠のうち既定の図を持つ slot だけ（引き違い窓は方立なし・掃き出し窓は下枠なし。frameDefaultKey に寄せる）
+    if (isWindowSection(o)) {
+      const mechanism = findCatalogEntry(o.category, o.subType)?.mechanism;
+      collectFrameFailures(o, graph, frameSlots.filter(s => frameDefaultKey(o, s, mechanism) !== undefined), { failures, seen });
       continue;
     }
     if (!isFrameOnlySection(o)) continue;
@@ -136,7 +141,7 @@ export function collectDetailFitFailures(graph, seen = new Set(), { slots = ALL_
       [DetailSlot.JAMB]: clampFrameFaceWidth(fw, o.coord1, o.coord2),
       [DetailSlot.HEAD]: clampFrameFaceWidth(Math.min(fw, o.width / 2), 0, effectiveHeight(o)),
     };
-    for (const slot of frameSlots) {
+    for (const slot of nonSillSlots) {
       const r = resolveDetailFigure({ symbolKey, detailRefs: o.detailRefs ?? null, slot });
       if (!r) continue;
       const faceWidth = faceWidthOf[slot];

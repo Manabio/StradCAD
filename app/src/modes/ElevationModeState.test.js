@@ -389,6 +389,21 @@ test('ElevationModeState.init: 展開は上枠が実際に使う図だけ試す�
   }
 });
 
+test('ElevationModeState.init（S8f-3c）: 窓の明示の下枠の図が合わせられないと materialError に下枠の通知文が載る（展開の slots に下枠を含む）', async () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, {}, { extraFigures: [materialBoundFigure('df-elev-sill', { view: 'section', subject: 'sill' })] });
+  try {
+    const { graph, project } = graphWithFrames(sym, [{
+      category: OpeningCategory.WINDOW, subType: 'fixed', sillHeight: 800, detailRefs: { sill: 'df-elev-sill' },
+    }]);
+    const state = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+    await state.init();
+    assert.match(state.materialError ?? '', new RegExp(`^詳細図 材束縛の方立 を ${sym} の下枠に合わせられません: `));
+  } finally {
+    clearOverlays();
+  }
+});
+
 test('【失敗系】ElevationModeState.init: 詳細図が合わせられる・割当て無しの三方枠では通知しない（materialError は null のまま）', async () => {
   const ok = uniqueSymbolKey();
   installFrameSymbol(ok, { jamb: jambFigure('df-elev-ok') });

@@ -1339,22 +1339,24 @@ export function fixtureSymbolFormFieldsFor(form) {
 /** 閲覧タブの行バッジ「使用中」（現在の文書が参照しているエントリ。buildCatalogRows の inUse）。 */
 export const CATALOG_IN_USE_LABEL = '使用中';
 
-/** 建具記号フォームの詳細図割当て欄。slot ⇄ フォーム項目名（detailJamb／detailHead。'' は未割当て）。 */
+/** 建具記号フォームの詳細図割当て欄。slot ⇄ フォーム項目名（detailJamb／detailHead／detailSill。'' は未割当て）。 */
 export const FIXTURE_SYMBOL_DETAIL_FORM_FIELDS = Object.freeze({
   [DetailSlot.JAMB]: 'detailJamb',
   [DetailSlot.HEAD]: 'detailHead',
+  [DetailSlot.SILL]: 'detailSill',
 });
 
 /** 詳細図割当て欄の表示。label＝select の見出し・unassigned＝未割当ての選択肢（上枠は方立の図へ倒れる＝R9）。 */
 export const FIXTURE_SYMBOL_DETAIL_SLOT_TEXT = Object.freeze({
   [DetailSlot.JAMB]: Object.freeze({ label: '部分詳細図（方立）', unassigned: 'なし' }),
   [DetailSlot.HEAD]: Object.freeze({ label: '部分詳細図（上枠）', unassigned: '方立の図を使う' }),
+  [DetailSlot.SILL]: Object.freeze({ label: '部分詳細図（下枠）', unassigned: 'なし' }),
   // 建具種別タブの姿図（S6b）と、建具エディタの姿図の上書き欄。建具記号フォームの割当て欄（FIXTURE_SYMBOL_DETAIL_FORM_FIELDS）には載らない。
   [DetailSlot.FIGURE]: Object.freeze({ label: '部分詳細図（姿図）', unassigned: 'なし' }),
 });
 
-/** 建具記号フォームの方立・上枠の割当て欄に添える説明（どの建具で効くか）。 */
-export const FIXTURE_SYMBOL_DETAIL_HINT = '三方枠・片開き戸（方立・上枠）・窓（方立）で使う';
+/** 建具記号フォームの方立・上枠・下枠の割当て欄に添える説明（どの建具で効くか）。 */
+export const FIXTURE_SYMBOL_DETAIL_HINT = '三方枠・片開き戸（方立・上枠）・窓（方立・上枠・下枠）で使う';
 
 /**
  * 建具エディタ（openings/OpeningEditor.jsx）の詳細図の上書き欄の文言（S6a）。select の見出しは上の
@@ -1380,7 +1382,7 @@ const FIXTURE_SYMBOL_DETAIL_SLOTS = Object.freeze(Object.keys(FIXTURE_SYMBOL_DET
 
 /**
  * slot に割り当てられる詳細図の選択肢。DETAIL_SLOT_TARGETS（category×view×subject）に一致する図だけ
- * （jamb＝平面の方立・head＝断面の上枠。sill 等の図は出ない）。currentKey が一覧に無ければ末尾に
+ * （jamb＝平面の方立・head＝断面の上枠・sill＝断面の下枠。他の subject の図は出ない）。currentKey が一覧に無ければ末尾に
  * 「見つかりません」の行を足す（参照切れの割当てを select が黙って「なし」に見せない）。
  * @param {string} slot DetailSlot（FIXTURE_SYMBOL_DETAIL_FORM_FIELDS のキー）
  * @param {object[]} list 詳細図エントリ（三層合成後。openingCatalog.detailFigureCatalog() の値）
@@ -1427,21 +1429,19 @@ export function fixtureSymbolFormWithFrameOnly(form, frameOnly) {
  * @returns {{ key: string, label: string, category: string, mechanism?: string,
  *             profile?: string, defaultMaterialGlass?: string }}
  */
-export function buildFixtureSymbolEntry({
-  key, label, category, frameOnly = false, profile = null, defaultMaterialGlass = null,
-  detailJamb = '', detailHead = '',
-} = {}) {
+export function buildFixtureSymbolEntry(form = {}) {
+  const { key, label, category, frameOnly = false, profile = null, defaultMaterialGlass = null } = form;
   const entry = { key: (key ?? '').trim(), label: (label ?? '').trim(), category };
   if (frameOnly) {
     entry.mechanism = FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM;
     if (FIXTURE_SYMBOL_PROFILES.includes(profile)) entry.profile = profile;
   }
-  // 詳細図の割当て（全記号。三方枠・片開き戸・窓で使う。両方空なら項目ごと持たない）。
+  // 詳細図の割当て（全記号。三方枠・片開き戸・窓で使う。全 slot が空なら項目ごと持たない）。
   const detailFigures = {};
-  const jamb = (detailJamb ?? '').trim();
-  const head = (detailHead ?? '').trim();
-  if (jamb !== '') detailFigures[DetailSlot.JAMB] = jamb;
-  if (head !== '') detailFigures[DetailSlot.HEAD] = head;
+  for (const slot of FIXTURE_SYMBOL_DETAIL_SLOTS) {
+    const figureKey = (form?.[FIXTURE_SYMBOL_DETAIL_FORM_FIELDS[slot]] ?? '').trim();
+    if (figureKey !== '') detailFigures[slot] = figureKey;
+  }
   if (Object.keys(detailFigures).length > 0) entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD] = detailFigures;
   const glass = (defaultMaterialGlass ?? '').trim();
   if (glass !== '') entry.defaultMaterialGlass = glass;
@@ -1496,11 +1496,11 @@ export function fixtureSymbolPreviewEntry(form) {
  * いるため、ここでの重複検査は不要（keyは変わらない）。label必須・category必須は追加・編集の
  * 両方で検査する（planSaveEntry側のkindDef.validateでも検査されるが、フォーム表示用の日本語
  * メッセージをここで先に出す——他種別のvalidateMaterialEntryと同じ役割分担）。
- * 詳細図の割当て（detailJamb／detailHead）: 全記号が持てる（三方枠・片開き戸・窓で使う）。指定するキーは
+ * 詳細図の割当て（detailJamb／detailHead／detailSill）: 全記号が持てる（三方枠・片開き戸・窓で使う）。指定するキーは
  * detailFigureList（三層合成後の詳細図エントリ）の中に、そのslotの絞り込み（detailFigureOptionsFor）で
  * 残る図として存在すること。detailFigureList を省略した場合は「図が1つも無い」扱い＝指定は全て拒否
  * （存在を確かめられないキーを黙って通さない）。
- * @param {{ key?: string, label?: string, category?: string, frameOnly?: boolean, detailJamb?: string, detailHead?: string }} form
+ * @param {{ key?: string, label?: string, category?: string, frameOnly?: boolean, detailJamb?: string, detailHead?: string, detailSill?: string }} form
  * @param {{ isAdding: boolean, allKeys?: Set<string>, builtinKeys?: Set<string>, detailFigureList?: object[] }} args
  * @returns {{ ok: true } | { ok: false, message: string }}
  */

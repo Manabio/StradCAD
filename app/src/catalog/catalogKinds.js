@@ -451,7 +451,7 @@ const REGISTRY = Object.assign(Object.create(null), {
       return { key };
     },
     encoding: 'json',
-    // detailFigures（任意）＝{ jamb?, head? } の詳細図キー（R4。旧ビルドでは未知項目として保持される）。
+    // detailFigures（任意）＝{ jamb?, head?, sill? } の詳細図キー（R4。旧ビルドでは未知項目として保持される）。
     knownFields: ['key', 'label', 'category', 'mechanism', 'profile', 'defaultMaterialGlass', FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD],
     requiredFields: ['key', 'label', 'category'],
     // ステップ12d（Q-D確定 2026-09-24）: keyの書式（英大文字2〜4文字）は登録表のvalidateでは
