@@ -15,7 +15,7 @@ const FIGURES = [cap('df-cap', '天板A'), baseboardFigure('df-bb')];
 test('detailRefSelectsFor: slot の並びの select。先頭は「なし」。選択肢は part/section/wall の図だけ（巾木など他の分類は出ない）', () => {
   const sels = detailRefSelectsFor(KNEE_DROP_DETAIL_SLOTS, null, FIGURES, { labelOf: s => `<${s}>` });
   assert.deepEqual(sels.map(s => [s.slot, s.label, s.value]), [[KNEE_TOP, '<kneeTop>', ''], [DROP_BOTTOM, '<dropBottom>', '']]);
-  assert.deepEqual(sels[0].options, [{ value: '', label: 'なし' }, { value: 'df-cap', label: '天板A（df-cap）' }]);
+  assert.deepEqual(sels[0].options, [{ value: '', label: 'なし' }, { value: 'df-cap', label: '天板A' }]);
   assert.deepEqual(sels[1].options, sels[0].options, 'kneeTop と dropBottom は同じ分類（part/section/wall）');
   // 既定のラベル（error.js の slot ラベル）
   assert.deepEqual(detailRefSelectsFor(KNEE_DROP_DETAIL_SLOTS, null, FIGURES).map(s => s.label), ['腰壁の天端', '垂れ壁の下端']);

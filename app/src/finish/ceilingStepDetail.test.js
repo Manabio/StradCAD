@@ -233,7 +233,7 @@ test('ceilingStepSelects／zonesAfterCeilingStepSelect／isCeilingStepEditable: 
   const { graph, room, zone } = zonedRoom(2100, { assign: null });
   const sels = ceilingStepSelects(zone, figures);
   assert.deepEqual(sels.map(s => [s.slot, s.label, s.value]), [[CEILING_STEP, '天井の段差', '']]);
-  assert.deepEqual(sels[0].options, [{ value: '', label: 'なし' }, { value: 'df-cs', label: '見切りA（df-cs）' }]);
+  assert.deepEqual(sels[0].options, [{ value: '', label: 'なし' }, { value: 'df-cs', label: '見切りA' }]);
   const set = zonesAfterCeilingStepSelect(graph, room, zone.id, CEILING_STEP, 'df-cs');
   const picked = set.find(z => z.id === zone.id);
   assert.deepEqual(picked.detailRefs, { [CEILING_STEP]: 'df-cs' });

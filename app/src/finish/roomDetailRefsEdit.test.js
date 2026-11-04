@@ -22,10 +22,10 @@ test('select は床と壁・壁と天井・床の段差・天井の段差の 4 �
   const sels = roomDetailRefSelects(room, FIGURES);
   assert.deepEqual(sels.map(s => s.slot), [...ROOM_DETAIL_SLOTS, ...ROOM_PART_SLOTS]);
   assert.deepEqual(sels.map(s => s.label), ['床と壁', '壁と天井', '床の段差', '天井の段差']);
-  assert.deepEqual(sels[0].options, [{ value: '', label: ROOM_DETAIL_REF_TEXT.none }, { value: 'df-fw1', label: '巾木A（df-fw1）' }]);
-  assert.deepEqual(sels[1].options, [{ value: '', label: 'なし' }, { value: 'df-wc1', label: '廻り縁A（df-wc1）' }]);
-  assert.deepEqual(sels[2].options, [{ value: '', label: 'なし' }, { value: 'df-fs1', label: '段鼻A（df-fs1）' }]);
-  assert.deepEqual(sels[3].options, [{ value: '', label: 'なし' }, { value: 'df-cs1', label: '見切りA（df-cs1）' }]);
+  assert.deepEqual(sels[0].options, [{ value: '', label: ROOM_DETAIL_REF_TEXT.none }, { value: 'df-fw1', label: '巾木A' }]);
+  assert.deepEqual(sels[1].options, [{ value: '', label: 'なし' }, { value: 'df-wc1', label: '廻り縁A' }]);
+  assert.deepEqual(sels[2].options, [{ value: '', label: 'なし' }, { value: 'df-fs1', label: '段鼻A' }]);
+  assert.deepEqual(sels[3].options, [{ value: '', label: 'なし' }, { value: 'df-cs1', label: '見切りA' }]);
   assert.deepEqual(sels.map(s => s.value), ['', '', '', '']);
 });
 

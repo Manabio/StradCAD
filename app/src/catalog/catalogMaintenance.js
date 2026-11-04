@@ -1394,7 +1394,7 @@ export function detailFigureOptionsFor(slot, list, currentKey = '') {
   if (!target) return [];
   const options = list
     .filter(e => e.category === target.category && e.view === target.view && e.subject === target.subject)
-    .map(e => ({ value: e.key, label: `${e.label}（${e.key}）` }));
+    .map(e => ({ value: e.key, label: e.label })); // 呼称だけ（キーは出さない。ユーザー指示 2026-11-04）
   if (currentKey !== '' && !options.some(o => o.value === currentKey)) {
     // 実在するが slot の分類に合わない図と、そもそも存在しないキーを分ける。
     const exists = list.some(e => e.key === currentKey);

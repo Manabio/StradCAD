@@ -2226,7 +2226,7 @@ test('detailFigures（S8f-3c）: 窓の下枠 detailSill は sill の slot に�
   const missing = check(form({ detailSill: 'df-x' }));
   assert.equal(missing.ok, false);
   assert.match(missing.message, /部分詳細図（下枠）.*df-x/);
-  assert.deepEqual(detailFigureOptionsFor(DetailSlot.SILL, FIG_LIST), [{ value: 'df-s1', label: '図df-s1（df-s1）' }]);
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.SILL, FIG_LIST), [{ value: 'df-s1', label: '図df-s1' }]);
 });
 
 test('detailFigures: 三方枠専用でない記号（片開き戸の記号）も割当てを保存値に持ち（build）・検証を通る（validate）。mechanism は付かない', () => {
@@ -2264,8 +2264,8 @@ test('validateFixtureSymbolForm: slot に合わない図（方立に下枠の図
 });
 
 test('detailFigureOptionsFor: jamb は plan・subject jamb だけ、head は section・subject head だけ。sill・sashSection の図は出ない', () => {
-  assert.deepEqual(detailFigureOptionsFor(DetailSlot.JAMB, FIG_LIST), [{ value: 'df-j1', label: '図df-j1（df-j1）' }]);
-  assert.deepEqual(detailFigureOptionsFor(DetailSlot.HEAD, FIG_LIST), [{ value: 'df-h1', label: '図df-h1（df-h1）' }]);
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.JAMB, FIG_LIST), [{ value: 'df-j1', label: '図df-j1' }]);
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.HEAD, FIG_LIST), [{ value: 'df-h1', label: '図df-h1' }]);
   assert.deepEqual(detailFigureOptionsFor(DetailSlot.JAMB, []), []);
   assert.deepEqual(detailFigureOptionsFor('unknownSlot', FIG_LIST), []);
 });
