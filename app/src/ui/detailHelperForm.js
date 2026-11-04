@@ -34,7 +34,7 @@ import {
 } from '../error.js';
 import { validateDetailFigure, DetailValidationError } from '../detail/detailModel.js';
 import { penWalk } from '../detail/detailPen.js';
-import { previewPrimitives, airEdgeOverlays, datumGuidePrimitives, PREVIEW_LABEL_OFFSET_MM, PREVIEW_LABEL_SIZE_PX } from '../detail/detailPreview.js';
+import { previewPrimitives, airEdgeOverlays, datumGuidePrimitives, previewDimGap, PREVIEW_DIM_GAP_MM, PREVIEW_LABEL_OFFSET_MM, PREVIEW_LABEL_SIZE_PX } from '../detail/detailPreview.js';
 import { fitLocal } from '../detail/detailPlacement.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import {
@@ -1046,7 +1046,9 @@ function fittedPrimitives(fitted, form) {
     out.push(...airEdgeOverlays(st.points, st.edgeMarks));
     st.points.forEach((p, i) => out.push(text(p.s + PREVIEW_LABEL_OFFSET_MM, p.t - PREVIEW_LABEL_OFFSET_MM, String(i), { size: PREVIEW_LABEL_SIZE_PX })));
   }
-  out.push(...datumGuidePrimitives(fittedDatums(form, fitted), fitted.strokes.flatMap(st => st.points), { labelOf: roleLabelOf }));
+  const allPts = fitted.strokes.flatMap(st => st.points);
+  // 下書きと同じ gap（図の大きさに比例）で基準線を延ばす
+  out.push(...datumGuidePrimitives(fittedDatums(form, fitted), allPts, { gap: previewDimGap(PREVIEW_DIM_GAP_MM, allPts), labelOf: roleLabelOf }));
   return out;
 }
 

@@ -15,6 +15,8 @@ import { penWalk } from './detailPen.js';
 
 /** 寸法線を辺から離す距離（mm）。 */
 export const PREVIEW_DIM_GAP_MM = 80;
+/** 寸法線を辺から離す距離を図の大きさに比例させる比（図全体の bbox の長辺 × 比。PREVIEW_DIM_GAP_MM は下限）。 */
+export const PREVIEW_DIM_GAP_RATIO = 0.2;
 /** 頂点番号を頂点から離す距離（mm）。 */
 export const PREVIEW_LABEL_OFFSET_MM = 15;
 /** 頂点番号の文字サイズ（px。text の size）。 */
@@ -72,19 +74,69 @@ export function datumGuidePrimitives(datums, pts, opts = {}) {
   return out;
 }
 
+function bboxOf(pts) {
+  return {
+    minS: Math.min(...pts.map(p => p.s)), maxS: Math.max(...pts.map(p => p.s)),
+    minT: Math.min(...pts.map(p => p.t)), maxT: Math.max(...pts.map(p => p.t)),
+  };
+}
+
+/**
+ * 寸法線の辺からの距離（mm）。max(gapBase, PREVIEW_DIM_GAP_RATIO × 図全体の bbox の長辺)。頂点が無ければ gapBase。
+ * @param {number} gapBase 下限（既定 PREVIEW_DIM_GAP_MM）
+ * @param {{s:number,t:number}[]} pts 描いた全ストロークの頂点
+ */
+export function previewDimGap(gapBase, pts) {
+  const base = Number.isFinite(gapBase) && gapBase > 0 ? gapBase : PREVIEW_DIM_GAP_MM; // 不正は既定へ（例外にしない）
+  if (!Array.isArray(pts) || pts.length === 0) return base;
+  const b = bboxOf(pts);
+  const g = Math.max(base, PREVIEW_DIM_GAP_RATIO * Math.max(b.maxS - b.minS, b.maxT - b.minT));
+  return Number.isFinite(g) && g > 0 ? g : base;
+}
+
+/**
+ * 同じ側の寸法を行へ割り付ける（貪欲法）。区間の始点で安定ソートし、各寸法を「置いた寸法と衝突しない最小の行」へ。
+ * 衝突＝区間が重なる（端点一致も重なり）か、区間の中心同士の距離が gap 未満（値が重なる）。
+ * @param {{from:number,to:number}[]} dims
+ * @param {number} gap 正の有限値
+ * @returns {number[]} dims と同じ順の行番号（0 始まり）
+ */
+export function assignDimRows(dims, gap) {
+  if (!Number.isFinite(gap) || gap <= 0) throw new RangeError(`gap は正の有限値: ${gap}`);
+  const list = dims ?? [];
+  for (const d of list) {
+    if (!d || !Number.isFinite(d.from) || !Number.isFinite(d.to)) throw new RangeError('寸法の from/to が不正');
+  }
+  const span = d => [Math.min(d.from, d.to), Math.max(d.from, d.to)];
+  const order = list.map((_, i) => i).sort((i, j) => span(list[i])[0] - span(list[j])[0] || i - j); // 安定
+  const rows = new Array(list.length);
+  const placed = []; // {lo, hi, center, k}
+  for (const i of order) {
+    const [lo, hi] = span(list[i]);
+    const center = (lo + hi) / 2;
+    let k = 0;
+    while (placed.some(p => p.k === k && ((lo <= p.hi && p.lo <= hi) || Math.abs(center - p.center) < gap))) k++;
+    rows[i] = k;
+    placed.push({ lo, hi, center, k });
+  }
+  return rows;
+}
+
 /**
  * @param {object} figure DetailFigure（下書きでもよい。歩けないストロークは飛ばす）
  * @param {{dimGapMm?: number, labelOffsetMm?: number, labelSizePx?: number, labelOf?: (role:string)=>string}} [opts]
  *   末尾に origin の Datum の基準線（datumGuidePrimitives）を付ける
  */
 export function previewPrimitives(figure, opts = {}) {
-  const gap = opts.dimGapMm ?? PREVIEW_DIM_GAP_MM;
+  const gapBase = opts.dimGapMm ?? PREVIEW_DIM_GAP_MM;
   const off = opts.labelOffsetMm ?? PREVIEW_LABEL_OFFSET_MM;
   const size = opts.labelSizePx ?? PREVIEW_LABEL_SIZE_PX;
   const fig = normalizeDetailFigure(figure);
   const datumById = new Map(fig.datums.filter(d => d && typeof d === 'object').map(d => [d.id, d]));
   const out = [];
   const allPts = [];
+  const pending = []; // 寸法（out の slot に後で入れる）
+  let strokeSeq = 0;
 
   for (const stroke of fig.strokes) {
     if (!stroke || typeof stroke !== 'object') continue;
@@ -102,6 +154,9 @@ export function previewPrimitives(figure, opts = {}) {
     const pts = walked.map(p => ({ s: p.s + shift[DetailAxis.S], t: p.t + shift[DetailAxis.T] }));
 
     allPts.push(...pts);
+    const sid = strokeSeq++;
+    const seen = new Set();
+    const box = bboxOf(pts);
     const centerS = (Math.min(...pts.map(p => p.s)) + Math.max(...pts.map(p => p.s))) / 2;
     const centerT = (Math.min(...pts.map(p => p.t)) + Math.max(...pts.map(p => p.t))) / 2;
     const extra = { strokeId: stroke.id };
@@ -120,16 +175,43 @@ export function previewPrimitives(figure, opts = {}) {
       const b = pts[moveIndex + 1];
       const editKey = { strokeId: stroke.id, moveIndex };
       const label = parts[0].len?.mm;
-      // 寸法線はこのストロークの bbox の中心から遠い側（図の外側）へ出す（中心上は + 側）
-      if (parts[0].axis === DetailAxis.S) {
-        const side = a.t >= centerT ? 1 : -1;
-        out.push(dim('h', Math.min(a.s, b.s), Math.max(a.s, b.s), a.t + side * gap, label, { editable: true, editKey, foot: a.t }));
-      } else {
-        // 縦の寸法値は文字の天を左に回し（下から上へ読む）、寸法線の左に置く（図がどちら側でも）
-        const side = a.s >= centerS ? 1 : -1;
-        out.push(dim('v', Math.min(a.t, b.t), Math.max(a.t, b.t), a.s + side * gap, label, { editable: true, editKey, foot: a.s, labelVertical: true, labelSide: 'left' }));
-      }
+      // 側はこのストロークの bbox の中心から遠い側（図の外側。中心上は + 側）。位置は gap・行が決まる後段で埋める
+      const horizontal = parts[0].axis === DetailAxis.S;
+      const side = horizontal ? (a.t >= centerT ? 1 : -1) : (a.s >= centerS ? 1 : -1);
+      const from = horizontal ? Math.min(a.s, b.s) : Math.min(a.t, b.t);
+      const to = horizontal ? Math.max(a.s, b.s) : Math.max(a.t, b.t);
+      if (!Number.isFinite(from) || !Number.isFinite(to) || !Number.isFinite(horizontal ? a.t : a.s)) return; // 座標が壊れた手は寸法を出さない（検証が別に出す）
+      // 同じストローク・同じ側で from・to・label が同じ寸法は 1 本だけ（最初の手が代表。櫛形で行が増え続けない）
+      const dupKey = `${horizontal}|${side}|${from}|${to}|${label}`;
+      if (seen.has(dupKey)) return;
+      seen.add(dupKey);
+      const slot = out.length;
+      out.push(null);
+      pending.push({ slot, sid, box, horizontal, side, from, to, foot: horizontal ? a.t : a.s, label, editKey });
     });
+  }
+  const gap = previewDimGap(gapBase, allPts);
+  // ストロークごと × 側（h 上／h 下／v 左／v 右）に行へまとめ、そのストロークの bbox の辺から gap + k × gap/2 に置く
+  // （別のストロークの材を足が貫かない。ストローク間で値が重なりうるのは既知の限界）
+  const strokeIds = [...new Set(pending.map(d => d.sid))];
+  for (const sid of strokeIds) {
+    for (const horizontal of [true, false]) {
+      for (const side of [-1, 1]) {
+        const group = pending.filter(d => d.sid === sid && d.horizontal === horizontal && d.side === side);
+        if (group.length === 0) continue;
+        const rows = assignDimRows(group, gap);
+        const box = group[0].box;
+        const base = horizontal ? (side < 0 ? box.minT : box.maxT) : (side < 0 ? box.minS : box.maxS);
+        group.forEach((d, i) => {
+          const at = base + side * (gap + rows[i] * (gap / 2));
+          const footLen = Math.abs(at - d.foot) - gap / 2; // 材側に gap/2 の空きを残して寸法線まで
+          const opts = { editable: true, editKey: d.editKey };
+          if (footLen > 0) { opts.foot = d.foot; opts.footLen = footLen; }
+          if (!horizontal) { opts.labelVertical = true; opts.labelSide = 'left'; } // 縦の値は常に線の左（天が左）
+          out[d.slot] = dim(horizontal ? 'h' : 'v', d.from, d.to, at, d.label, opts);
+        });
+      }
+    }
   }
   out.push(...datumGuidePrimitives(fig.datums.filter(d => d && typeof d === 'object'), allPts, { gap, labelOf: opts.labelOf, labelOffsetMm: off, labelSizePx: size }));
   return out;

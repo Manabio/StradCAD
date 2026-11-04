@@ -35,6 +35,14 @@ test('基準線: 試し込み後は origin の頂点の位置に破線（s=0 は
   for (const p of g) assert.equal(p.editable, undefined);
 });
 
+test('基準線: 試し込み後も下書きと同じ比例 gap（長辺 1,700 → bbox ± 340）', () => {
+  const f = ceilingForm();
+  const fitted = tryFit(f, { stepHeight: '1700' });
+  assert.equal(fitted.error, undefined);
+  const lines = guidesOf(previewPrimitivesOf(f, fitted)).filter(p => p.type === SvgFigurePrimitiveType.POLYLINE);
+  assert.deepEqual(lines[0].points, [[0, -1700 - 340], [0, 340]]);
+});
+
 test('基準線: 試し込み後も Datum の offset の位置に出る（s の offset 25 → 縦線は s=25）', () => {
   const f = setDatumField(ceilingForm(), 'ds0', 'offset', '25');
   const fitted = tryFit(f, { stepHeight: '300' });
