@@ -165,3 +165,91 @@ export function computeEnvelope(strokes, slot, { tMaxMm, tMinMm } = {}) {
   const maxDeviationMm = intervals.reduce((m, iv) => Math.max(m, iv.s0, iv.s1), 0);
   return { steps, outline, maxDeviationMm };
 }
+
+// ---- 天井の段差を下から見た包絡線（天伏。8b-4c）----
+const EMPTY_UNDERSIDE = Object.freeze({ lines: Object.freeze([]), reachMm: 0 });
+
+// 辺を s≥0 へ切り詰める（垂直の辺は s を 0 以上に寄せる）。全く入らなければ null。
+function clipEdgeToPositiveS(edge) {
+  const { a, b } = edge;
+  const eps = DETAIL_FIT_EPS_MM;
+  if (Math.abs(b.s - a.s) <= eps) {
+    if (Math.max(a.s, b.s) < -eps) return null;
+    return { ...edge, a: { s: Math.max(a.s, 0), t: a.t }, b: { s: Math.max(b.s, 0), t: b.t } };
+  }
+  if (Math.max(a.s, b.s) <= 0) return null;
+  const atZero = { s: 0, t: a.t + (b.t - a.t) * (0 - a.s) / (b.s - a.s) }; // s=0 を跨ぐ点
+  return { ...edge, a: a.s < 0 ? atZero : a, b: b.s < 0 ? atZero : b };
+}
+
+/**
+ * 天井の段差の部位図を下から見た包絡線（天伏＝見上げで、見切りの線を出す所を決める。部分詳細図 8b-4c）。
+ * 入力は ceilingStep の fit 済みストローク（s＝立ち上がり面から高い側が正・t＝下向き正。低い側の天井面が t=0・高い側の天井面が t=tMinMm＝−段差高）。
+ *   - U(s)＝その s（s≥0）で最も低い材の t（辺の t の最大）。材の辺が無い s は高い側の天井面（t=tMinMm）。定義域は t∈[tMinMm, 0]・s≥0
+ *     （辺を切り詰める）。破線ストロークは除く（collectEdges）。s<0 は低い側の天井の裏で見えない。
+ *   - 見える線＝U が跳ぶ s（差 > DETAIL_ENVELOPE_STEP_MIN_MM）と折れる s（辺の向きの差 > DETAIL_ENVELOPE_KINK_MIN_DEG）。
+ *     s=0 では左を低い側の天井（t=0・水平）、最も外の端では右を高い側の天井（t=tMinMm・水平）と比べる。
+ *     垂直の辺（その s にだけ立つ）は U の一点の値として左右の比較に加える（吊り下がる桟・溝の壁を落とさない）。
+ *   - 高さ方向の包絡線（computeEnvelope の E(t)）からの逆算は使わない: 下面の溝は E(t) では消える。
+ *   - s≈0 の線があるとき、立ち上がり面（CL）は見える。無いとき（面一の見切り）は CL の線を隠してよい。
+ * @param {{points:{s:number,t:number}[], closed?:boolean, line?:{dashRole?:string}}[]} strokes
+ * @param {{tMinMm?:number}} opts tMinMm＝高い側の天井面（負。−段差高）。負の有限値でなければ EMPTY
+ * @returns {{lines:{s:number, weight:'auto'}[], reachMm:number}} lines＝s の昇順（DETAIL_FIT_EPS_MM 以内は併合）。reachMm＝材の最も外の s（材が無ければ 0）
+ */
+export function computeUnderside(strokes, { tMinMm } = {}) {
+  if (!(Number.isFinite(tMinMm) && tMinMm < 0)) return EMPTY_UNDERSIDE;
+  const eps = DETAIL_FIT_EPS_MM;
+  const edges = collectEdges(strokes)
+    .map(e => clipEdge(e, tMinMm, 0))
+    .filter(e => e !== null)
+    .map(clipEdgeToPositiveS)
+    .filter(e => e !== null && [e.a.s, e.a.t, e.b.s, e.b.t].every(Number.isFinite));
+  if (edges.length === 0) return EMPTY_UNDERSIDE;
+
+  const verticals = edges.filter(e => Math.abs(e.b.s - e.a.s) <= eps);
+  const sloped = edges.filter(e => Math.abs(e.b.s - e.a.s) > eps);
+  const slopeOf = e => (e.b.t - e.a.t) / (e.b.s - e.a.s);
+  const tAt = (e, s) => e.a.t + slopeOf(e) * (s - e.a.s);
+  const covers = (e, s) => s >= Math.min(e.a.s, e.b.s) && s <= Math.max(e.a.s, e.b.s);
+
+  // 区切りの s（昇順・ε 以内は併合）。立ち上がり面 0・端点・傾いた辺どうしの交点
+  const extra = [];
+  for (let i = 0; i < sloped.length; i++) {
+    for (let j = i + 1; j < sloped.length; j++) {
+      const e = sloped[i], f = sloped[j];
+      const ke = slopeOf(e), kf = slopeOf(f);
+      if (ke === kf) continue;
+      const s = (f.a.t - kf * f.a.s - e.a.t + ke * e.a.s) / (ke - kf);
+      if (covers(e, s) && covers(f, s)) extra.push(s);
+    }
+  }
+  const raw = [0, ...edges.flatMap(e => [e.a.s, e.b.s]), ...extra.filter(Number.isFinite)].sort((x, y) => x - y);
+  const breaks = [];
+  for (const s of raw) if (breaks.length === 0 || s - breaks[breaks.length - 1] > eps) breaks.push(s);
+
+  // 区間ごとの U（最も低い＝t が最大の辺。無ければ高い側の天井面）
+  const intervals = [];
+  for (let k = 0; k + 1 < breaks.length; k++) {
+    const s0 = breaks[k], s1 = breaks[k + 1];
+    const mid = (s0 + s1) / 2;
+    let best = null;
+    for (const e of sloped) if (covers(e, mid) && (best === null || tAt(e, mid) > tAt(best, mid))) best = e;
+    intervals.push(best === null
+      ? { u0: tMinMm, u1: tMinMm, angle: 0 }
+      : { u0: tAt(best, s0), u1: tAt(best, s1), angle: Math.atan(slopeOf(best)) * RAD_TO_DEG });
+  }
+
+  const lowCeiling = { u1: 0, angle: 0 };
+  const highCeiling = { u0: tMinMm, angle: 0 };
+  const lines = [];
+  for (let k = 0; k < breaks.length; k++) {
+    const left = k > 0 ? intervals[k - 1] : lowCeiling;
+    const right = k < intervals.length ? intervals[k] : highCeiling;
+    const vMax = verticals.filter(e => Math.abs(e.a.s - breaks[k]) <= eps).reduce((m, e) => Math.max(m, e.a.t, e.b.t), -Infinity);
+    const stepMm = Math.max(left.u1, right.u0, vMax) - Math.min(left.u1, right.u0);
+    const kinkDeg = Math.abs(left.angle - right.angle);
+    if (stepMm > DETAIL_ENVELOPE_STEP_MIN_MM || kinkDeg > DETAIL_ENVELOPE_KINK_MIN_DEG) lines.push({ s: breaks[k], weight: EnvelopeWeight.AUTO });
+  }
+  const reachMm = edges.reduce((m, e) => Math.max(m, e.a.s, e.b.s), 0);
+  return { lines, reachMm };
+}

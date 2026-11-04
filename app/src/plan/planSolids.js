@@ -56,7 +56,7 @@ import { drainArrivalTime } from '../structural/roofFramingGeometry.js';
 import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { roofSoffitJointLines } from '../finish/roof/roofSoffitJoints.js';
 import { normalizeRect, isValidRect, subtractRects } from './planGeometry.js';
-import { ceilingSurfacesOf } from '../ceiling/ceilingSurfaces.js';
+import { ceilingSurfacesOf, ceilingFaceId } from '../ceiling/ceilingSurfaces.js';
 import { ceilingShapeSolidZ, ceilingShapeMarks } from '../ceiling/ceilingShape.js';
 import { stairSoffitSolids, stairSoffitFinished, stairUnderReturnSoffit } from '../ceiling/stairSoffit.js';
 import { stairFootSurfaces, wallFootIntervals, wallFootTop } from '../ceiling/stairFootWallTop.js';
@@ -781,7 +781,7 @@ function ceilingSolids(layer, upperGraph = null) {
     const trimmed = holes.length > 0 ? subtractRects(stripped, holes) : stripped; // 規則 V
     if (trimmed.length === 0) return null;
     // 区画（S5）の面は `${roomId}#${zoneId}`、残り（部屋の CH）は roomId のまま（区画の無い文書の key・順序は不変）
-    const id = zoneId ? `${roomId}#${zoneId}` : roomId;
+    const id = ceilingFaceId({ roomId, zoneId });
     // 形状（S6a）: 傾斜は下屋と同じく zAt（勾配）を付ける。基準高の絶対 z＝層の FL＋床段差込みの zMm。平面は zAt なし・厚み 0 のまま
     const { zLo, zHi, zAt } = ceilingShapeSolidZ({ shape, dims, baseZ: layer.floorZMm + zMm, rects });
     const solid = { kind: 'ceiling', footprint: { rects: trimmed }, zLo, zHi, source: baseSource(layer, 'ceiling', id) };

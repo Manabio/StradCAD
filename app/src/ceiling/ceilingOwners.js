@@ -67,6 +67,21 @@ export function wallFullHeightSpans(graph, w, lo = -Infinity, hi = Infinity) {
 }
 
 /**
+ * 辺（軸 isVertical・位置 coord〔通り芯の値の一致は EDGE_EPS_MM〕・区間 [lo,hi]）の上にある壁の全高の区間（腰壁だけの区間は除く。未整列・重なりは未結合）。
+ * 共有辺の判定（edgeSeparatedByFullWall）と、天伏の段差の見切りの線（ceilingStepDetailLines.js）が共用する。
+ * @returns {Array<[number, number]>}
+ */
+export function fullHeightWallSpansOnEdge(graph, isVertical, coord, lo, hi) {
+  const full = [];
+  for (const w of graph.walls) {
+    if (w.isVertical !== isVertical || !w.axisCL) continue;
+    if (Math.abs(w.axisCL.effectiveValue - coord) > EDGE_EPS_MM) continue;
+    full.push(...wallFullHeightSpans(graph, w, lo, hi));
+  }
+  return full;
+}
+
+/**
  * 共有辺（軸 isVertical・位置 coord・区間 [lo,hi]）を全高の壁（腰壁だけの壁は除く）が隔てているか。
  * 辺上の壁を、辺と重なる区間ごとに腰壁・垂れ壁のレコードで解決する（kneeDropRecordsOnAxis。1 本の壁が複数区間に分かれて
  * 指定が違ってもよい）。腰壁（knee あり・drop なし）の区間は天井を隔てない。垂れ壁（drop）・指定なしの区間は全高。
@@ -74,12 +89,7 @@ export function wallFullHeightSpans(graph, w, lo = -Infinity, hi = Infinity) {
  * 以下なら隔てる。全高の壁が 1 つも無ければ隔てない。
  */
 function edgeSeparatedByFullWall(graph, isVertical, coord, lo, hi) {
-  const full = [];
-  for (const w of graph.walls) {
-    if (w.isVertical !== isVertical || !w.axisCL) continue;
-    if (Math.abs(w.axisCL.effectiveValue - coord) > EDGE_EPS_MM) continue;
-    full.push(...wallFullHeightSpans(graph, w, lo, hi));
-  }
+  const full = fullHeightWallSpansOnEdge(graph, isVertical, coord, lo, hi);
   if (full.length === 0) return false;
   full.sort((p, q) => p[0] - q[0]);
   let reach = lo;

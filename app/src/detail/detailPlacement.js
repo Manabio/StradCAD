@@ -16,7 +16,7 @@ import { fitDetailFigure, DetailFitError } from './detailFit.js';
 import { moveParts } from './detailModel.js';
 
 export { fitDetailFigure as fitLocal, DetailFitError };
-export { computeEnvelope, EnvelopeWeight } from './detailEnvelope.js';
+export { computeEnvelope, computeUnderside, EnvelopeWeight } from './detailEnvelope.js';
 // 本体標準の図（組込み層）。同期で組込みを要る読み出し口（openings/openingCatalog.js detailFigureCatalog）がここから引く。
 // catalogKinds.js の loadBuiltin は従来どおり detailBuiltins.js を動的 import する（catalog/ は静的に引かない）。
 export { default as detailBuiltinFigures } from './detailBuiltins.js';

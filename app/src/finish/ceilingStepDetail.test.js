@@ -10,7 +10,7 @@ import { PenDir, DetailSlot, DetailDatumRole, DetailDatumKind, DetailAxis } from
 import { fitLocal, computeEnvelope, EnvelopeWeight } from '../detail/detailPlacement.js';
 import { ceilingStepTargets, floorStepTargets, RoomDetailError } from './roomDetailTargets.js';
 import {
-  resolveCeilingStepFigure, fitCeilingStepPart, ceilingStepEnvelope, collectCeilingStepFailures,
+  resolveCeilingStepFigure, fitCeilingStepPart, ceilingStepEnvelope, ceilingStepUnderside, collectCeilingStepFailures,
 } from './partDetail.js';
 import { ERR_DETAIL_DATUM_UNSUPPORTED, DETAIL_TARGET_PART_CEILING_STEP, detailOwnerRoom, detailOwnerCeilingZone } from '../error.js';
 import { ceilingNoseFigure, ceilingStepFigure, stepNoseFigure, baseboardFigure, move, fixedLen, stretchLen } from './roomDetailTestFixtures.js';
@@ -129,6 +129,30 @@ test('ceilingStepEnvelope: 段差の t は −70・−40（auto）。形状差 1
   assert.equal(ceilingStepEnvelope({ room: { detailRefs: null }, stepHeightMm: 300 }), null, '割当て無し');
   const zone = { id: 'z1', detailRefs: { [CEILING_STEP]: 'k' } };
   assert.equal(ceilingStepEnvelope({ room: { detailRefs: null }, zone, stepHeightMm: 300 }).maxDeviationMm, 120, '区画の割当て');
+});
+
+test('ceilingStepUnderside: 面一の見切り（出 120）は s=120 の 1 本。段差高に追従し、区画の割当ても引ける。参照切れ・fit 失敗・割当て無し・FL 基準の図・段差高 0 は null', () => {
+  setOverlay(DF, { user: [ceilingNoseFigure('k'), stepNoseFigure('kf')] });
+  const u = ceilingStepUnderside({ room: holder(), stepHeightMm: 300 });
+  assert.deepEqual(u.lines, [{ s: 120, weight: EnvelopeWeight.AUTO }]);
+  assert.equal(u.reachMm, 120);
+  assert.deepEqual(ceilingStepUnderside({ room: holder(), stepHeightMm: 500 }).lines, u.lines, '段差高に依らない（出は固定寸法）');
+  const zone = { id: 'z1', detailRefs: { [CEILING_STEP]: 'k' } };
+  assert.equal(ceilingStepUnderside({ room: { detailRefs: null }, zone, stepHeightMm: 300 }).reachMm, 120, '区画の割当て');
+  assert.equal(ceilingStepUnderside({ room: holder(), zone: { id: 'z2', detailRefs: null }, stepHeightMm: 300 }), null, '区画が空なら部屋の割当てを継がない');
+  assert.equal(ceilingStepUnderside({ room: holder(), stepHeightMm: 60 }), null, '段差高に合わない');
+  assert.equal(ceilingStepUnderside({ room: { detailRefs: { [CEILING_STEP]: 'df-gone' } }, stepHeightMm: 300 }), null, '参照切れ');
+  assert.equal(ceilingStepUnderside({ room: { detailRefs: null }, stepHeightMm: 300 }), null, '割当て無し');
+  assert.equal(ceilingStepUnderside({ room: { detailRefs: { [CEILING_STEP]: 'kf' } }, stepHeightMm: 300 }), null, 'FL 基準の図（床の段差の図）');
+  for (const bad of [0, -300, NaN, undefined]) assert.equal(ceilingStepUnderside({ room: holder(), stepHeightMm: bad }), null, String(bad));
+});
+
+test('【失敗系】ceilingStepUnderside: fit はできるが見える線が 0 本の図（材が s<0 だけ）は null', () => {
+  setOverlay(DF, { user: [ceilingStepFigure('ks', [
+    move(PenDir.LEFT, fixedLen(100)), move(PenDir.UP, fixedLen(40)), move(PenDir.RIGHT, fixedLen(50)), move(PenDir.UP, stretchLen(100)),
+  ], { closed: false })] });
+  assert.ok(!fitCeilingStepPart({ figureKey: 'ks', stepHeightMm: 300 }).error, '前提: fit はできる');
+  assert.equal(ceilingStepUnderside({ room: { detailRefs: { [CEILING_STEP]: 'ks' } }, stepHeightMm: 300 }), null);
 });
 
 test('collectCeilingStepFailures: 参照切れは持ち主ごと 1 行・fit 失敗は段差高ごと 1 行（stepHeightMm 付き）・主語は部屋または「部屋「X」の区画n」・重複は seen で畳む。割当て無しは空', () => {

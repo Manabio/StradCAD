@@ -47,8 +47,8 @@ export function sameHeightBoundarySegments(surfaces) {
   return out;
 }
 
-/** 線分 [lo,hi] のうち境界の上にある区間（マージ済み・昇順・長さ > EPS）。 */
-function coveredIntervals(segs, horizontal, c, lo, hi) {
+/** 線分 [lo,hi] のうち境界の上にある区間（マージ済み・昇順・長さ > EPS）。segs は {horizontal,c,lo,hi}（ceilingStepDetailLines.js も共用）。 */
+export function coveredIntervals(segs, horizontal, c, lo, hi) {
   const cl = segs
     .filter(s => s.horizontal === horizontal && Math.abs(s.c - c) <= EPS)
     .map(s => [Math.max(s.lo, lo), Math.min(s.hi, hi)])
@@ -64,7 +64,7 @@ function coveredIntervals(segs, horizontal, c, lo, hi) {
 }
 
 /** [a,b] から出力済みの区間 ivs を差し引いた残り（昇順・長さ > EPS）。 */
-function subtractIntervals(ivs, a, b) {
+export function subtractIntervals(ivs, a, b) {
   const rest = [];
   let cursor = a;
   for (const [s, e] of [...ivs].sort((p, q) => p[0] - q[0])) {
@@ -75,6 +75,23 @@ function subtractIntervals(ivs, a, b) {
   }
   if (b - cursor > EPS) rest.push([cursor, b]);
   return rest;
+}
+
+/**
+ * 線分 [lo,hi] を、覆われた区間 covered（coveredIntervals の結果。昇順・マージ済み）で分割した片の列 [a, b, 覆われているか]。
+ * 長さ EPS 以下の覆われていない端は落とす。markSameHeightCeilingBoundaries と ceilingStepDetailLines.js の hide が共用する。
+ * @returns {Array<[number, number, boolean]>}
+ */
+export function splitByCovered(lo, hi, covered) {
+  const parts = [];
+  let cursor = lo;
+  for (const [a, b] of covered) {
+    if (a - cursor > EPS) parts.push([cursor, a, false]);
+    parts.push([a, b, true]);
+    cursor = b;
+  }
+  if (hi - cursor > EPS) parts.push([cursor, hi, false]);
+  return parts;
 }
 
 /**
@@ -114,14 +131,7 @@ export function markSameHeightCeilingBoundaries(prims, surfaces) {
     const covered = coveredIntervals(segs, horizontal, c, lo, hi);
     if (covered.length === 0) { pushPlain(p); continue; }
     // [区間, 印あり?] の列に分ける
-    const parts = [];
-    let cursor = lo;
-    for (const [a, b] of covered) {
-      if (a - cursor > EPS) parts.push([cursor, a, false]);
-      parts.push([a, b, true]);
-      cursor = b;
-    }
-    if (hi - cursor > EPS) parts.push([cursor, hi, false]);
+    const parts = splitByCovered(lo, hi, covered);
     const single = parts.length === 1;
     parts.forEach(([a, b, marked], i) => {
       const baseKey = single ? p.key : `${p.key}:p${i}`;

@@ -27,6 +27,13 @@ export { roomHasCeiling };
 const byRow = (a, b) => a.y1 - b.y1 || a.x1 - b.x1;
 
 /**
+ * 天井面の id（唯一の供給源）。区画（S5）の面は `${roomId}#${zoneId}`、残り（部屋の CH）は roomId のまま。
+ * 天伏の立体の source.id（plan/planSolids.js ceilingSolids）と、段差の見切りの線の面の対応づけ（ceilingStepDetailLines.js）が共用する。
+ * @param {{roomId: string, zoneId?: string|null}} face
+ */
+export const ceilingFaceId = ({ roomId, zoneId }) => (zoneId ? `${roomId}#${zoneId}` : roomId);
+
+/**
  * 階段吹抜け（STAIR_VOID）の平らな天井面。仕様「設置階上階の天伏は平面」（裁定 2026-10-11）。屋内の STAIR_VOID すべてに出す
  * （最上階では屋根面の下、中間階では上階の床組が天井に隠れる）。吹抜けではない。
  * 所属索引には載せない（選べない・群にならない・パネルの行にならない）。索引に載るセルは索引側が先に採るので除く。
@@ -164,7 +171,7 @@ export function ceilingStepEdges(surfaces) {
 }
 
 // 同じ家族の部屋か（同じ部屋・参照の親子・同じ親を参照する兄弟）。段差を作る部分指定の子と親、子どうしの境を拾う。
-function sameRoomFamily(graph, idA, idB) {
+export function sameRoomFamily(graph, idA, idB) {
   if (idA === idB) return true;
   const a = graph.roomMap?.get(idA);
   const b = graph.roomMap?.get(idB);

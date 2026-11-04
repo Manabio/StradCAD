@@ -7,6 +7,7 @@
 //   collectKneeDropPartFailures  未解決キー・fit 失敗の集計（仕上げ init・展開 init の通知）
 // 床の段差（Room.detailRefs の floorStep。S8b-3）: resolveRoomPartFigure／fitFloorStepPart／floorStepEnvelope／collectFloorStepFailures。
 // 天井の段差（CeilingZone／Room.detailRefs の ceilingStep。S8b-4a）: resolveCeilingStepFigure／fitCeilingStepPart／ceilingStepEnvelope／collectCeilingStepFailures。
+// 天伏用（8b-4c）: ceilingStepUnderside（断面を下から見た包絡線）。
 // 失敗は例外にしない（{error}・null・集計の行）。
 // ================================================================
 
@@ -14,7 +15,7 @@ import { KNEE_DROP_DETAIL_SLOTS, DetailSlot, DetailFigureSource, DETAIL_BUILTIN_
 import { kneeDropFrontSideOf } from '../core/kneeDropRecord.js';
 import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, detailOwnerKneeDrop, detailOwnerRoom, detailOwnerCeilingZone } from '../error.js';
 import { detailFigureEntry, detailFitKey, fitDetailLocalMemo } from '../openings/openingCatalog.js';
-import { computeEnvelope } from '../detail/detailPlacement.js';
+import { computeEnvelope, computeUnderside } from '../detail/detailPlacement.js';
 import { partTargets, floorStepTargets, ceilingStepTargets } from './roomDetailTargets.js';
 import { wallAssemblyThicknessMm } from './roomDetailJunction.js';
 import { kneeDropWallGeometry } from './kneeDropWall.js';
@@ -185,6 +186,22 @@ export function ceilingStepEnvelope({ room = null, zone = null, stepHeightMm, ma
   const fitted = fitCeilingStepPart({ figureKey: r.key, stepHeightMm, materialMap });
   if (fitted.error) return null;
   return computeEnvelope(fitted.strokes, DetailSlot.CEILING_STEP, { tMinMm: -stepHeightMm }); // 高い側の天井面より上は定義域の外
+}
+
+/**
+ * 段差高 stepHeightMm の天井の段差を下から見た包絡線（天伏の見切りの線。8b-4c）。解決→fit→computeUnderside。
+ * 参照切れ・割当て無し・fit 失敗（FL 基準の図・段差高 0 以下を含む）・材の辺が無くて線が引けないときは null（従来の描き方＝CL の線だけ）。
+ * @param {{room?:object|null, zone?:object|null, stepHeightMm:number, materialMap?:object|null, entryOf?:(key:string)=>object|null}} p
+ * @returns {null | {lines:{s:number, weight:string}[], reachMm:number}}
+ */
+export function ceilingStepUnderside({ room = null, zone = null, stepHeightMm, materialMap = null, entryOf = detailFigureEntry }) {
+  const r = resolveCeilingStepFigure({ room, zone, entryOf });
+  if (!r?.entry) return null;
+  if (!(stepHeightMm > 0)) return null;
+  const fitted = fitCeilingStepPart({ figureKey: r.key, stepHeightMm, materialMap });
+  if (fitted.error) return null;
+  const underside = computeUnderside(fitted.strokes, { tMinMm: -stepHeightMm });
+  return underside.lines.length > 0 ? underside : null;
 }
 
 /**
