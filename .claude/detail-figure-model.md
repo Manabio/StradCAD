@@ -45,12 +45,24 @@
 - 実測の注意: 現行エンジンは P の隅が腰壁でも端の縦線を床〜天井の全高で引く（F の壁の端の線）ので、差し替えるのは天端側 [天端−厚, 天端] の割れ目と輪郭だけで、天端より上の縦線は残る（F の壁の端面）。天端の CUT 水平線・向こう側の縦線は帯の外にあり実データでは出ないため、差し引きは出れば消す扱い。既知の限界（受容）: はねだしと向こう側の縦線は帯の範囲外（面と面の隙間）へ出るので、向こう側の出が大きいと天井高寸法線・隣の面と交差する。
 - 既知の限界（8b-3 以降）: 他階の層の腰壁・cutAlong の垂れ壁の下端・吹抜け上部帯・階段帯・平面・天伏には出ない／片側が fit できない場合は差し替えない（両側は同じ図の fit と鏡像なので実際は両方成立か両方失敗）／隅の壁の継ぎ目が別の記録に乗るときは F の部屋の側 2 mm の点の記録を採る／床の段差・天井の段差は 8b-3・8b-4。
 
+## 天伏への反映（天井の段差の「出」）
+- 意図: 展開は見切りの出を描くが、見上げは区画境界（CL）の線だけだと見切りの縁が出た位置に見えない。低い側の持ち主（区画＞部屋・継承なし）の `ceilingStep` を段差高で fit し、**下から見た包絡線**（s ごとに最も低い材の t。`detail/detailEnvelope.js computeUnderside`。定義域は低い側の天井 t=0〜高い側 t=−段差高）が跳ぶ s・折れる s に線を引く。展開の包絡線（室内側の最大 s・形状差の閾値）とは別物で、展開の形状差閾値（100 mm）は使わない。
+- 見える線: 面一の見切り（s=0 に線が無い）は CL の線を隠し、引っ込み・面取りは CL が残る。部位図なし・参照切れ・fit 失敗・線 0 本は従来の CL の線だけ（解決は `finish/partDetail.js ceilingStepUnderside` が null を返す）。破線ストロークは見ない。細線で、air の印は天伏では使わない。
+- 置き場: 線は**高い側の天井面の立体の innerLines**（遮蔽は解決器任せ。軒裏の割付線と同型。高い側の天井面の高さで遮蔽される）、CL の隠しは後処理の `hiddenAtDetail` 印（`plan-section.md`）。純関数は `ceiling/ceilingStepDetailLines.js` に置き、`plan/`・`ceiling/` は `detail/`・`finish/partDetail.js` を直接引かない（`ceiling/importGraph.test.js`・`plan/importGraph.test.js` で固定）。
+- 適用: 詳細 LOD だけ（他の LOD は CL の線のまま）。対象は平らな面どうしの段差で、両側が同じ家族の部屋かつ辺の上に全高の壁が無い区間（腰壁だけは可）。壁は辺の両端を半壁厚ぶん残すので、壁に `SPAN_OVERLAP_EPS` 以下で接する片は壁で隔てられた辺として落とす（落とさないと全壁の辺の両端に帯と CL の隠しが出る）。
+- 角: 出隅は、端の先の対角の点（低い側へ ε・端の先へ ε）が高い面の内側のときだけ出幅ぶん延ばして四角に回す。入隅は短く止め、壁で止まる端は木口の短い線。「端の先が低い面の内側でない」だけの条件では、低い面の角の片側が壁で高い面だけが先へ続く L 字の角で、線が壁の面を越えてはみ出す。
+- 最小描画幅: 紙上 0.5 mm を分母 60（`LOD_DETAIL_DENOM`）固定で換算した 30 mm 未満の出は 30 へ引き上げて併合する（分母を固定するのでキャッシュ鍵が拡大縮小で割れない）。
+- 通知しない: 参照切れ・fit 失敗は天伏では通知しない。仕上げ・展開の init が同じ組を通知する。
+- キャッシュ鍵: 割当てがあるときだけ、`部分詳細図の overlay の世代`と`材マスタの有無`が鍵に入る（無ければ鍵は従来どおり）。材マスタは天伏モードだけ `CeilingModeState.materialMap` から渡る（見下げは null＝不変）。
+- 既知の限界: 傾斜・円弧・ドームとの境・家族でない部屋・部屋をまたぐ段差は CL のまま／材マスタのロード前は CL のまま（ロード後に鍵が変わって反映）／overlay の世代が observable でないので、天伏モード中に保守パネルで図を保存しても再描画されず、モードに入り直すまで反映されない／段差高の間にある下がり梁などが線を隠しうる／高い側の面が出より狭いと線は削られ消える／`narrowOpeningByWalls` で延ばした面には線が延びず手前で止まりうる／鍵が overlay の世代ごとに増える（受容）／天伏からの割当て直後に通知は出ない。
+- 目視用の文書: `makeJunctionDetailTestDoc.mjs` が `junction-detail-test.stq` を作る（洋室・小上がり・L 字の 3 箇所。L 字は低い側の角の片側だけが壁の構成）。
+
 ## 照合と重複禁止
 - 図の参照は書換え先が無い種別（rewrite が null）なので alias を作らない。規則と dedupe の同値不変条件は `catalog-model.md`「読込み時の照合と未解決」「三層の重ね合わせ」を参照。
 
 ## ヘルパーはモードでない・undo に積まない
 - グラフ・階・モード境界を持たず、APP_MODES の追加コストに見合わない。カタログ保守と同じ全画面パネル＋動的 import＋`runBusy`。別タブはセッションロックで開けない。
-- プレビューは origin の基準（s・t）を破線の基準線＋役割名で出す（`datumGuidePrimitives`。下書きは offset の位置、試し込み後は origin の Anchor が載る頂点の位置）。段差系の STEP_EDGE の s=0 は平面・天伏に引かれる段差の線（区画境界）の位置。基準線は寸法編集・頂点番号の対象外（`guide:true`）。
+- プレビューは origin の基準（s・t）を破線の基準線＋役割名で出す（`datumGuidePrimitives`。下書きは offset の位置、試し込み後は origin の Anchor が載る頂点の位置）。段差系の STEP_EDGE の s=0 は平面・天伏に引かれる段差の線（区画境界）の位置（天伏の詳細 LOD では部位図の出の線が加わり、面一なら CL の線は隠れる）。基準線は寸法編集・頂点番号の対象外（`guide:true`）。
 - 下書きの 1 手戻しはパネル内に持つ。グラフを変えないので `undoManager` に積まない。保存・削除は既存のカタログ編集の共通経路（`applyCatalogEditPlan`）。
 
 ## モジュール境界
@@ -80,7 +92,7 @@
 - 同梱の図が propose・pick（部分一致）になり、その図を指す同梱の記号が先にライブラリへ写されると、承認後もライブラリ側の記号は旧キーを指したまま（読み替えは同梱の記号だけ＝「ライブラリ層は触らない」規約の帰結。その記号を使う別文書では not-found 行になる）。
 - 線種（dash／weightRole）は無視（平面は枠の太さ・展開は断面の太線）／斜め寸法線なし／寸法は 1 手単位（複数手にまたがる寸法は表せない）／mm 判定の closed は param・material・stretch で閉じ辺 0 になるケースを登録時に検出しない／同じ図を参照する別記号の失敗は 1 行にまとまる／使用中の印は開いたとき 1 回。
 - 姿図の差替えの限界（S6b）: 線種は weightRole（極太は切断線へ寄せる）と dash だけ読み、破線は線分ごとの line・実線は polyline（Konva は polyline の dash を描かず、閉じた polyline を塗るため閉じ辺は始点を足した開いた折れ線にする）。レバーハンドルの取付高さの寸法（編集用）は図を置換しても残る。FL を origin にした図は窓台の分だけ伸縮する（SILL と別の挙動）。建具モード init の通知は kind が fixtureSymbol の行に載る（主語は建具種別キーで、区分 fitting/window は付かない）。ヘルパーの試し込みは分類が姿図なら幅・高さ・窓台（既定は代表の建具種別 singleSwing の既定幅・高さと窓台 0）、既定の基準は t の origin＝SILL・end＝HEAD。
-- 先送り: 8b-2b 袖壁の分割端（手動壁の実装後に再開。現行の壁生成は全部 isRoomWall なので `perpendicularWallsOnFace('near')` が拾う袖壁が生まれず、実機で現れる場面が無い。再開時の要点: 置き場は断面エンジンへの注入点（8b-1 の `kneeDropPartStepsOf` と同型の輪郭版）・記録の探索点は切断線の軸値・切断壁の天端 CUT／天端下細線／側縁の上部を輪郭に置き換える・帯の端（8b-2）とは描く場所が重ならない）・8b-4c 天伏に天井の段差の部位図の出を反映（見上げでは見切りの縁が区画境界から出た位置に見える。S8e の後）・屋根の軒先けらば（S9）・器具の配置（S10）・図を部品に組み合わせる作図・整理課題＝`dxfToStrokes`／`dxfToComponents`（PDF も共用）と `describeDxfWarning`・`DxfWarning.LICENSE_UNKNOWN`／`NO_DIGEST`・`DXF_PROVENANCE_FIELDS`・`draftFromDxf` の名前の一般化・`useCatalogEditActions` の共有化・`rewriteDocSymbolDetailFigures` の改名（建具種別も読み替えるため。整理課題）。
+- 先送り: 8b-2b 袖壁の分割端（手動壁の実装後に再開。現行の壁生成は全部 isRoomWall なので `perpendicularWallsOnFace('near')` が拾う袖壁が生まれず、実機で現れる場面が無い。再開時の要点: 置き場は断面エンジンへの注入点（8b-1 の `kneeDropPartStepsOf` と同型の輪郭版）・記録の探索点は切断線の軸値・切断壁の天端 CUT／天端下細線／側縁の上部を輪郭に置き換える・帯の端（8b-2）とは描く場所が重ならない）・屋根の軒先けらば（S9）・器具の配置（S10）・図を部品に組み合わせる作図・整理課題＝`dxfToStrokes`／`dxfToComponents`（PDF も共用）と `describeDxfWarning`・`DxfWarning.LICENSE_UNKNOWN`／`NO_DIGEST`・`DXF_PROVENANCE_FIELDS`・`draftFromDxf` の名前の一般化・`useCatalogEditActions` の共有化・`rewriteDocSymbolDetailFigures` の改名（建具種別も読み替えるため。整理課題）。
 
 ## 暗黙の既定（S8c）
 - 巾木と腰壁の天板は他の部分詳細と同じ定義・ロジックで描く（ユーザー裁定 2026-11-02「現在の展開と同じ結果」）。解決規則は 1 箇所ずつ: floorWall＝`finish/roomDetailJunction.js resolveRoomDetailFigure`（割当て無しでも部屋に巾木高さ `h=<mm>` があれば組込み巾木・無ければ null＝描かない）／kneeTop＝`finish/partDetail.js resolveKneeDropDetailFigure`（腰壁があれば組込み天板。dropBottom に既定は無い）。結果の `source`＝`explicit`／`default`（`DetailFigureSource`）。
