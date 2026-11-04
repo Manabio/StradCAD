@@ -256,7 +256,8 @@ function hasSelfIntersection(trails, tol) {
  * @param {{snapTol?: number, axisTol?: number}} [opts]
  * @returns {{ components: {index:number, segmentCount:number, vertexCount:number, closed:boolean,
  *             trails:{points:object[], closed:boolean}[], strokes:{closed:boolean, moves:object[]}[],
- *             warnings:{code:string}[]}[] }}
+ *             warnings:{code:string}[], bbox:{minS:number, minT:number, maxS:number, maxT:number}|null}[] }}
+ *   bbox は trails の全点の外接矩形（矩形で成分を絞る ui/detailHelperPick.js が使う。DXF・PDF 共通）。
  */
 export function dxfToComponents(segments, { snapTol = DXF_SNAP_TOL_MM, axisTol = snapTol } = {}) {
   const snapper = makeSnapper(snapTol);
@@ -297,8 +298,25 @@ export function dxfToComponents(segments, { snapTol = DXF_SNAP_TOL_MM, axisTol =
     components.push({
       index: components.length, segmentCount: edgeIds.length,
       vertexCount: trails.reduce((n, tr) => n + tr.points.length, 0),
-      closed, trails, strokes, warnings,
+      closed, trails, strokes, warnings, bbox: bboxOfTrails(trails),
     });
   }
   return { components };
+}
+
+/** trails の全点を 1 回走査した外接矩形（s・t は図の座標 mm。端点スナップ・弦の間引きがあるので線分から求めた値と snapTol（DXF_SNAP_TOL_MM）以内で一致する）。点が無ければ null。 */
+function bboxOfTrails(trails) {
+  let box = null;
+  for (const tr of trails) {
+    for (const p of tr.points) {
+      if (box === null) box = { minS: p.s, minT: p.t, maxS: p.s, maxT: p.t };
+      else {
+        if (p.s < box.minS) box.minS = p.s;
+        if (p.s > box.maxS) box.maxS = p.s;
+        if (p.t < box.minT) box.minT = p.t;
+        if (p.t > box.maxT) box.maxT = p.t;
+      }
+    }
+  }
+  return box;
 }

@@ -104,6 +104,26 @@ test('【不変条件】detailHelperPdf.js の直接 import は許可表の内�
   assert.ok(directOffenders('ui/detailHelperPdf.js', "import { openPdf } from './pdfLoader.js';", PDF_LOGIC_ALLOWED).length > 0);
 });
 
+// 矩形で成分を絞る純ロジック（detailHelperPick.js）。引くのは 3 つだけ。detailHelperForm.js からは引かれない（循環回避）。
+const PICK_LOGIC_ALLOWED = new Set(['detail/pdf/pdfClip.js', 'ui/detailHelperPdf.js', 'interaction/holdGesture.js']);
+test('【不変条件】detailHelperPick.js の直接 import は許可表の 3 つだけで、推移的にも store.js・snap.js・.jsx・react・pdfjs を静的に引かない', () => {
+  const pickTarget = path.join(srcDir, 'ui', 'detailHelperPick.js');
+  const specs = specifiersOf(pickTarget);
+  assert.deepEqual([...specs].sort(), ['../detail/pdf/pdfClip.js', '../interaction/holdGesture.js', './detailHelperPdf.js'], 'import を読めていない');
+  assert.deepEqual(directOffenders('ui/detailHelperPick.js', fs.readFileSync(pickTarget, 'utf8'), PICK_LOGIC_ALLOWED), []);
+  const { offenders, seen } = transitiveOffenders([pickTarget]);
+  assert.ok(seen.has(norm(path.join(srcDir, 'ui', 'detailHelperPdf.js'))), 'detailHelperPdf.js まで辿れていない');
+  assert.deepEqual(offenders, []);
+  // 検出力: 許可表の外（detailHelperForm.js・store.js）を引くソースは違反に出る
+  assert.ok(directOffenders('ui/detailHelperPick.js', "import { x } from './detailHelperForm.js';", PICK_LOGIC_ALLOWED).length > 0);
+  assert.ok(directOffenders('ui/detailHelperPick.js', "import { x } from '../store.js';", PICK_LOGIC_ALLOWED).length > 0);
+});
+
+test('【不変条件】detailHelperForm.js は detailHelperPick.js を引かない（form→pick→pdf→form の循環を作らない）', () => {
+  assert.ok(specifiersOf(target).length > 0, 'import を読めていない');
+  assert.ok(!specifiersOf(target).some(s => s.includes('detailHelperPick')));
+});
+
 test('【不変条件】検出力: 禁止先・許可表の外を引くソース文字列は offenders に出る', () => {
   const bad = [
     "import { x } from '../store.js';",

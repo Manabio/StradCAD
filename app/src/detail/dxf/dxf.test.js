@@ -301,6 +301,33 @@ test('toStrokes: 空の入力は成分なし', () => {
   assert.deepEqual(dxfToComponents([]).components, []);
 });
 
+test('bbox: 矩形 (0,0)-(100,50) は minS 0・minT 0・maxS 100・maxT 50（間引かれる共線の中間点があっても同じ）', () => {
+  const rect = dxfToComponents([seg(0, 0, 100, 0), seg(100, 0, 100, 50), seg(100, 50, 0, 50), seg(0, 50, 0, 0)]).components[0];
+  assert.deepEqual(rect.bbox, { minS: 0, minT: 0, maxS: 100, maxT: 50 });
+  const split = dxfToComponents([seg(0, 0, 50, 0), seg(50, 0, 100, 0), seg(100, 0, 100, 50), seg(100, 50, 0, 50), seg(0, 50, 0, 0)]).components[0];
+  assert.deepEqual(split.bbox, { minS: 0, minT: 0, maxS: 100, maxT: 50 });
+});
+
+test('bbox: 開いた折れ線 (0,0)→(10,0)→(10,10)→(30,10) と、負の座標の線分 (-20,-5)→(-10,-15)', () => {
+  const [open] = dxfToComponents([seg(0, 0, 10, 0), seg(10, 0, 10, 10), seg(10, 10, 30, 10)]).components;
+  assert.deepEqual(open.bbox, { minS: 0, minT: 0, maxS: 30, maxT: 10 });
+  const [neg] = dxfToComponents([seg(-20, -5, -10, -15)]).components;
+  assert.deepEqual(neg.bbox, { minS: -20, minT: -15, maxS: -10, maxT: -5 });
+});
+
+test('bbox: T 字（trails が 2 本）は全 trail の点を含む。成分ごとに別の bbox', () => {
+  const r = dxfToComponents([seg(0, 0, 50, 0), seg(50, 0, 100, 0), seg(50, 0, 50, 50), seg(200, 200, 210, 220)]);
+  assert.deepEqual(r.components[0].bbox, { minS: 0, minT: 0, maxS: 100, maxT: 50 });
+  assert.deepEqual(r.components[1].bbox, { minS: 200, minT: 200, maxS: 210, maxT: 220 });
+});
+
+test('bbox: 円(R=50, 中心 0,0)は 71 角形。始点が (50,0) なので maxS は 50、他の端は弦の内側（49.9 以上 50 以下）', () => {
+  const { segments } = dxfEntities(parseText(doc(headerSec(4), entitiesSec([circle(0, 0, 50)]))));
+  const { bbox } = dxfToComponents(segments).components[0];
+  assert.equal(bbox.maxS, 50);
+  for (const v of [-bbox.minS, bbox.maxT, -bbox.minT]) assert.ok(v >= 49.9 && v <= 50, `${v}`);
+});
+
 // ================================================================
 // provenance
 // ================================================================

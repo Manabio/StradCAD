@@ -23,7 +23,7 @@ import { baseNameOf } from '../detail/dxf/dxfProvenance.js';
 import { describeDxfWarning, DETAIL_HELPER_MESSAGES, parseNumberText, safeDigest } from './detailHelperForm.js';
 
 const BYTES_PER_MB = 1024 * 1024;
-const CLIP_FRACTION_DIGITS = 1;   // 範囲（pt）の小数桁。ドラッグの値の丸め
+const CLIP_FRACTION_DIGITS = 1;   // 範囲（pt。DXF の矩形では mm）の小数桁。ドラッグの値の丸め
 const PERCENT = 100;
 const CLIP_FIELDS = Object.freeze(['x', 'y', 'w', 'h']);
 const EMPTY_CLIP = Object.freeze({ x: 0, y: 0, w: 0, h: 0 });

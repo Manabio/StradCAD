@@ -131,7 +131,10 @@ export function makeTransform(bounds, scale) {
   const sx = mm => mm * pxPerMm; // 寸法（長さ）の px 変換
   const pxWidth  = bounds.width  * pxPerMm + 2 * FIGURE_MARGIN_PX;
   const pxHeight = bounds.height * pxPerMm + 2 * FIGURE_MARGIN_PX;
-  return { pxPerMm, scale, tx, ty, sx, pxWidth, pxHeight };
+  // 逆変換（px→mm）。tx・ty の逆。画面の点を図の座標へ戻す。
+  const mmX = px => bounds.minX + (px - FIGURE_MARGIN_PX) / pxPerMm;
+  const mmY = py => bounds.minY + (py - FIGURE_MARGIN_PX) / pxPerMm;
+  return { pxPerMm, scale, tx, ty, sx, mmX, mmY, pxWidth, pxHeight };
 }
 
 // 一般解の注記基準隙間(px)。図描画システムの既定＝「指定がなければこれ」。

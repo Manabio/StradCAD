@@ -127,6 +127,9 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   pdfPage: 'ページ', pdfPrev: '前', pdfNext: '次', pdfPageCount: n => `／ ${n} ページ`, pdfScale: '縮尺 1/N の N',
   pdfClip: '範囲（pt。ページ左上が原点）', pdfClipFields: Object.freeze({ x: 'x', y: 'y', w: '幅', h: '高さ' }),
   pdfDragHint: 'ページ画像をドラッグして、写す範囲を選んでください', pdfExtract: '抽出', pdfNoPage: 'ページを読み込んでいます',
+  // 矩形で成分を絞る（S7c。DXF・PDF 共通）
+  pickHint: 'プレビューをドラッグして、矩形に収まる成分を選んでください', pickClear: '矩形を解除',
+  pickSummary: (inRect, total, selected) => `矩形内 ${inRect} ／ 全 ${total} 成分・選択 ${selected}`,
   dxfComponentLabel: n => `成分 ${n}`,
   dxfClosedLabel: '閉', dxfOpenLabel: '開', dxfVertexUnit: '頂点',
 });
