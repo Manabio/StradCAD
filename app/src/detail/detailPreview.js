@@ -14,7 +14,7 @@ import { normalizeDetailFigure, moveParts } from './detailModel.js';
 import { penWalk } from './detailPen.js';
 
 /** 寸法線を辺から離す距離（mm）。 */
-export const PREVIEW_DIM_GAP_MM = 40;
+export const PREVIEW_DIM_GAP_MM = 80;
 /** 頂点番号を頂点から離す距離（mm）。 */
 export const PREVIEW_LABEL_OFFSET_MM = 15;
 /** 頂点番号の文字サイズ（px。text の size）。 */
@@ -102,6 +102,8 @@ export function previewPrimitives(figure, opts = {}) {
     const pts = walked.map(p => ({ s: p.s + shift[DetailAxis.S], t: p.t + shift[DetailAxis.T] }));
 
     allPts.push(...pts);
+    const centerS = (Math.min(...pts.map(p => p.s)) + Math.max(...pts.map(p => p.s))) / 2;
+    const centerT = (Math.min(...pts.map(p => p.t)) + Math.max(...pts.map(p => p.t))) / 2;
     const extra = { strokeId: stroke.id };
     if (stroke.closed) extra.closed = true;
     if (stroke.line?.dashRole === DetailDash.DASHED) extra.dash = DetailDash.DASHED;
@@ -118,10 +120,14 @@ export function previewPrimitives(figure, opts = {}) {
       const b = pts[moveIndex + 1];
       const editKey = { strokeId: stroke.id, moveIndex };
       const label = parts[0].len?.mm;
+      // 寸法線はこのストロークの bbox の中心から遠い側（図の外側）へ出す（中心上は + 側）
       if (parts[0].axis === DetailAxis.S) {
-        out.push(dim('h', Math.min(a.s, b.s), Math.max(a.s, b.s), a.t + gap, label, { editable: true, editKey }));
+        const side = a.t >= centerT ? 1 : -1;
+        out.push(dim('h', Math.min(a.s, b.s), Math.max(a.s, b.s), a.t + side * gap, label, { editable: true, editKey, foot: a.t }));
       } else {
-        out.push(dim('v', Math.min(a.t, b.t), Math.max(a.t, b.t), a.s + gap, label, { editable: true, editKey }));
+        // 縦の寸法値は文字の天を左に回し（下から上へ読む）、寸法線の左に置く（図がどちら側でも）
+        const side = a.s >= centerS ? 1 : -1;
+        out.push(dim('v', Math.min(a.t, b.t), Math.max(a.t, b.t), a.s + side * gap, label, { editable: true, editKey, foot: a.s, labelVertical: true, labelSide: 'left' }));
       }
     });
   }

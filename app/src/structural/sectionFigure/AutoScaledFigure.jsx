@@ -342,7 +342,8 @@ function renderDim(p, key, t, interactive) {
     ? [[a.x1, a.y1 - TICK, a.x1, a.y1 + TICK], [a.x2, a.y2 - TICK, a.x2, a.y2 + TICK]]
     : [[a.x1 - TICK, a.y1, a.x1 + TICK, a.y1], [a.x2 - TICK, a.y2, a.x2 + TICK, a.y2]]);
   // labelVertical: 縦寸法の値を-90度回転（文字の天が画面左向き＝下から上へ読む）で寸法線上に描く。
-  const vlx = a.x1 + (p.labelDX ? t.sx(p.labelDX) : 0);
+  // labelSide 'left' のときは線の左へ 6+8 寄せる（EditableDimLabel と同じ位置）。
+  const vlx = a.x1 + (labelLeft ? -(6 + 8) : 0) + (p.labelDX ? t.sx(p.labelDX) : 0);
   const vly = (a.y1 + a.y2) / 2 + (p.labelDY ? t.sx(p.labelDY) : 0);
   return (
     <g key={key} stroke={COLOR.dim}>
@@ -379,8 +380,12 @@ function EditableDimLabel({ dim, t, onCommit }) {
   const labelLeft = dim.labelSide === 'left';
   const ldx = dim.labelDX ? t.sx(dim.labelDX) : 0;
   const ldy = dim.labelDY ? t.sx(dim.labelDY) : 0;
-  const px = (isH ? t.tx((dim.from + dim.to) / 2) : t.tx(dim.at) + (labelLeft ? -6 : 6)) + ldx;
-  const py = (isH ? t.ty(dim.at) - 19 : t.ty((dim.from + dim.to) / 2) - 8) + ldy;
+  // 縦で labelVertical: ボタンの中心を (線 ∓(6+8), 中点) に置き -90 度回す（8 ≒ 半高。実寸約 9.7 px なので右端は線から約 4 px）
+  const rotated = !!dim.labelVertical && !isH;
+  const px = (rotated ? t.tx(dim.at) + (labelLeft ? -(6 + 8) : 6 + 8)
+    : isH ? t.tx((dim.from + dim.to) / 2) : t.tx(dim.at) + (labelLeft ? -6 : 6)) + ldx;
+  const py = (rotated ? t.ty((dim.from + dim.to) / 2)
+    : isH ? t.ty(dim.at) - 19 : t.ty((dim.from + dim.to) / 2) - 8) + ldy;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
@@ -395,7 +400,8 @@ function EditableDimLabel({ dim, t, onCommit }) {
 
   // 横方向の寸法値は線の中央に重ねるが、縦方向は線と重ならないよう左右どちらかへ片寄せする
   // （labelSide:'left' なら寸法線の左へ、既定では右へ。translateX(-50%)中央寄せでは線を跨いでしまうため）。
-  const transform = isH ? 'translateX(-50%)' : (labelLeft ? 'translateX(-100%)' : 'translateX(0)');
+  const transform = rotated ? 'translate(-50%, -50%) rotate(-90deg)'
+    : isH ? 'translateX(-50%)' : (labelLeft ? 'translateX(-100%)' : 'translateX(0)');
 
   return (
     <>
