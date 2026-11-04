@@ -7,6 +7,7 @@ import { makeTransform, chooseScale, FIGURE_MARGIN_PX } from './sectionGeometry.
 import {
   FIGURE_VIEW_MAX_SCALE, FIGURE_WHEEL_ZOOM_FACTOR,
   viewBounds, viewOfTransform, zoomViewAt, panView, pinchView, fitViewToRect,
+  transformOfView, autoScaleOfPrimitives, viewLimitsOf,
 } from './figureView.js';
 
 const approx = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} != ${b}`);
@@ -204,6 +205,32 @@ test('【配線】AutoScaledFigure: view は study が無いときだけ viewBou
   assert.match(figureSrc, /overlay\?\.\(t, \{ autoScale, contentBounds: baseBounds \}\)/);
   // view も overlay も渡さない既存の利用者のための既定値
   assert.match(figureSrc, /view = null, svgRef \}\)/);
+});
+
+test('transformOfView: viewBounds→makeTransform と同じ変換。自動縮尺の t から作った view でも同じ mm が同じ px に来る（ジェスチャー層の startT）', () => {
+  const view = { scale: 3, cx: 100, cy: 200 };
+  const t = transformOfView(view, FRAME);
+  approx(t.pxWidth, FRAME.width);
+  approx(t.tx(view.cx), FRAME.width / 2);
+  approx(t.scale, 3);
+  const autoT = makeTransform({ minX: 0, minY: 0, maxX: 300, maxY: 100, width: 300, height: 100 }, 1);
+  const base = transformOfView(viewOfTransform(autoT, FRAME), FRAME);
+  for (const mm of [0, 120, 300]) {
+    approx(base.tx(mm), autoT.tx(mm));
+    approx(base.ty(mm), autoT.ty(mm));
+  }
+});
+
+test('autoScaleOfPrimitives: AutoScaledFigure と同じ式（figureBounds→chooseScale）。viewLimitsOf は全体〜20 で、極小の図では最大を全体に合わせる', () => {
+  const prims = [{ type: 'rect', x: 0, y: 0, w: 800, h: 500 }];
+  assert.equal(autoScaleOfPrimitives(prims, FRAME), chooseScale(800, 500, FRAME.width, FRAME.height));
+  assert.deepEqual(viewLimitsOf(0.5), { minScale: 0.5, maxScale: FIGURE_VIEW_MAX_SCALE });
+  assert.deepEqual(viewLimitsOf(25), { minScale: 25, maxScale: 25 });
+});
+
+test('【失敗系】autoScaleOfPrimitives: プリミティブが空・frame が余白以下は RangeError', () => {
+  assert.throws(() => autoScaleOfPrimitives([], FRAME), RangeError);
+  assert.throws(() => autoScaleOfPrimitives([{ type: 'rect', x: 0, y: 0, w: 1, h: 1 }], { width: 40, height: 480 }), RangeError);
 });
 
 test('【不変条件】figureView.js の import は sectionGeometry.js だけ（store・snap・.jsx・react を引かない）', () => {

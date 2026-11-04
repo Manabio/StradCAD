@@ -11,7 +11,7 @@
 //   - fitViewToRect は矩形が無効（非有限・幅/高さ 0 以下）でも null（寄せる対象が無い）。
 //   - limits = { minScale, maxScale }。minScale は全体の縮尺（chooseScale の値）、maxScale は FIGURE_VIEW_MAX_SCALE。
 // ================================================================
-import { FIGURE_MARGIN_PX } from './sectionGeometry.js';
+import { FIGURE_MARGIN_PX, makeTransform, figureBounds, chooseScale } from './sectionGeometry.js';
 
 // 最大の拡大（px/mm）。viewport.js の zoomAt の上限と同値（サッシの 1.2 mm の材が 24 px）。
 export const FIGURE_VIEW_MAX_SCALE = 20;
@@ -66,6 +66,30 @@ export function viewBounds(view, frame) {
   const minX = view.cx - width / 2;
   const minY = view.cy - height / 2;
   return { minX, minY, maxX: minX + width, maxY: minY + height, width, height };
+}
+
+/** view で描いたときの変換 t（AutoScaledFigure が view のときに作るものと同じ。pinchView の startT に渡す）。 */
+export function transformOfView(view, frame) {
+  return makeTransform(viewBounds(view, frame), view.scale);
+}
+
+/** 全体の縮尺（AutoScaledFigure が primitives から決める autoScale と同じ式）。プリミティブが空なら RangeError。 */
+export function autoScaleOfPrimitives(primitives, frame) {
+  assertFrame(frame);
+  if (!primitives?.length) throw new RangeError('primitives が空');
+  const b = figureBounds(primitives);
+  return chooseScale(b.width, b.height, frame.width, frame.height);
+}
+
+/** 図の範囲（AutoScaledFigure が overlay の第 2 引数 contentBounds に渡すものと同じ figureBounds）。空なら RangeError。 */
+export function contentBoundsOfPrimitives(primitives) {
+  if (!primitives?.length) throw new RangeError('primitives が空');
+  return figureBounds(primitives);
+}
+
+/** 全体の縮尺から zoom の範囲。全体の縮尺が最大より大きい（極小の図）ときは最大を全体に合わせる（minScale ≤ maxScale を保つ）。 */
+export function viewLimitsOf(autoScale) {
+  return { minScale: autoScale, maxScale: Math.max(FIGURE_VIEW_MAX_SCALE, autoScale) };
 }
 
 /**

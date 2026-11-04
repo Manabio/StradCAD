@@ -165,6 +165,30 @@ test('toggleDxfLayer: off で成分が作り直される（scene は新しく se
   assert.deepEqual(on.dxf.scene.hiddenLayers, []);
 });
 
+test('viewEpoch: 読込みごとに新しい（sha256 が空でも別ファイル同士で共有しない）。単位変更で作り直し、レイヤ切替では引き継ぐ', async () => {
+  const noDigest = async () => { throw new Error('no subtle'); };
+  const read = async () => {
+    const r = await loadDxf({ bytes: layered(), fileName: 'l.dxf', digest: noDigest });
+    assert.equal(r.ok, true, r.message);
+    return r.dxf;
+  };
+  const a = await read();
+  const b = await read();
+  assert.equal(a.sha256, '');
+  assert.equal(b.sha256, '');
+  assert.notEqual(a.viewEpoch, b.viewEpoch, '同じ中身・sha256 空でも読み直しで別');
+  assert.equal(typeof a.viewEpoch, 'object');
+  const off = toggleDxfLayer(a, 'DIM').dxf;
+  assert.equal(off.viewEpoch, a.viewEpoch, 'レイヤ切替で保つ');
+  assert.equal(toggleDxfLayer(off, 'DIM').dxf.viewEpoch, a.viewEpoch);
+  assert.equal(setDxfLayers(a, []).dxf.viewEpoch, a.viewEpoch);
+  const unit = setDxfUnit(a, '2').dxf;
+  assert.notEqual(unit.viewEpoch, a.viewEpoch, '単位変更で全体へ');
+  assert.equal(toggleDxfLayer(unit, 'DIM').dxf.viewEpoch, unit.viewEpoch);
+  // 失敗系: 不正な単位は dxf を変えない（epoch も同じ）
+  assert.equal(setDxfUnit(a, 'abc').dxf.viewEpoch, a.viewEpoch);
+});
+
 test('toggleDxfLayer: S7c の矩形は scene が変わるので無効になる。単位の指定は保つ', async () => {
   let dxf = (await loadLayered());
   dxf = { ...dxf, pick: null };

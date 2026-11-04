@@ -104,12 +104,12 @@ test('【不変条件】detailHelperPdf.js の直接 import は許可表の内�
   assert.ok(directOffenders('ui/detailHelperPdf.js', "import { openPdf } from './pdfLoader.js';", PDF_LOGIC_ALLOWED).length > 0);
 });
 
-// 矩形で成分を絞る純ロジック（detailHelperPick.js）。引くのは 3 つだけ。detailHelperForm.js からは引かれない（循環回避）。
-const PICK_LOGIC_ALLOWED = new Set(['detail/pdf/pdfClip.js', 'ui/detailHelperPdf.js', 'interaction/holdGesture.js']);
-test('【不変条件】detailHelperPick.js の直接 import は許可表の 3 つだけで、推移的にも store.js・snap.js・.jsx・react・pdfjs を静的に引かない', () => {
+// 矩形で成分を絞る純ロジック（detailHelperPick.js）。引くのは 4 つだけ（S7d-2 でズーム／パンの純関数 figureView.js を追加）。detailHelperForm.js からは引かれない（循環回避）。
+const PICK_LOGIC_ALLOWED = new Set(['detail/pdf/pdfClip.js', 'ui/detailHelperPdf.js', 'interaction/holdGesture.js', 'structural/sectionFigure/figureView.js']);
+test('【不変条件】detailHelperPick.js の直接 import は許可表の 4 つだけで、推移的にも store.js・snap.js・.jsx・react・pdfjs を静的に引かない', () => {
   const pickTarget = path.join(srcDir, 'ui', 'detailHelperPick.js');
   const specs = specifiersOf(pickTarget);
-  assert.deepEqual([...specs].sort(), ['../detail/pdf/pdfClip.js', '../interaction/holdGesture.js', './detailHelperPdf.js'], 'import を読めていない');
+  assert.deepEqual([...specs].sort(), ['../detail/pdf/pdfClip.js', '../interaction/holdGesture.js', '../structural/sectionFigure/figureView.js', './detailHelperPdf.js'], 'import を読めていない');
   assert.deepEqual(directOffenders('ui/detailHelperPick.js', fs.readFileSync(pickTarget, 'utf8'), PICK_LOGIC_ALLOWED), []);
   const { offenders, seen } = transitiveOffenders([pickTarget]);
   assert.ok(seen.has(norm(path.join(srcDir, 'ui', 'detailHelperPdf.js'))), 'detailHelperPdf.js まで辿れていない');

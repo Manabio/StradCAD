@@ -5,8 +5,10 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import {
   componentsInRect, activePickRect, setPickRect, clearPickRect, pickedComponentRows, pickSummaryOf,
-  figurePointToMm, pickRectFromDrag, pickOverlayStyle,
+  figurePointToMm, pickRectFromDrag, pickOverlayStyle, dragKindOf, bindView, activeView,
+  reconcileView, panDeltaPx, pinchArgsOf, wheelZoomedView,
 } from './detailHelperPick.js';
+import { transformOfView, panView, pinchView, viewLimitsOf } from '../structural/sectionFigure/figureView.js';
 import { loadDxf, setDxfUnit, toggleDxfComponent, dxfComponentRows, DETAIL_HELPER_TEXT } from './detailHelperForm.js';
 import { loadPdf, setPdfScale, setPdfClip, setPdfPageView, extractPdf } from './detailHelperPdf.js';
 import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
@@ -186,6 +188,97 @@ test('【失敗系】DXF: 単位を変えると scene が作り直され、矩�
   assert.equal(pickSummaryOf(dxf), null);
   assert.equal(pickedComponentRows(dxf, dxfComponentRows(dxf)).length, 2);
   assert.ok(dxf.pick, '矩形のデータ自体は残るが scene が違うので使われない');
+});
+
+const FRAME = { width: 560, height: 480 };
+const BIG = { minX: -1000, minY: -1000, maxX: 2000, maxY: 2000, width: 3000, height: 3000 };
+
+test('panDeltaPx: 指を +10px 動かすと図の px も +10（rect が t の半分の大きさなら 2 倍）。panView に渡すと cx は base.cx − 10/scale', () => {
+  const base = { scale: 4, cx: 400, cy: 250 };
+  const t = transformOfView(base, FRAME);
+  const from = { clientX: 100, clientY: 100 };
+  const same = { t, rect: { left: 0, top: 0, width: t.pxWidth, height: t.pxHeight }, from };
+  assert.deepEqual(panDeltaPx(same, { clientX: 110, clientY: 100 }), { dx: 10, dy: 0 });
+  const half = { ...same, rect: { left: 0, top: 0, width: t.pxWidth / 2, height: t.pxHeight / 2 } };
+  assert.deepEqual(panDeltaPx(half, { clientX: 110, clientY: 90 }), { dx: 20, dy: -20 });
+  const { dx, dy } = panDeltaPx(same, { clientX: 110, clientY: 100 });
+  const moved = panView(base, dx, dy, BIG);
+  approx(moved.cx, base.cx - 10 / base.scale);
+  approx(moved.cy, base.cy);
+});
+
+test('pinchArgsOf: 2 指を開くと scale が増え、閉じると減る。開始と現在を入れ替えると逆。中点が動かなければ中心は不変', () => {
+  const base = { scale: 1, cx: 400, cy: 250 };
+  const limits = viewLimitsOf(0.5);
+  const g = { base, startT: transformOfView(base, FRAME), p0a: { x: 230, y: 240 }, p0b: { x: 330, y: 240 }, limits, contentBounds: BIG }; // 中点＝枠の中央 (280, 240)
+  const open = { p1a: { x: 205, y: 240 }, p1b: { x: 355, y: 240 } };
+  const closed = { p1a: { x: 240, y: 240 }, p1b: { x: 320, y: 240 } };
+  const opened = pinchView(...pinchArgsOf(g, open));
+  const shut = pinchView(...pinchArgsOf(g, closed));
+  approx(opened.scale, 1.5);
+  approx(shut.scale, 0.8);
+  assert.equal(pinchView(...pinchArgsOf(g, { p1a: { x: 255, y: 240 }, p1b: { x: 305, y: 240 } })), null, '全体の縮尺以下まで閉じたら全体');
+  approx(opened.cx, 400);
+  approx(opened.cy, 250);
+  // 入れ替え: 現在を開始・開始を現在にすると逆向きの比
+  const swapped = pinchView(...pinchArgsOf({ ...g, p0a: open.p1a, p0b: open.p1b }, { p1a: g.p0a, p1b: g.p0b }));
+  approx(swapped.scale, 1 / 1.5);
+  assert.ok(opened.scale > base.scale && swapped.scale < base.scale);
+  // 失敗系: 指の座標が非有限なら RangeError（呼び出し側のバグ）
+  assert.throws(() => pinchView(...pinchArgsOf(g, { p1a: { x: NaN, y: 0 }, p1b: open.p1b })), RangeError);
+});
+
+test('wheelZoomedView: 全体からは枠つきの基準で、カーソル下の図の点の画面位置を保つ。全体の縮尺以下は null。範囲外へはみ出さない', () => {
+  const content = { minX: 0, minY: 0, maxX: 800, maxY: 500, width: 800, height: 500 };
+  const t = makeTransform(content, 0.5);
+  const rect = { left: 10, top: 20, width: t.pxWidth, height: t.pxHeight };
+  const client = { clientX: 10 + 100, clientY: 20 + 80 };
+  const args = { view: null, t, frame: FRAME, client, rect, factor: 2, autoScale: 0.5, contentBounds: content };
+  const next = wheelZoomedView(args);
+  approx(next.scale, 1);
+  const after = transformOfView(next, FRAME);
+  approx(after.tx(t.mmX(100)), 100); // 中心の mm が t.mmX と一致し、その画面位置が変わらない
+  approx(after.ty(t.mmY(80)), 80);
+  assert.equal(wheelZoomedView({ ...args, factor: 0.9 }), null, '全体より縮めたら全体へ');
+  const far = wheelZoomedView({ ...args, client: { clientX: 10 + t.pxWidth, clientY: 20 + t.pxHeight }, factor: 40 });
+  assert.ok(far.cx <= content.maxX && far.cy <= content.maxY, '中心は図の範囲の中');
+  assert.equal(far.scale, 20, '最大で頭打ち');
+  // 失敗系: 倍率 0 は RangeError
+  assert.throws(() => wheelZoomedView({ ...args, factor: 0 }), RangeError);
+});
+
+test('reconcileView: レイヤ切替で図が変わったあとの view。新しい全体の縮尺以下なら null、それ以外は中心を新しい範囲へ寄せる。view が無ければ null', () => {
+  const bounds = { minX: 0, minY: 0, maxX: 800, maxY: 500, width: 800, height: 500 };
+  const view = { scale: 2, cx: 1000, cy: -50 };
+  assert.deepEqual(reconcileView(view, 0.5, bounds), { scale: 2, cx: 800, cy: 0 });
+  assert.equal(reconcileView(view, 2, bounds), null, '新しい全体の縮尺と同じなら全体');
+  assert.equal(reconcileView(view, 3, bounds), null, '図が小さくなって全体の縮尺が上がったら全体');
+  assert.equal(reconcileView(null, 0.5, bounds), null);
+  assert.throws(() => reconcileView(view, 0.5, { minX: NaN, maxX: 1, minY: 0, maxY: 1 }), RangeError);
+});
+
+test('dragKindOf: 長押しが成立して矩形を引ける図のときだけ矩形。それ以外（長押し前に動かした・矩形を引けない）は移動', () => {
+  assert.equal(dragKindOf({ fired: true, canPick: true }), 'rect');
+  assert.equal(dragKindOf({ fired: false, canPick: true }), 'pan');
+  assert.equal(dragKindOf({ fired: true, canPick: false }), 'pan');
+  assert.equal(dragKindOf({ fired: false, canPick: false }), 'pan');
+});
+
+test('bindView／activeView: オーナー（scene・下書きの key）が同じ間だけ view が有効。変わる（単位変更・再抽出・別の下書き）か無いと全体（null）', () => {
+  const sceneA = { id: 'a' };
+  const sceneB = { id: 'b' };
+  const view = { scale: 4, cx: 10, cy: 20 };
+  const bound = bindView(sceneA, view);
+  assert.equal(activeView(bound, sceneA), view);
+  assert.equal(activeView(bound, sceneB), null, 'scene が作り直されたら全体');
+  assert.equal(activeView(bound, { ...sceneA }), null, '同じ中身でも別のオブジェクトは別の scene');
+  assert.equal(activeView(bindView('draft:1', view), 'draft:1'), view);
+  assert.equal(activeView(bindView('draft:1', view), 'draft:2'), null);
+  assert.equal(activeView(bindView(sceneA, null), sceneA), null, '全体を結び付けても全体');
+  // 失敗系: 結び付けが無い・オーナーが無い（PDF の抽出前など）は全体
+  assert.equal(activeView(null, sceneA), null);
+  assert.equal(activeView(bound, undefined), null);
+  assert.equal(activeView(bindView(undefined, view), undefined), null, 'オーナー未定同士は一致させない');
 });
 
 const { MOVE_TO: M, LINE_TO: L, CLOSE: Z } = PdfDrawOp;

@@ -3,10 +3,11 @@
 // 矩形は「引いたときの scene」に結び付く（state.pick.scene === state.scene のときだけ有効）。単位の変更・再抽出で scene が
 // 作り直されると自動で無効になるので、無効化の処理は他の関数に要らない（detailHelperForm.js・detailHelperPdf.js は触らない）。
 // state は DXF（detailHelperForm.js の dxf）も PDF（detailHelperPdf.js の pdf）も { scene, selected, pick } の形。
-// import は clip 検査・矩形の丸め・タップ判定の 3 つだけ（detailHelperForm.js からは引かない＝循環回避）。
+// import は clip 検査・矩形の丸め・タップ判定・ズーム／パンの純関数（figureView.js）だけ（detailHelperForm.js からは引かない＝循環回避）。
 import { isValidClip } from '../detail/pdf/pdfClip.js';
 import { clipFromDrag } from './detailHelperPdf.js';
 import { isTapDistance } from '../interaction/holdGesture.js';
+import { viewOfTransform, zoomViewAt, panView, viewLimitsOf } from '../structural/sectionFigure/figureView.js';
 
 /** bbox が矩形（{x,y,w,h}。x=s・y=t・t 下向き正。境界を含む）に完全に収まる成分の index（昇順）。矩形が無効なら []。bbox の無い成分は対象外。 */
 export function componentsInRect(components, rect) {
@@ -67,6 +68,56 @@ export function figurePointToMm({ clientX, clientY }, rect, t) {
 export function pickRectFromDrag(from, to) {
   if (isTapDistance(Math.hypot(to.clientX - from.clientX, to.clientY - from.clientY))) return null;
   return clipFromDrag(from.mm, to.mm);
+}
+
+/**
+ * 1 本指のドラッグの種類。長押しが成立してから動かしたら矩形（矩形を引ける図のときだけ）、それ以外は移動（パン）。
+ * 長押し前に 8px 超動いたら fired=false なのでパン。
+ */
+export function dragKindOf({ fired, canPick }) {
+  return fired && canPick ? 'rect' : 'pan';
+}
+
+/** ズーム／パンの view（figureView.js。null＝全体）をオーナー（scene・下書きの key）に結び付ける。 */
+export function bindView(owner, view) {
+  return { owner, view };
+}
+
+/** 今有効な view。オーナーが変わった（単位変更・再抽出・別の下書き）か無いときは null（＝全体）。 */
+export function activeView(binding, owner) {
+  return binding && owner != null && binding.owner === owner ? binding.view : null;
+}
+
+/**
+ * 残した view を新しい図（レイヤ切替で範囲と全体の縮尺が変わる）に合わせる。全体の縮尺以下なら全体（null）、
+ * それ以外は中心を新しい図の範囲へ寄せる。view が無ければ null。
+ */
+export function reconcileView(view, autoScale, contentBounds) {
+  if (!view || view.scale <= autoScale) return null;
+  return panView(view, 0, 0, contentBounds);
+}
+
+/** 1 本指のパン量（図の px。向きは指と同じ）。g＝押下時の { t, rect, from }、e＝今の { clientX, clientY }。CSS で拡大縮小されていても合うよう層の rect で換算する。 */
+export function panDeltaPx(g, e) {
+  return {
+    dx: (e.clientX - g.from.clientX) * g.t.pxWidth / g.rect.width,
+    dy: (e.clientY - g.from.clientY) * g.t.pxHeight / g.rect.height,
+  };
+}
+
+/** pinchView に渡す引数の並び（開始の 2 指 p0a・p0b、今の 2 指 now.p1a・now.p1b）。指の順を入れ替えると拡大縮小が逆になる。 */
+export function pinchArgsOf(g, now) {
+  return [g.base, g.startT, g.p0a, g.p0b, now.p1a, now.p1b, g.limits, g.contentBounds];
+}
+
+/**
+ * ホイール 1 フレーム分の拡大縮小後の view。全体（view=null）のときの基準は枠つきの viewOfTransform、中心は点 client の下の図の座標、
+ * 結果は図の範囲へ寄せる。全体の縮尺以下になったら null（全体へ戻る）。
+ */
+export function wheelZoomedView({ view, t, frame, client, rect, factor, autoScale, contentBounds }) {
+  const base = view ?? viewOfTransform(t, frame);
+  const zoomed = zoomViewAt(base, figurePointToMm(client, rect, t), factor, viewLimitsOf(autoScale));
+  return zoomed === null ? null : panView(zoomed, 0, 0, contentBounds);
 }
 
 /** 矩形の枠の CSS（プレビュー px。無効なら null）。 */

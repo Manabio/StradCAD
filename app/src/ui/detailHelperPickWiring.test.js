@@ -38,23 +38,30 @@ function topLevelBlock(src, startMarker) {
 }
 
 // ---- 判定（本体文字列 → 真偽。検出力テストにも同じ関数を渡す）----
-// overlay は DXF タブで scene があるときだけ渡す（ペン入力のプレビューには矩形層を出さない）。
-const overlayOnlyWhenScene = src => /overlay=\{showDxf && imported\?\.scene\s*\?[\s\S]*?:\s*undefined\}/.test(src);
-// 矩形層には AutoScaledFigure が描画に使った t をそのまま渡す（変換を作り直さない）。
-const overlayPassesFigureTransform = src => /overlay=\{[^}]*?\bt => <PickLayer t=\{t\}/.test(src) && !/makeTransform\(/.test(src);
-// ドラッグ中（onPointerMove）は部品内 state だけ更新し、親の state（重いプレビューの再描画）を触らない。
-const moveHandler = body => {
-  const m = /onPointerMove=\{([\s\S]*?)\}\s*\n\s*onPointerUp=/.exec(body ?? '');
-  return m ? m[1] : null;
+// ジェスチャー層（S7d-2 で PickLayer から置き換え）は図読込み・ペン入力の両タブで渡す。矩形を引けるのは図読込みで scene があるときだけ（canPick）。
+const overlayGivenBothTabs = src => /overlay=\{\(t, info\) => \(\s*<FigureGestureLayer t=\{t\} info=\{info\}[\s\S]*?canPick=\{showDxf && !!imported\?\.scene\}/.test(src);
+// 層には AutoScaledFigure が描画に使った t をそのまま渡す（変換を作り直さない）。
+const overlayPassesFigureTransform = src => /overlay=\{\(t, info\) => \(\s*<FigureGestureLayer t=\{t\}/.test(src) && !/makeTransform\(/.test(src);
+// 層の中の関数（2 スペース字下げの function 宣言。次の「\n  }\n」まで）。
+const innerFn = (body, name) => {
+  const s = body?.indexOf(`  function ${name}(`) ?? -1;
+  if (s < 0) return null;
+  const e = body.indexOf('\n  }\n', s);
+  return e < 0 ? null : body.slice(s, e + 5);
 };
+// ドラッグ中（onPointerMove）は部品内 state と svg の CSS だけ動かし、親の state（重いプレビューの再描画）を触らない。
 const moveTouchesOnlyLocalState = body => {
-  const h = moveHandler(body);
-  return h !== null && /setLive\(/.test(h) && !/setPickRect|setDxf|setPdf|onPick/.test(h);
+  const h = innerFn(body, 'onPointerMove');
+  return h !== null && /setLive\(/.test(h) && /style\.transform =/.test(h)
+    && !/setPickRect|setDxf|setPdf|setDoc|setImportView|setDraftView|onPick|onView/.test(h);
 };
-// 離したとき（onPointerUp）にだけ onPick を呼ぶ。
-const upCommitsViaPickRectFromDrag = body => {
-  const m = /onPointerUp=\{([\s\S]*?)\}\}\s*\n\s*onPointerCancel=/.exec(body ?? '');
-  return !!m && /pickRectFromDrag\(/.test(m[1]) && /onPick\(/.test(m[1]);
+// 離したとき（onPointerEnd）にだけ onPick／onView を呼ぶ。取り消し（commit=false）は確定しない。
+const endCommitsOnlyOnRelease = body => {
+  const h = innerFn(body, 'onPointerEnd');
+  if (h === null) return false;
+  const cancel = /if \(!commit\) \{([^}]*)\}/.exec(h)?.[1] ?? 'onView(';
+  return /pickRectFromDrag\(/.test(h) && /onPick\(rect\)/.test(h) && /onView\(panView\(/.test(h) && /onView\(pinchView\(/.test(h)
+    && !/onPick|onView/.test(cancel);
 };
 // 枠は pickOverlayStyle で描き、PDF の範囲と同じ見た目（dthlp-pdf-clip）を流用する。
 const framesViaPickOverlayStyle = body => !!body && /pickOverlayStyle\(live \?\? pickRect, t\)/.test(body) && /className="dthlp-pdf-clip"/.test(body);
@@ -75,39 +82,37 @@ const figureCallsOverlayInsideRelativeDiv = src => {
   return rel >= 0 && ov > rel && ed > ov && close > ed && (src.match(/makeTransform\(/g) ?? []).length === 1; // import は括弧なしなので呼び出しだけ数える
 };
 
-// 矩形の枠は今有効な矩形（imported＝pdf ?? dxf）から作る。
-const passesActiveRectOfImported = src => /pickRect=\{activePickRect\(imported\)\}/.test(src);
-// 押下: busy なら受けず、ポインタを捕捉する。
+// 矩形の枠は今有効な矩形（imported＝pdf ?? dxf。図読込みタブのときだけ）から作る。
+const passesActiveRectOfImported = src => /const pickRectNow = showDxf \? activePickRect\(imported\) : null;/.test(src) && /pickRect=\{pickRectNow\}/.test(src);
+// 押下: busy なら受けず、ポインタを捕捉し、画面の点→mm は層自身の矩形（currentTarget）で換算する。
 const downGuardsBusyAndCaptures = body => {
-  const m = /onPointerDown=\{([\s\S]*?)\}\}?\s*\n\s*onPointerMove=/.exec(body ?? '');
-  return !!m && /if \(busy[^)]*\) return;/.test(m[1]) && /e\.currentTarget\.setPointerCapture\(e\.pointerId\)/.test(m[1]);
+  const h = innerFn(body, 'onPointerDown');
+  return h !== null && /if \(busy\b[^\n]*\) return;/.test(h) && /e\.currentTarget\.setPointerCapture\(e\.pointerId\)/.test(h)
+    && /const rect = e\.currentTarget\.getBoundingClientRect\(\);/.test(h) && /figurePointToMm\(e, rect, t\)/.test(h);
 };
-// 画面の点→mm は層自身の矩形（currentTarget）で換算する。
-const convertsViaCurrentTarget = body => !!body && /figurePointToMm\(e, e\.currentTarget\.getBoundingClientRect\(\), t\)/.test(body);
-// Move・Up・Cancel は押下と同じ pointerId のイベントだけ扱う。
+// 離した指が進行中の操作の指のときだけ扱う（Move は押下と同じ pointerId の指だけ、End は押している指だけ）。
 const matchesPointerId = body => {
-  const h = moveHandler(body) ?? '';
-  const up = /onPointerUp=\{([\s\S]*?)\}\}\s*\n\s*onPointerCancel=/.exec(body ?? '')?.[1] ?? '';
-  const cancel = /onPointerCancel=\{([\s\S]*?)\}\}>/.exec(body ?? '')?.[1] ?? '';
-  return /pointerId === e\.pointerId/.test(h) && /pointerId !== e\.pointerId\) return/.test(up) && /pointerId !== e\.pointerId\) return/.test(cancel);
+  const move = innerFn(body, 'onPointerMove') ?? '';
+  const end = innerFn(body, 'onPointerEnd') ?? '';
+  return /const p = pointers\.current\.get\(e\.pointerId\);\s*if \(!p\) return;/.test(move) && /e\.pointerId === g\.id/.test(move)
+    && /const p = pointers\.current\.get\(e\.pointerId\);\s*if \(!p\) return;/.test(end) && /g\.id === e\.pointerId \|\| g\.ids\?\.includes\(e\.pointerId\)/.test(end);
 };
 // 一覧の上に操作のヒントと件数を出す。
 const importResultShowsHintAndSummary = body => !!body && /DETAIL_HELPER_TEXT\.pickHint/.test(body) && /pickSummaryOf\(state\)/.test(body);
 
 const panel = () => stripComments(readSrc('ui/DetailHelperPanel.jsx'));
-const pickLayerBody = () => topLevelBlock(panel(), 'function PickLayer(');
+const pickLayerBody = () => topLevelBlock(panel(), 'function FigureGestureLayer(');
 const importResultBody = () => topLevelBlock(panel(), 'function ImportResult(');
 
-test('【配線】overlay は DXF タブで scene があるときだけ渡し、t は図の描画と同じ変換を受け取る', () => {
-  assert.ok(overlayOnlyWhenScene(panel()));
+test('【配線】overlay は両タブでジェスチャー層を渡し、t は図の描画と同じ変換を受け取る', () => {
+  assert.ok(overlayGivenBothTabs(panel()));
   assert.ok(overlayPassesFigureTransform(panel()));
   assert.ok(passesActiveRectOfImported(panel()));
 });
 
-test('【配線】PickLayer: 押下は busy で受けずポインタ捕捉・換算は currentTarget・pointerId が一致するイベントだけ扱う', () => {
+test('【配線】FigureGestureLayer: 押下は busy で受けずポインタ捕捉・換算は currentTarget・pointerId が一致する指だけ扱う', () => {
   const body = pickLayerBody();
   assert.ok(downGuardsBusyAndCaptures(body), body);
-  assert.ok(convertsViaCurrentTarget(body), body);
   assert.ok(matchesPointerId(body), body);
 });
 
@@ -116,30 +121,32 @@ test('【配線】ImportResult: ヒントと件数の行を出す', () => {
 });
 
 test('【検出力】追加の判定は壊れた文字列を落とす', () => {
-  assert.equal(passesActiveRectOfImported('pickRect={activePickRect(imported)}'), true);
-  assert.equal(passesActiveRectOfImported('pickRect={activePickRect(dxf)}'), false);
-  const down = inner => `onPointerDown={e => { ${inner} }}\n      onPointerMove={x}`;
-  assert.equal(downGuardsBusyAndCaptures(down('if (busy) return; e.currentTarget.setPointerCapture(e.pointerId);')), true);
-  assert.equal(downGuardsBusyAndCaptures(down('e.currentTarget.setPointerCapture(e.pointerId);')), false);
-  assert.equal(downGuardsBusyAndCaptures(down('if (busy) return; e.setPointerCapture(e.pointerId);')), false);
-  assert.equal(convertsViaCurrentTarget('figurePointToMm(e, e.currentTarget.getBoundingClientRect(), t)'), true);
-  assert.equal(convertsViaCurrentTarget('figurePointToMm(e, e.target.getBoundingClientRect(), t)'), false);
-  assert.equal(convertsViaCurrentTarget('figurePointToMm(e, document.body.getBoundingClientRect(), t)'), false);
-  const ok = 'onPointerMove={e => { if (a?.pointerId === e.pointerId) setLive(1); }}\n onPointerUp={e => { if (from?.pointerId !== e.pointerId) return; go(); }}\n onPointerCancel={e => { if (a?.pointerId !== e.pointerId) return; z(); }}>';
-  assert.equal(matchesPointerId(ok), true);
-  assert.equal(matchesPointerId(ok.replace('a?.pointerId === e.pointerId', 'a')), false);
-  assert.equal(matchesPointerId(ok.replace('from?.pointerId !== e.pointerId', 'false')), false);
-  assert.equal(matchesPointerId(ok.replace('a?.pointerId !== e.pointerId', 'false')), false);
+  const rectOk = 'const pickRectNow = showDxf ? activePickRect(imported) : null; <L pickRect={pickRectNow} />';
+  assert.equal(passesActiveRectOfImported(rectOk), true);
+  assert.equal(passesActiveRectOfImported(rectOk.replace('activePickRect(imported)', 'activePickRect(dxf)')), false);
+  assert.equal(passesActiveRectOfImported(rectOk.replace('pickRect={pickRectNow}', 'pickRect={null}')), false);
+  const downOk = '  function onPointerDown(e) {\n    if (busy || x) return;\n    e.currentTarget.setPointerCapture(e.pointerId);\n    const rect = e.currentTarget.getBoundingClientRect();\n    g = figurePointToMm(e, rect, t);\n  }\n';
+  assert.equal(downGuardsBusyAndCaptures(downOk), true);
+  assert.equal(downGuardsBusyAndCaptures(downOk.replace('if (busy || x) return;', '')), false);
+  assert.equal(downGuardsBusyAndCaptures(downOk.replace('e.currentTarget.setPointerCapture', 'e.setPointerCapture')), false);
+  assert.equal(downGuardsBusyAndCaptures(downOk.replace('e.currentTarget.getBoundingClientRect()', 'e.target.getBoundingClientRect()')), false);
+  assert.equal(downGuardsBusyAndCaptures(downOk.replace('figurePointToMm(e, rect, t)', 'figurePointToMm(e, document.body.getBoundingClientRect(), t)')), false);
+  const idOk = '  function onPointerMove(e) {\n    const p = pointers.current.get(e.pointerId);\n    if (!p) return;\n    if (e.pointerId === g.id) go();\n  }\n'
+    + '  function onPointerEnd(e, commit) {\n    const p = pointers.current.get(e.pointerId);\n    if (!p) return;\n    const mine = g && (g.id === e.pointerId || g.ids?.includes(e.pointerId));\n  }\n';
+  assert.equal(matchesPointerId(idOk), true);
+  assert.equal(matchesPointerId(idOk.replace('e.pointerId === g.id', 'true')), false);
+  assert.equal(matchesPointerId(idOk.replace('g.id === e.pointerId || g.ids?.includes(e.pointerId)', 'true')), false);
+  assert.equal(matchesPointerId(idOk.replace('if (!p) return;', '')), false);
   assert.equal(importResultShowsHintAndSummary('{DETAIL_HELPER_TEXT.pickHint} pickSummaryOf(state)'), true);
   assert.equal(importResultShowsHintAndSummary('pickSummaryOf(state)'), false);
   assert.equal(importResultShowsHintAndSummary('{DETAIL_HELPER_TEXT.pickHint}'), false);
 });
 
-test('【配線】PickLayer: 移動中は部品内 state だけ・離したときだけ onPick・枠は pickOverlayStyle', () => {
+test('【配線】FigureGestureLayer: 移動中は部品内 state と svg の CSS だけ・離したときだけ onPick／onView・枠は pickOverlayStyle', () => {
   const body = pickLayerBody();
-  assert.ok(body, 'PickLayer が見つからない');
+  assert.ok(body, 'FigureGestureLayer が見つからない');
   assert.ok(moveTouchesOnlyLocalState(body), body);
-  assert.ok(upCommitsViaPickRectFromDrag(body), body);
+  assert.ok(endCommitsOnlyOnRelease(body), body);
   assert.ok(framesViaPickOverlayStyle(body), body);
 });
 
@@ -157,21 +164,29 @@ test('【配線】AutoScaledFigure: overlay?.(t, …) を relative の div の�
 });
 
 test('【検出力】判定は壊れた配線を落とす（overlay を常に渡す・移動で親 state を触る・pickedComponentRows を通さない・解除を外す・変換の作り直し）', () => {
-  assert.equal(overlayOnlyWhenScene('overlay={showDxf && imported?.scene ? t => <X/> : undefined}'), true);
-  assert.equal(overlayOnlyWhenScene('overlay={t => <PickLayer t={t} />}'), false);
-  assert.equal(overlayPassesFigureTransform('overlay={showDxf ? t => <PickLayer t={t} pickRect={r} /> : undefined}'), true);
-  assert.equal(overlayPassesFigureTransform('overlay={showDxf ? () => <PickLayer t={makeTransform(b, s)} /> : undefined}'), false);
+  const ovOk = 'overlay={(t, info) => (\n <FigureGestureLayer t={t} info={info} view={v} canPick={showDxf && !!imported?.scene} />\n )}';
+  assert.equal(overlayGivenBothTabs(ovOk), true);
+  assert.equal(overlayGivenBothTabs('overlay={showDxf ? (t, info) => <FigureGestureLayer t={t} info={info} /> : undefined}'), false);
+  assert.equal(overlayGivenBothTabs(ovOk.replace('canPick={showDxf && !!imported?.scene}', 'canPick')), false);
+  assert.equal(overlayPassesFigureTransform(ovOk), true);
+  assert.equal(overlayPassesFigureTransform(ovOk.replace('t={t}', 't={makeTransform(b, s)}')), false);
 
-  const move = body => `onPointerMove={e => { ${body} }}\n      onPointerUp={x}`;
-  assert.equal(moveTouchesOnlyLocalState(move('if (a) setLive(f(e));')), true);
-  assert.equal(moveTouchesOnlyLocalState(move('if (a) { setLive(f(e)); setDxf(g); }')), false);
-  assert.equal(moveTouchesOnlyLocalState(move('if (a) { setLive(f(e)); onPick(r); }')), false);
-  assert.equal(moveTouchesOnlyLocalState(move('if (a) setPickRect(f(e));')), false);
+  const move = inner => `  function onPointerMove(e) {\n${inner}\n  }\n`;
+  const moveOk = 'if (a) setLive(f(e)); else svgRef.current.style.transform = `x`;';
+  assert.equal(moveTouchesOnlyLocalState(move(moveOk)), true);
+  assert.equal(moveTouchesOnlyLocalState(move(`${moveOk} setDxf(g);`)), false);
+  assert.equal(moveTouchesOnlyLocalState(move(`${moveOk} onPick(r);`)), false);
+  assert.equal(moveTouchesOnlyLocalState(move(`${moveOk} onView(v);`)), false);
+  assert.equal(moveTouchesOnlyLocalState(move(`${moveOk} setImportView(v);`)), false);
+  assert.equal(moveTouchesOnlyLocalState(move('setLive(f(e));')), false); // svg の CSS が無い
   assert.equal(moveTouchesOnlyLocalState('なし'), false);
 
-  const up = inner => `onPointerUp={e => { ${inner} }}\n      onPointerCancel={y}`;
-  assert.equal(upCommitsViaPickRectFromDrag(up('const r = pickRectFromDrag(a, b); if (r) onPick(r);')), true);
-  assert.equal(upCommitsViaPickRectFromDrag(up('onPick(clipFromDrag(a, b));')), false);
+  const end = inner => `  function onPointerEnd(e, commit) {\n${inner}\n  }\n`;
+  const endOk = 'if (!commit) { setLive(null); endDragStyle(v); }\nelse if (r) { const rect = pickRectFromDrag(a, b); if (rect) onPick(rect); }\nelse if (p) onView(panView(1));\nelse if (q) onView(pinchView(1));';
+  assert.equal(endCommitsOnlyOnRelease(end(endOk)), true);
+  assert.equal(endCommitsOnlyOnRelease(end(endOk.replace('onPick(rect)', 'onPick(clipFromDrag(a, b))'))), false);
+  assert.equal(endCommitsOnlyOnRelease(end(endOk.replace('{ setLive(null); endDragStyle(v); }', '{ setLive(null); onView(null); }'))), false); // 取り消しで確定する
+  assert.equal(endCommitsOnlyOnRelease(end(endOk.replace('onView(panView(1))', 'noop()'))), false);
 
   assert.equal(framesViaPickOverlayStyle('const s = pickOverlayStyle(live ?? pickRect, t); <div className="dthlp-pdf-clip" />'), true);
   assert.equal(framesViaPickOverlayStyle('const s = pickOverlayStyle(pickRect, t); <div className="dthlp-pdf-clip" />'), false);

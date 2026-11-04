@@ -128,7 +128,11 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   pdfClip: '範囲（pt。ページ左上が原点）', pdfClipFields: Object.freeze({ x: 'x', y: 'y', w: '幅', h: '高さ' }),
   pdfDragHint: 'ページ画像をドラッグして、写す範囲を選んでください', pdfExtract: '抽出', pdfNoPage: 'ページを読み込んでいます',
   // 矩形で成分を絞る（S7c。DXF・PDF 共通）
-  pickHint: 'プレビューをドラッグして、矩形に収まる成分を選んでください', pickClear: '矩形を解除',
+  pickHint: 'プレビューを長押ししてからドラッグして、矩形に収まる成分を選んでください', pickClear: '矩形を解除',
+  // プレビューのズーム／パン（S7d）
+  viewAll: '全体', viewFitRect: '矩形に寄せる',
+  gestureHint: 'ドラッグ＝移動・長押し後のドラッグ＝矩形・ピンチ／ホイール＝拡大縮小',
+  gestureHintPen: 'ドラッグ＝移動・ピンチ／ホイール＝拡大縮小',
   pickSummary: (inRect, total, selected) => `矩形内 ${inRect} ／ 全 ${total} 成分・選択 ${selected}`,
   // DXF のレイヤ on/off（S7d）
   layers: 'レイヤ', layersAllOn: '全部 on',
@@ -1066,6 +1070,7 @@ export async function loadDxf({ bytes, fileName, digest }) {
     ok: true,
     dxf: {
       fileName: baseNameOf(fileName), sha256, noDigest, encoding: read.encoding, parsed: read.parsed, scene,
+      viewEpoch: {}, // プレビューの view の鍵（読込みごとに新しい。sha256 は空になりうるので使わない）。単位変更で作り直し、レイヤ切替は引き継ぐ
       unitText: '', selected: [], maker: '', series: '', licenseNote: '',
     },
   };
@@ -1081,7 +1086,7 @@ export function setDxfUnit(dxf, unitText) {
   }
   const scene = buildDxfScene(dxf.parsed, { unitFactor });
   if (!scene.ok) return { dxf, error: describeDxfReject(scene.error) };
-  return { dxf: { ...dxf, unitText: text, scene, selected: [] }, error: null };
+  return { dxf: { ...dxf, unitText: text, scene, selected: [], viewEpoch: {} }, error: null };
 }
 
 /**
