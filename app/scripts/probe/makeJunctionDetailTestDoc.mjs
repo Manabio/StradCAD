@@ -11,7 +11,10 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { runInAction } from 'mobx';
-import { Project, CenterLineType, Discipline, OpeningCategory, edgeKey } from '../../src/core.js';
+import { Project, CenterLineType, Discipline, OpeningCategory, edgeKey, ceilingCutHeightMmOf } from '../../src/core.js';
+import { planSolidsLayerPrimitivesUp, visiblePlanPrimitives } from '../../src/plan/planSolidsLayerFilter.js';
+import { CEILING_STEP_DETAIL_ROLE } from '../../src/ceiling/ceilingStepDetailLines.js';
+import { LodLevel } from '../../src/viewport.js';
 import { serializeGraph, serializeStructCLs, serializePlanes } from '../../src/graphSnapshot.js';
 import { buildDocumentJson } from '../../src/storage/documentFile.js';
 import { runFinishExitBoundary } from '../../src/finish/finishBoundary.js';
@@ -79,7 +82,8 @@ const stepNose = stepNoseFigure(KEY_ST);
 stepNose.label = '段鼻 出120 厚40＋見切り30（差し替え確認用）';
 // (5) 天井の見切り（ceilingStep。S8b-4a）: 低い側の天井面から 出 150 → 厚 40 → 見切り（内へ 120・上へ 30・内へ 30）→ 高い側の天井面まで伸縮。形状差 150 > 100 なので壁面上の天井段差の縦線が差し替わる。
 const KEY_CS = 'df-jn-ceilstep';
-const ceilStep = ceilingNoseFigure(KEY_CS, { overhang: 150 });
+const CS_OVERHANG = 150;
+const ceilStep = ceilingNoseFigure(KEY_CS, { overhang: CS_OVERHANG });
 ceilStep.label = '天井の見切り 出150 厚40＋見切り30（差し替え確認用）';
 
 // ---- 構築 ----
@@ -118,6 +122,24 @@ kamiagari.setOverride('ceilingHeight', '1800');
 {
   const { zones, zoneId } = createZone(graph, yoshitsu, [cellKey(Xz, Y0, X2, Yb)], { heightMm: 2100, shape: 'flat', dims: [] });
   yoshitsu.setCeilingZones(zones.map(z => (z.id === zoneId ? new CeilingZone({ ...z.toData(), detailRefs: { [DetailSlot.CEILING_STEP]: KEY_CS } }) : z)));
+}
+
+// L 字の部屋（8b-4c C2。天伏の見切りの線の入隅・壁で止まる端の目視用。既存の部屋・壁・帯とは離れた位置＝x 8500..11500・y 4000..7000）。
+// 3 セル（A=西北・B=東北・D=東南。西南 C は無い＝入隅の頂点 (XM, YM)）。A が低い側（部屋 2400・部屋単位で ceilingStep を割当て）、
+// B・D が高い側の区画（2700）。段差は A|B の x=XM（y 4000..5500）。その南端（y=YM）の先は、低い側 A が壁（A の南外壁）で終わり、
+// 高い側 D だけが続く（D の西外壁）＝「低い面の角の片側が壁で高い面だけが先へ続く角」。見切りの線は壁の面を越えて食み出さない。
+// 既存の部屋と CL を共有しない（既存の検査の壁・展開の帯を変えない）。
+const XL = addCL(CenterLineType.VERTICAL, 8500);
+const XM = addCL(CenterLineType.VERTICAL, 10000);
+const XR = addCL(CenterLineType.VERTICAL, 11500);
+const YT = addCL(CenterLineType.HORIZONTAL, 4000);
+const YM = addCL(CenterLineType.HORIZONTAL, 5500);
+const YB = addCL(CenterLineType.HORIZONTAL, 7000);
+const lShape = graph.addRoom(new Set([cellKey(XL, YT, XM, YM), cellKey(XM, YT, XR, YM), cellKey(XM, YM, XR, YB)]), 'L字');
+lShape.setOverride('ceilingHeight', '2400');
+{
+  const { zones } = createZone(graph, lShape, [cellKey(XM, YT, XR, YM), cellKey(XM, YM, XR, YB)], { heightMm: 2700, shape: 'flat', dims: [] });
+  lShape.setCeilingZones(zones);
 }
 
 // 構造反映が storage/db.js saveFloor を直呼びするため、最小のインメモリ IDB を差す（makeFrameOnlySectionTestDoc.mjs と同じ）。
@@ -186,6 +208,8 @@ check(!!door.opening && !!win.opening, '戸 1・窓 1 を配置');
 ldk.setDetailRefs({ [DetailSlot.FLOOR_WALL]: KEY_FW, [DetailSlot.WALL_CEILING]: KEY_WC });
 // 床の段差は高い側の部屋（小上がり）に割り当てる（S8b-3）
 kamiagari.setDetailRefs({ [DetailSlot.FLOOR_STEP]: KEY_ST, [DetailSlot.CEILING_STEP]: KEY_CS });
+// L 字の部屋は低い側（部屋の残り＝A）に天井の見切りを割り当てる（部屋単位）
+lShape.setDetailRefs({ [DetailSlot.CEILING_STEP]: KEY_CS });
 
 // ---- 保存 ----
 const catalogs = withEntries(emptyBundle(), CatalogKind.DETAIL_FIGURE, [baseboard, cornice, counterTop, stepNose, ceilStep]);
@@ -449,3 +473,42 @@ check(Object.values(withRefs.kneeCapBy).some(c => c['y-750(50下)'] + c['y-780(2
   check(headTotals.all > 0 && headTotals.detail === headTotals.all, '上枠の rect がすべて source=detail（組込みの上枠が暗黙の既定）');
   check(headTotals.errors.length === 0, `片開き戸の暗黙の既定は通知しない（${headTotals.errors.join('／')}）`);
 }
+
+// ---- 天伏の見切りの線（8b-4c C2）: 洋室（区画）・小上がり（部屋単位）・L 字の部屋の見切りの線と CL の線の隠れ ----
+{
+  clearOverlays();
+  setOverlay(CatalogKind.DETAIL_FIGURE, { doc: figs, user: detailBuiltins });
+  const prims = planSolidsLayerPrimitivesUp({ graph: G, cutZ: ceilingCutHeightMmOf(P.planes[0]), project: P, materialMap });
+  clearOverlays();
+  const lines = prims.filter(p => p.kind === 'line');
+  const roleLines = lines.filter(p => p.source.role === CEILING_STEP_DETAIL_ROLE);
+  const near = (a, b) => Math.abs(a - b) <= 0.5;
+  const vertical = (p, x) => near(p.points[0], x) && near(p.points[2], x);
+  const hiddenCl = x => lines.filter(p => p.hiddenAtDetail && p.source.kind === 'ceiling' && vertical(p, x));
+  console.log('見切りの線（role）:', JSON.stringify(roleLines.map(p => p.points)));
+  console.log('詳細で隠す CL の線 x=5500/1500/10000:', hiddenCl(5500).length, hiddenCl(1500).length, hiddenCl(10000).length);
+  check(roleLines.length > 0 && roleLines.every(p => p.detailOnly === true), '見切りの線（role）が出て、詳細 LOD だけの印つき');
+  check(roleLines.some(p => vertical(p, 5350)) && hiddenCl(5500).length > 0, '洋室の区画: x=5350 に見切りの線・x=5500 の CL の線は詳細で隠す');
+  check(roleLines.some(p => vertical(p, 1650)) && hiddenCl(1500).length > 0, '小上がり: x=1650 に見切りの線・x=1500 の CL の線は詳細で隠す');
+  check(roleLines.some(p => vertical(p, 10150)) && hiddenCl(10000).length > 0, 'L 字の部屋: x=10150 に見切りの線・x=10000 の CL の線は詳細で隠す');
+  // L 字の入隅の端（低い側 A が壁で終わる y=YM=5500 の先）: 見切りの線は壁の面を越えて y 方向へ食み出さない（A の南外壁の外面は 5500+壁厚の半分）
+  const lLines = roleLines.filter(p => Math.min(p.points[0], p.points[2]) >= 8500);
+  console.log('L 字の見切りの線:', JSON.stringify(lLines.map(p => p.points)));
+  // A の南外壁（軸 y=YM・x が A の範囲）の部屋側の面＝壁の軸から材の範囲の部屋側（y 小さい側）の端。読み戻したグラフの壁から導く
+  const southOfA = G.walls.find(w => !w.isVertical && w.isExteriorWall && Math.abs(w.axisCL.effectiveValue - YM.value) < 1
+    && Math.min(w.coord1, w.coord2) <= XM.value && Math.max(w.coord1, w.coord2) >= XL.value);
+  // 壁は CL を中心に壁厚 2×(材の範囲の幅) で立つ（実測: 材の範囲 5500..5557.5＝幅 57.5 → 壁厚 115・部屋側の面 5442.5）
+  const innerFaceY = YM.value - (southOfA.materialRange.hi - southOfA.materialRange.lo);
+  console.log(`A の南外壁の部屋側の面 y=${innerFaceY}`);
+  const EPS_MM = 0.5;
+  check(lLines.length > 0 && lLines.filter(p => vertical(p, 10150)).every(p => Math.max(p.points[1], p.points[3]) <= innerFaceY + EPS_MM),
+    `L 字: 入隅の端で見切りの線が壁の部屋側の面（y=${innerFaceY}）を越えない（x=10150 の線は y ≤ 面+ε）`);
+  check(lLines.some(p => near(p.points[0], XM.value) && near(p.points[2], XM.value + CS_OVERHANG) && near(p.points[1], innerFaceY) && near(p.points[3], innerFaceY)),
+    `L 字: 壁で止まる端に見切りの木口の線 [${XM.value},${innerFaceY},${XM.value + CS_OVERHANG},${innerFaceY}] が出る`);
+  // LOD の絞り: 詳細は CL の線を除き role 線を出す、標準は role 線を出さず CL の線を出す
+  const detail = visiblePlanPrimitives(prims, LodLevel.DETAIL), standard = visiblePlanPrimitives(prims, LodLevel.STANDARD);
+  check(!detail.some(p => p.hiddenAtDetail) && detail.some(p => p.source?.role === CEILING_STEP_DETAIL_ROLE), '詳細 LOD: 隠す印の線は描かず、見切りの線を描く');
+  check(standard.some(p => p.hiddenAtDetail) && !standard.some(p => p.source?.role === CEILING_STEP_DETAIL_ROLE), '標準 LOD: CL の線を描き、見切りの線は描かない');
+}
+
+if (failed) process.exit(1);

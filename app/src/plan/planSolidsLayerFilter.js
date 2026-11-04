@@ -23,7 +23,9 @@ import { resolveTopStoryHeightMm } from '../floorHeights.js';
 import { planSolids } from './planSolids.js';
 import { planSectionFigure } from './planSectionFigure.js';
 import { planSectionFigureUp } from './planSectionUp.js';
-import { LodLevel } from '../viewport.js';
+import { ceilingStepDetailSpecs, hideCeilingStepDatumLines, ceilingStepDetailCacheTag } from '../ceiling/ceilingStepDetailLines.js';
+import { minDrawnMm } from '../elevation/elevationStyle.js';
+import { LodLevel, LOD_DETAIL_DENOM } from '../viewport.js';
 
 /**
  * 新レイヤが**自階**で描く線・ラベルの source.kind（唯一の場所）。S4＝梁・汎用立体、S5＝下屋（屋根）を加えた。
@@ -71,13 +73,14 @@ export function drawnPrimitives(prims, direction = 'down') {
 }
 
 /**
- * 表示する図形。詳細（DETAIL）は全部、他の LOD は詳細だけの図形（detailOnly。下屋の傾斜ラベル＝矢印・文字）を除く。
+ * 表示する図形。詳細（DETAIL）は詳細では隠す図形（hiddenAtDetail。天伏の面一の見切りの CL の線）を除いた全部、
+ * 他の LOD は詳細だけの図形（detailOnly。下屋の傾斜ラベル＝矢印・文字、天伏の見切りの線）を除く。
  * 線は全 LOD で出す。memo（graphComputed）は LOD に依らず、レイヤが viewport.lodLevel でここへ絞る。
- * @param {Array<{detailOnly?: boolean}>} prims planSolidsLayerPrimitives の結果
+ * @param {Array<{detailOnly?: boolean, hiddenAtDetail?: boolean}>} prims planSolidsLayerPrimitives の結果
  * @param {string} lod LodLevel
  */
 export function visiblePlanPrimitives(prims, lod) {
-  return lod === LodLevel.DETAIL ? prims : prims.filter(p => !p.detailOnly);
+  return lod === LodLevel.DETAIL ? prims.filter(p => !p.hiddenAtDetail) : prims.filter(p => !p.detailOnly);
 }
 
 /**
@@ -120,10 +123,11 @@ export function planSolidsLayerPrimitives({ graph, belowPeek = null, selfRiserOf
  * abovePeek.aboveAboveGraph＝N+2 の graph（無ければ null）。上階の層の階段の裏面・足元の壁の天端・段の到達辺へ aboveGraphOf で渡す（無ければ Q3）。
  * project があり graph が最上階（とその検討案）なら、主屋根・屋根区画の軒裏も足す（topRoofPlanRegions。軒の高さ＝最上階の階高
  * resolveTopStoryHeightMm＝最上階 FL〜軒桁上端。planSolids の opts.topRoof）。project なしは従来どおり（主屋根は描かない）。
- * @param {{graph: object|null, abovePeek?: {graph: object|null, floorHeightMm: number, aboveAboveGraph?: object|null}|null, aboveRiserOf?: (stair:object)=>number|null, project?: object|null}} args
+ * ceilingStepDetail＝天井の段差の見切りの線の材料（ceiling/ceilingStepDetailLines.js ceilingStepDetailSpecs の戻り値。無ければ null＝線なし）。
+ * @param {{graph: object|null, abovePeek?: {graph: object|null, floorHeightMm: number, aboveAboveGraph?: object|null}|null, aboveRiserOf?: (stair:object)=>number|null, project?: object|null, ceilingStepDetail?: {groups: object[], hiddenDatum: object[]}|null}} args
  * @returns {import('./planSolids.js').Solid[]}
  */
-export function planSolidsLayerSolidsUp({ graph, abovePeek = null, aboveRiserOf = () => null, project = null }) {
+export function planSolidsLayerSolidsUp({ graph, abovePeek = null, aboveRiserOf = () => null, project = null, ceilingStepDetail = null }) {
   if (!graph) return [];
   const topRegions = topRoofPlanRegions(graph, project);
   const topRoof = topRegions.length > 0 ? { regions: topRegions, eaveZMm: resolveTopStoryHeightMm(project) } : null;
@@ -137,6 +141,7 @@ export function planSolidsLayerSolidsUp({ graph, abovePeek = null, aboveRiserOf 
     riserOf: aboveRiserOf, belowGraphOf: g => (g === aboveGraph ? graph : null),
     aboveGraphOf: g => (g === aboveGraph ? aboveAboveGraph : null), ceilings: true, lookUp: true,
     topRoof,
+    ceilingStepDetail,
   });
 }
 
@@ -153,11 +158,17 @@ export function ownLayerBeamSolids(solids) {
  * 見上げの線（自階＋直上階。planSectionFigureUp）。cutZ＝階の切断高（自階 FL からの mm。天井の無い所の切断高）。graph なし・cutZ が有限でなければ空配列。
  * 切断高は部屋ごと（部屋の天井面の最低点の直下。壁は天井のある側の低い方。ceiling/ceilingCutHeight.js。裁定 2026-10-22）。
  * 全域が階の値と同じ（uniform）なら数値の cutZ で解く（出力不変）。
+ * materialMap＝材マスタ（天井の段差の部位図の fit に使う。CeilingModeState.materialMap。省略・null は材を引く図が解けない＝従来どおり CL の線だけ）。
+ * 天井の段差の部位図（ceilingStep）の割当てがあれば、高い側の天井面に見切りの線（詳細 LOD だけ）を足し、面一の見切りなら CL の線を詳細 LOD で隠す
+ * （ceiling/ceilingStepDetailLines.js）。割当てが無ければ出力は従来と同じ。
  * @returns {Primitive[]}
  */
-export function planSolidsLayerPrimitivesUp({ graph, abovePeek = null, aboveRiserOf = () => null, cutZ, project = null }) {
+export function planSolidsLayerPrimitivesUp({ graph, abovePeek = null, aboveRiserOf = () => null, cutZ, project = null, materialMap = null }) {
   if (!graph || !Number.isFinite(cutZ)) return [];
-  const solids = planSolidsLayerSolidsUp({ graph, abovePeek, aboveRiserOf, project });
+  const surfaces = ceilingSurfacesOf(graph); // 印付け（markSameHeightCeilingBoundaries）と見切りの線の材料で共用する
+  // 紙上の最小描画幅は詳細 LOD の分母（上限）で換算する（分母を固定するので memo の鍵が拡大縮小で割れない）
+  const stepDetail = ceilingStepDetailSpecs(graph, surfaces, { materialMap, minDrawnMm: minDrawnMm(LOD_DETAIL_DENOM) });
+  const solids = planSolidsLayerSolidsUp({ graph, abovePeek, aboveRiserOf, project, ceilingStepDetail: stepDetail.groups.length > 0 ? stepDetail : null });
   // 下がり梁の判定には、いま作った自階の梁の立体を使い回す（resolver が梁を立体化し直さない）
   const resolver = ceilingCutResolverOf(graph, { baseCutMm: cutZ, beamSolids: ownLayerBeamSolids(solids) });
   const figure = resolver.uniform
@@ -165,7 +176,8 @@ export function planSolidsLayerPrimitivesUp({ graph, abovePeek = null, aboveRise
     : planSectionFigureUp(solids, resolver.cutZAt, { cutRange: resolver.range });
   const drawn = drawnPrimitives(figure, 'up');
   // 同じ高さで隣り合う部屋の天井の境目は細線グレー（裁定 2026-10-10）。見下げの経路は通らない
-  const marked = markSameHeightCeilingBoundaries(drawn, ceilingSurfacesOf(graph));
+  // 続けて、天井の段差の見切りの線に detailOnly・面一の見切りの CL の線に hiddenAtDetail を付ける（hideCeilingStepDatumLines。印付きの線は触らない）
+  const marked = hideCeilingStepDatumLines(markSameHeightCeilingBoundaries(drawn, surfaces), stepDetail.hiddenDatum);
   // 穴の縁は中線（裁定 2026-10-18）。対象は「見える穴」＝上階の床の穴（S3 で壁の面まで狭めたもの）から自階の天井面を引いたもの
   // （両側が天井の境は外形にならない）。上階の床の立体が無ければ何もしない
   const upperFloor = solids.find(s => s.kind === 'floor' && (s.source.layerFloorZ ?? 0) > 0);
@@ -195,14 +207,16 @@ export function isCenterLineDragging(graph) {
  * @param {object} graph
  * @param {object|null|undefined} belowPeek  direction 'down' は直下階の peek、'up' は直上階の peek（undefined＝未解決／null＝その階なし）
  * @param {'down'|'up'} [direction]
+ * @param {object|null} [materialMap] 材マスタ（direction 'up' で天井の段差の部位図があるとき、鍵に有無が入る。ceilingStepDetailCacheTag）
  * @returns {{home: object, key: string, peek: object|null, cutZ: number}}
  */
-export function planSolidsLayerCacheSpec(graph, belowPeek, direction = 'down') {
+export function planSolidsLayerCacheSpec(graph, belowPeek, direction = 'down', materialMap = null) {
   const peek = belowPeek && belowPeek.activePlaneId === graph.plane.id ? belowPeek : null;
   // 見上げは天伏専用の切断高（裁定 2026-10-10）、見下げは平面の切断高
   const cutZ = direction === 'up' ? ceilingCutHeightMmOf(graph.plane) : planCutHeightMmOf(graph.plane);
   // 見上げは N+2（peek.aboveAboveGraph）も入力なので鍵に入れる（見下げは N+2 を使わない＝鍵不変）
-  const aboveTail = direction === 'up' ? `:${peek?.aboveAboveGraph?.plane?.id ?? '-'}` : '';
+  // 天井の段差の部位図の割当てがあれば overlay の世代と材マスタの有無も入力（ceilingStepDetailCacheTag。割当てが無ければ ''＝鍵は従来と同じ）
+  const aboveTail = direction === 'up' ? `:${peek?.aboveAboveGraph?.plane?.id ?? '-'}${ceilingStepDetailCacheTag(graph, materialMap)}` : '';
   const tail = `${graph.plane.id}:${cutZ}:${peek?.graph?.plane?.id ?? (belowPeek === undefined ? 'pending' : '-')}${aboveTail}`;
   return {
     home: peek?.graph ?? graph,
@@ -222,16 +236,17 @@ export function planSolidsLayerCacheSpec(graph, belowPeek, direction = 'down') {
  * @param {{graph: object|null, belowPeek: object|null|undefined, abovePeek?: object|null|undefined, direction?: 'down'|'up', prevPrims?: Primitive[]|null,
  *   memo: (home: object, key: string, compute: () => Primitive[]) => Primitive[],
  *   selfRiserOf?: (stair: object) => number|null,
- *   aboveRiserOf?: (stair: object) => number|null  direction 'up' の上階の階段の蹴上（上階の plane で解く）}} args
+ *   aboveRiserOf?: (stair: object) => number|null  direction 'up' の上階の階段の蹴上（上階の plane で解く）,
+ *   materialMap?: object|null  direction 'up' の材マスタ（天井の段差の部位図の fit。省略・null は従来どおり）}} args
  * @returns {Primitive[]|null}
  */
-export function planSolidsLayerResolve({ graph, belowPeek, abovePeek, direction = 'down', prevPrims = null, memo, selfRiserOf, aboveRiserOf, project = null }) {
+export function planSolidsLayerResolve({ graph, belowPeek, abovePeek, direction = 'down', prevPrims = null, memo, selfRiserOf, aboveRiserOf, project = null, materialMap = null }) {
   if (!graph) return null;
   if (isCenterLineDragging(graph)) return prevPrims;
   if (direction === 'up') {
-    const spec = planSolidsLayerCacheSpec(graph, abovePeek, 'up');
+    const spec = planSolidsLayerCacheSpec(graph, abovePeek, 'up', materialMap);
     // project（最上階の判定と軒の高さ）は compute の中で読むので、階の増減・階高の変更は memo（computed）が追う
-    return memo(spec.home, spec.key, () => planSolidsLayerPrimitivesUp({ graph, abovePeek: spec.peek, aboveRiserOf, cutZ: spec.cutZ, project }));
+    return memo(spec.home, spec.key, () => planSolidsLayerPrimitivesUp({ graph, abovePeek: spec.peek, aboveRiserOf, cutZ: spec.cutZ, project, materialMap }));
   }
   const { home, key, peek, cutZ } = planSolidsLayerCacheSpec(graph, belowPeek);
   return memo(home, key, () => planSolidsLayerPrimitives({ graph, belowPeek: peek, selfRiserOf, cutZ }));

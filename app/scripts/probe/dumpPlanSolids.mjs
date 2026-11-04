@@ -45,8 +45,7 @@ const inRects = (rects, x, y) => rects.some(h => x >= h.x1 - TOL && x <= h.x2 + 
 const DETAIL_ROLE = 'ceilingStepDetail';
 const summary = [];
 let bad = 0;
-// 材マスタ（アプリと同じ loadMaterialMap）。planSolidsLayerPrimitivesUp が materialMap を受け取るようになったら、
-// 下の呼び出し（upPrims）の引数へ materialMap を渡す。現時点の関数は受け取らないので渡さない。
+// 材マスタ（アプリと同じ loadMaterialMap）。下の呼び出し（upPrims）の materialMap へ渡す（天伏の SceneLayers が mode.materialMap を渡すのと同じ）。
 const m0 = performance.now();
 const materialMap = await loadMaterialMap();
 const materialMapMs = Math.round(performance.now() - m0);
@@ -76,7 +75,7 @@ for (const src of sources) {
       const u0 = performance.now();
       // 上階の層の階段の蹴上は上階の plane で解く（PlanSolidsLayer.jsx と同じ。旧版は selfRiserOf を渡して上階の階段の段・裏面が出なかった）
       const aboveRiserOf = above ? s => stairRiserOf(s, project, above) : undefined;
-      const upPrims = planSolidsLayerPrimitivesUp({ graph, abovePeek, aboveRiserOf, cutZ: ceilingCutHeightMmOf(plane), project }); // project＝最上階の主屋根・屋根区画の軒裏用（PlanSolidsLayer.jsx と同じ）
+      const upPrims = planSolidsLayerPrimitivesUp({ graph, abovePeek, aboveRiserOf, cutZ: ceilingCutHeightMmOf(plane), project, materialMap }); // project＝最上階の主屋根・屋根区画の軒裏用（PlanSolidsLayer.jsx と同じ）
       const upMs = performance.now() - u0;
       const upLines = upPrims.filter(p => p.kind === 'line').map(p => ({
         key: p.key, cls: p.cls, kind: p.source.kind, id: p.source.id, layerFloorZ: p.source.layerFloorZ ?? 0,

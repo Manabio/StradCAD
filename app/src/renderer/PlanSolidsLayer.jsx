@@ -32,7 +32,7 @@ const GRAY_LINE_STYLES = new Set([CEILING_BOUNDARY_STYLE, SOFFIT_JOINT_STYLE]);
  * direction 'up'（天伏。SceneLayers が planSectionDirection(appMode) で渡す）は見上げ: 自階＋直上階（abovePeek）を解き、注記は自階の×なし（自階の床の穴は N の天井と無関係）で、
  * 直上階の吹抜け・昇降路と階段吹抜け＝続きの無い階段の足元の上の一点鎖線の×だけ（`.claude/plan-section.md`「見上げ（天伏）」・`.claude/ceiling-model.md` S13b）。省略・'down' は従来どおり。
  */
-export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek, abovePeek, direction = 'down' }) => {
+export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek, abovePeek, direction = 'down', materialMap = null }) => {
   const prevRef = useRef(null); // { planeId, prims }: ドラッグ中に描き続ける前回の線（階が違えば使わない）
   if (!graph) return null;
   const resolved = planSolidsLayerResolve({
@@ -41,6 +41,7 @@ export const PlanSolidsLayer = observer(({ graph, project, viewport, belowPeek, 
     selfRiserOf: s => stairRiserOf(s, project, graph.plane),
     aboveRiserOf: s => stairRiserOf(s, project, abovePeek.graph.plane),
     project, // 見上げの最上階だけ主屋根・屋根区画の軒裏に使う（最上階の判定と軒の高さ）
+    materialMap, // 見上げの天井の段差の部位図（見切りの線）の fit に使う材マスタ（天伏だけ渡る）
   });
   if (resolved) prevRef.current = { planeId: graph.plane.id, direction, prims: resolved };
   const prims = resolved ? visiblePlanPrimitives(resolved, viewport.lodLevel) : [];

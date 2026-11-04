@@ -42,7 +42,7 @@ test('【不変条件】PlanSolidsLayer.jsx の import は react・mobx・react-
 test('【配線】PlanSolidsLayer.jsx は判断を planSolidsLayerResolve に任せ、memo は graphComputed・前回の線は ref（同じ階のものだけ）・蹴上は stairRiserOf（1行まるごと）', () => {
   assert.match(layer, /^\s*const resolved = planSolidsLayerResolve\(\{\s*$/m);
   assert.match(layer, /^\s*graph, belowPeek, abovePeek, direction, memo: graphComputed,\s*$/m, '見上げ（天伏）は direction と abovePeek を解決器へ渡す');
-  assert.match(layer, /^export const PlanSolidsLayer = observer\(\(\{ graph, project, viewport, belowPeek, abovePeek, direction = 'down' \}\) => \{\s*$/m, 'direction の既定は down（見下げ）');
+  assert.match(layer, /^export const PlanSolidsLayer = observer\(\(\{ graph, project, viewport, belowPeek, abovePeek, direction = 'down', materialMap = null \}\) => \{\s*$/m, 'direction の既定は down（見下げ）・materialMap の既定は null');
   assert.match(layer, /^\s*prevPrims: prevRef\.current\?\.planeId === graph\.plane\.id && prevRef\.current\.direction === direction \? prevRef\.current\.prims : null,\s*$/m, '前回の線は階と向きが同じときだけ');
   assert.match(layer, /^\s*selfRiserOf: s => stairRiserOf\(s, project, graph\.plane\),\s*$/m);
   assert.match(layer, /^\s*aboveRiserOf: s => stairRiserOf\(s, project, abovePeek\.graph\.plane\),\s*$/m, '見上げの最上の層＝上階の蹴上は上階の plane で解く');
@@ -60,14 +60,15 @@ test('【配線】planSolidsLayerFilter.js: 置き場・鍵・使う peek は pl
   assert.match(filter, /^\s*const peek = belowPeek && belowPeek\.activePlaneId === graph\.plane\.id \? belowPeek : null;\s*$/m);
   assert.match(filter, /^\s*const cutZ = direction === 'up' \? ceilingCutHeightMmOf\(graph\.plane\) : planCutHeightMmOf\(graph\.plane\);\s*$/m, '見上げは天伏専用の切断高、見下げは平面の切断高');
   assert.match(filter, /^\s*home: peek\?\.graph \?\? graph,\s*$/m);
-  assert.match(filter, /^\s*const aboveTail = direction === 'up' \? `:\$\{peek\?\.aboveAboveGraph\?\.plane\?\.id \?\? '-'\}` : '';\s*$/m, 'N+2 は見上げの鍵だけに入る');
+  assert.match(filter, /^\s*const aboveTail = direction === 'up' \? `:\$\{peek\?\.aboveAboveGraph\?\.plane\?\.id \?\? '-'\}\$\{ceilingStepDetailCacheTag\(graph, materialMap\)\}` : '';\s*$/m, 'N+2 と天井の段差の見切りの印（割当てがあるときだけ非空）は見上げの鍵だけに入る');
   assert.match(filter, /^\s*const tail = `\$\{graph\.plane\.id\}:\$\{cutZ\}:\$\{peek\?\.graph\?\.plane\?\.id \?\? \(belowPeek === undefined \? 'pending' : '-'\)\}\$\{aboveTail\}`;\s*$/m);
   assert.match(filter, /^\s*key: direction === 'up' \? `planSection:up:\$\{tail\}` : `planSection:\$\{tail\}`,\s*$/m, '見下げの鍵は planSection:…（従来のまま）、見上げは planSection:up:…');
   assert.match(filter, /^\s*if \(!graph\) return null;\s*$/m);
   assert.equal(count(filter, /belowPeek === undefined/g), 1, '未解決は鍵の pending だけで扱う（描かない分岐を持たない）');
-  assert.match(filter, /^\s*const spec = planSolidsLayerCacheSpec\(graph, abovePeek, 'up'\);\s*$/m, '見上げは abovePeek で置き場・鍵を決める');
-  assert.match(filter, /^\s*return memo\(spec\.home, spec\.key, \(\) => planSolidsLayerPrimitivesUp\(\{ graph, abovePeek: spec.peek, aboveRiserOf, cutZ: spec.cutZ, project \}\)\);\s*$/m, '最上階の主屋根の軒裏用に project を見上げの解決へ渡す（compute の中で読むので memo が階の増減を追う）');
+  assert.match(filter, /^\s*const spec = planSolidsLayerCacheSpec\(graph, abovePeek, 'up', materialMap\);\s*$/m, '見上げは abovePeek で置き場・鍵を決める（材マスタの有無も鍵に入る）');
+  assert.match(filter, /^\s*return memo\(spec\.home, spec\.key, \(\) => planSolidsLayerPrimitivesUp\(\{ graph, abovePeek: spec.peek, aboveRiserOf, cutZ: spec.cutZ, project, materialMap \}\)\);\s*$/m, '最上階の主屋根の軒裏用に project・天井の段差の部位図用に materialMap を見上げの解決へ渡す（compute の中で読むので memo が階の増減を追う）');
   assert.match(layer, /^\s*project, \/\/ 見上げの最上階だけ/m, 'PlanSolidsLayer.jsx は planSolidsLayerResolve へ project を渡す');
+  assert.match(layer, /^\s*materialMap, \/\/ 見上げの天井の段差の部位図/m, 'PlanSolidsLayer.jsx は planSolidsLayerResolve へ materialMap を渡す');
   assert.match(filter, /^\s*if \(isCenterLineDragging\(graph\)\) return prevPrims;\s*$/m);
   assert.match(filter, /^\s*return memo\(home, key, \(\) => planSolidsLayerPrimitives\(\{ graph, belowPeek: peek, selfRiserOf, cutZ \}\)\);\s*$/m);
   assert.match(filter, /^\s*return \(graph\?\.centerLines \?\? \[\]\)\.some\(cl => \(cl\.pendingDelta \?\? 0\) !== 0\);\s*$/m);
@@ -117,7 +118,8 @@ test('【配線】PlanSolidsLayer.jsx の LOD 分岐は visiblePlanPrimitives(re
 
 test('【配線】SceneLayers は <PlanSolidsLayer> を showPlanFigure で1行まるごとの形でゲートし、EquipmentSymbolLayer の前に置き、belowPlanPeek・abovePlanPeek を渡す。RoofPlanLayer・VoidLayer は使わない', () => {
   assert.match(scene,
-    /^\s*\{showPlanFigure && <PlanSolidsLayer graph=\{graph\} project=\{project\} viewport=\{viewport\} belowPeek=\{belowPlanPeek\} abovePeek=\{abovePlanPeek\} direction=\{planSectionDirection\(appMode\)\} \/>\}\s*$/m);
+    /^\s*\{showPlanFigure && <PlanSolidsLayer graph=\{graph\} project=\{project\} viewport=\{viewport\} belowPeek=\{belowPlanPeek\} abovePeek=\{abovePlanPeek\} direction=\{planSectionDirection\(appMode\)\} materialMap=\{appMode === 'ceiling' \? mode\?\.materialMap \?\? null : null\} \/>\}\s*$/m,
+    '材マスタは天伏（ceiling）のときだけ mode.materialMap を渡す（他のモードは null）');
   assert.match(scene, /^\s*shouldShowColumnOriginMarks, shouldShowEquipmentSymbols, planSectionDirection,\s*$/m, '向きの判断は planFigureVisibility.js の述語を使う');
   assert.match(scene, /^\s*import \{ PlanSolidsLayer \} from '\.\/PlanSolidsLayer\.jsx';\s*$/m);
   assert.equal(count(scene, /<PlanSolidsLayer\b/g), 1);
@@ -236,7 +238,14 @@ test('【配線】App.jsx の上階 peek の effect が abovePlanPeek を3状態
 
 test('【不変条件】planSolidsLayerFilter.js（純モジュール）は store.js・snap.js・.jsx・react-konva・graphDerived・mobx を import しない。描く種別の集合は1か所', () => {
   const imports = filter.split('\n').filter(l => /^\s*import\b/.test(l));
-  assert.equal(imports.length, 14);
+  assert.equal(imports.length, 16);
+  assert.match(filter, /^import \{ ceilingStepDetailSpecs, hideCeilingStepDatumLines, ceilingStepDetailCacheTag \} from '\.\.\/ceiling\/ceilingStepDetailLines\.js';$/m, '天伏の天井の段差の見切りの線（純モジュール）');
+  assert.match(filter, /^\s*const marked = hideCeilingStepDatumLines\(markSameHeightCeilingBoundaries\(drawn, surfaces\), stepDetail\.hiddenDatum\);\s*$/m, '面一の見切りの CL の線の印は、同じ高さの境目の印付けの直後（見上げの経路だけ）');
+  assert.equal(count(filter, /hideCeilingStepDatumLines\(/g), 1, '見下げの経路に通さない');
+  assert.equal(count(filter, /ceilingSurfacesOf\(/g), 1, '天井面は見上げの 1 回だけ求め、印付けと見切りの線で共用する');
+  assert.match(filter, /^\s*return lod === LodLevel\.DETAIL \? prims\.filter\(p => !p\.hiddenAtDetail\) : prims\.filter\(p => !p\.detailOnly\);\s*$/m, '詳細は hiddenAtDetail を除き、他の LOD は detailOnly を除く');
+  assert.match(filter, /minDrawnMm: minDrawnMm\(LOD_DETAIL_DENOM\)/, '最小描画幅は既存の minDrawnMm（elevationStyle）に詳細 LOD の分母を渡す（第二の書き方を作らない）');
+  assert.match(filter, /^import \{ minDrawnMm \} from '\.\.\/elevation\/elevationStyle\.js';$/m);
   assert.match(filter, /^import \{ topRoofPlanRegions \} from '\.\.\/structural\/roofFramingRegions\.js';$/m, '最上階の主屋根の軒裏の region（純モジュール）');
   assert.match(filter, /^import \{ resolveTopStoryHeightMm \} from '\.\.\/floorHeights\.js';$/m, '軒の高さ＝最上階の階高');
   assert.match(filter, /^import \{ markDroppedBeamLines \} from '\.\.\/ceiling\/droppedBeamStyle\.js';$/m);
@@ -251,11 +260,11 @@ test('【不変条件】planSolidsLayerFilter.js（純モジュール）は stor
   assert.match(filter, /^import \{ planSectionFigureUp \} from '\.\/planSectionUp\.js';$/m);
   assert.match(filter, /^import \{ ceilingSurfacesOf \} from '\.\.\/ceiling\/ceilingSurfaces\.js';$/m);
   assert.match(filter, /^import \{ markSameHeightCeilingBoundaries \} from '\.\.\/ceiling\/ceilingBoundaryStyle\.js';$/m);
-  assert.match(filter, /^\s*const marked = markSameHeightCeilingBoundaries\(drawn, ceilingSurfacesOf\(graph\)\);\s*$/m, '同じ高さの境界の印は見上げの経路だけ');
+  assert.match(filter, /markSameHeightCeilingBoundaries\(drawn, surfaces\)/, '同じ高さの境界の印は見上げの経路だけ（天井面は見切りの線と共用の surfaces）');
   assert.equal(count(filter, /markSameHeightCeilingBoundaries\(/g), 1, '見下げの経路に印を通さない');
   for (const line of imports) assert.ok(!/store\.js|snap\.js|\.jsx|react-konva|graphDerived|mobx/.test(line), `禁止の import: ${line}`);
   assert.match(filter, /^export const S4_DRAWN_KINDS = Object\.freeze\(\['beam', 'generic', 'roof'\]\);\s*$/m);
-  assert.match(filter, /^\s*return lod === LodLevel\.DETAIL \? prims : prims\.filter\(p => !p\.detailOnly\);\s*$/m);
+  assert.match(filter, /^\s*return lod === LodLevel\.DETAIL \? prims\.filter\(p => !p\.hiddenAtDetail\) : prims\.filter\(p => !p\.detailOnly\);\s*$/m);
   assert.match(filter, /^export const BELOW_DRAWN_KINDS = 'all';\s*$/m, '下階の層は全種別（S6c）。集合は1か所');
   assert.match(filter, /^\s*: S4_DRAWN_KINDS\.includes\(kind\)\);\s*$/m);
   assert.match(filter, /^\s*return \(prims \?\? \[\]\)\.filter\(p => p\?\.source\?\.kind != null && drawn\(p\.source\.kind, p\.source\.layerFloorZ\)\);\s*$/m);

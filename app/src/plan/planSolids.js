@@ -58,6 +58,7 @@ import { roofSoffitJointLines } from '../finish/roof/roofSoffitJoints.js';
 import { normalizeRect, isValidRect, subtractRects } from './planGeometry.js';
 import { ceilingSurfacesOf, ceilingFaceId } from '../ceiling/ceilingSurfaces.js';
 import { ceilingShapeSolidZ, ceilingShapeMarks } from '../ceiling/ceilingShape.js';
+import { ceilingStepDetailInnerLines } from '../ceiling/ceilingStepDetailLines.js';
 import { stairSoffitSolids, stairSoffitFinished, stairUnderReturnSoffit } from '../ceiling/stairSoffit.js';
 import { stairFootSurfaces, wallFootIntervals, wallFootTop } from '../ceiling/stairFootWallTop.js';
 
@@ -764,8 +765,10 @@ function wallBandStrips(rects, bands) {
  * 階段吹抜け（stairVoid）・破れ先は除かない（階段下部屋の天井は残る）。直上階が無ければ従来どおり。
  * @param {SolidLayer} layer
  * @param {object|null} [upperGraph] 直上の層の graph
+ * @param {{groups: object[]}|null} [stepDetail] 天井の段差の見切りの線の材料（ceiling/ceilingStepDetailLines.js ceilingStepDetailSpecs。
+ *   あれば高い側の面の立体に innerLines を付ける。footprint は変えない。遮蔽は解決器）
  */
-function ceilingSolids(layer, upperGraph = null) {
+function ceilingSolids(layer, upperGraph = null, stepDetail = null) {
   const holes = upperGraph
     ? floorOpeningCellRects(upperGraph, { stairFilter: () => false, sources: ['void', 'shaft'] }).map(({ x1, y1, x2, y2 }) => ({ x1, y1, x2, y2 }))
     : [];
@@ -788,6 +791,10 @@ function ceilingSolids(layer, upperGraph = null) {
     if (zAt) solid.zAt = zAt;
     const marks = ceilingShapeMarks({ key: id, shape, dims, chMm, rects: trimmed });
     if (marks.length > 0) solid.marks = marks;
+    if (stepDetail) {
+      const innerLines = ceilingStepDetailInnerLines(stepDetail.groups, id, trimmed);
+      if (innerLines.length > 0) solid.innerLines = innerLines;
+    }
     return solid;
   });
 }
@@ -943,6 +950,7 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
  *   aboveGraphOf＝層スタックに直上の層が無い層の「直上階」の graph（belowGraphOf の鏡像。見上げの最上の層＝N+1 の N+2。無ければ null＝到達辺は Q3）。直上の層があればそちらが優先。
  *   ceilings＝true のときだけ self の層に天井立体（kind 'ceiling'。見上げ用）を足す。省略（見下げ）の出力は不変。
  *   規則 V: 直上階の void・shaft の穴を天井面から引く。
+ *   ceilingStepDetail＝天井の段差の見切りの線の材料（ceilingStepDetailSpecs の戻り値。高い側の天井面の innerLines になる）。省略は線なし。
  *   上階の層の梁は立体にしない（裁定 2026-10-18）。
  *   S3: 上階の床の穴は、穴の縁に乗る上階の壁の張り出し（腰壁含む）の面まで狭め（縁は壁の面）、自階の天井面はその面まで延ばす
  *   （narrowOpeningByWalls。見下げは触らない）。
@@ -963,7 +971,7 @@ export function planSolids(layers, opts = {}) {
       const upZ = floorZs.find(z => z > layer.floorZMm);
       const upperLayer = upZ !== undefined ? layers.find(l => l?.graph && l.floorZMm === upZ) : null;
       if (upperLayer?.role !== 'above') continue;
-      const ceilings = opts.ceilings === true ? ceilingSolids(layer, upperLayer.graph).filter(Boolean) : [];
+      const ceilings = opts.ceilings === true ? ceilingSolids(layer, upperLayer.graph, opts.ceilingStepDetail ?? null).filter(Boolean) : [];
       const upperFloor = floorSolidOf(upperLayer, opts);
       if (!upperFloor) continue;
       const narrowed = narrowOpeningByWalls(upperFloor, upperLayer.graph, ceilings);
@@ -991,7 +999,7 @@ export function planSolids(layers, opts = {}) {
       ...(opts.lookUp === true && layer.role === 'above' ? [] : beamSolids(layer)), ...roofSolids(layer, opts), ...stairTreadSolids(layer, riserForLayer, underside?.drawnTreads,
         opts.lookUp === true && layer.role === 'self' ? stairsContinuedAbove(layer, layers, opts) : null, upperGraph),
       ...(underside?.soffits ?? []),
-      ...(opts.ceilings === true && layer.role === 'self' ? ceilingsOf.get(layer) ?? ceilingSolids(layer, upperGraph) : [])].filter(Boolean);
+      ...(opts.ceilings === true && layer.role === 'self' ? ceilingsOf.get(layer) ?? ceilingSolids(layer, upperGraph, opts.ceilingStepDetail ?? null) : [])].filter(Boolean);
     for (const solid of solids) entries.push({ solid, layerZ: layer.floorZMm, roleRank: ROLE_RANK[layer.role] ?? 3 });
   }
   const kindRank = k => SOLID_KIND_ORDER.indexOf(k);
