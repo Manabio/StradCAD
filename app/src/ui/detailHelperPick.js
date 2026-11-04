@@ -120,6 +120,42 @@ export function wheelZoomedView({ view, t, frame, client, rect, factor, autoScal
   return zoomed === null ? null : panView(zoomed, 0, 0, contentBounds);
 }
 
+/**
+ * 基準点を指すときのスナップ半径（px）。snap.js の SNAP_THRESHOLD_PX と同値。
+ * この純モジュールは snap.js（store.js 等を引く）を静的に引けないので同値を持つ（片方を変えたらもう片方も見直す）。
+ */
+export const DETAIL_BASE_SNAP_PX = 20;
+
+/** プレビューのプリミティブから、基準線（guide）でない polyline の頂点 {x, y}（mm）を集める。 */
+export function previewVertexPoints(prims) {
+  const out = [];
+  for (const p of prims ?? []) {
+    if (!Array.isArray(p?.points) || p.guide) continue; // points を持つのは polyline だけ（import を増やさないため型は見ない）
+    for (const [x, y] of p.points) out.push({ x, y });
+  }
+  return out;
+}
+
+/** points（{x, y}）のうち mm（{x, y}）に最も近い点。radiusMm 以内に無ければ null（同距離は先勝ち。非有限の入力も null）。 */
+export function nearestPointWithin(points, mm, radiusMm) {
+  if (!Number.isFinite(mm?.x) || !Number.isFinite(mm?.y) || !Number.isFinite(radiusMm)) return null;
+  let best = null;
+  let bestDist = Infinity;
+  for (const p of points ?? []) {
+    const d = Math.hypot(p.x - mm.x, p.y - mm.y);
+    if (d <= radiusMm && d < bestDist) { best = p; bestDist = d; }
+  }
+  return best;
+}
+
+/**
+ * 図読込みのプレビューの view を、下書きへ写した直後のペン入力の view にする。下書きの座標は基準点 P が原点
+ * （Anchor.offsetMm＝start−P）なので、中心から P を引く。view が無い（全体）なら null。
+ */
+export function draftViewOfImport(view, basePoint) {
+  return view ? { scale: view.scale, cx: view.cx - basePoint.s, cy: view.cy - basePoint.t } : null;
+}
+
 /** 矩形の枠の CSS（プレビュー px。無効なら null）。 */
 export function pickOverlayStyle(rect, t) {
   if (!isValidClip(rect)) return null;

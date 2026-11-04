@@ -18,7 +18,7 @@ import {
   DETAIL_HELPER_TEXT, DETAIL_HELPER_MESSAGES, DETAIL_NUMPAD_LABELS, PEN_BUTTONS, PREVIEW_FRAME_PX,
   DETAIL_ROLE_LABELS, DETAIL_MODE_LABELS, DETAIL_PARAM_LABELS, DETAIL_MATERIAL_FIELD_LABELS, DETAIL_DATUM_KIND_LABELS, DETAIL_AXIS_LABELS,
   newDraft, entryFromForm, freshDocOf, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, isDraftDirty, undoDraft, penStep, penUp, setClosed,
-  setMoveLen, setMoveMode, setMoveEdge, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
+  setMoveLen, setMoveMode, setMoveEdge, rebaseOrigin, rebaseDelta, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, saveDecision, planSave, afterSaveDoc,
   deleteConfirmMessage, defaultFitDimsFor, fitDimFieldsFor, tryFit, previewPrimitivesOf, labelOptions, pushHistory,
   displayLen, strokeLabel, strokeTitle, moveSpanLabel, distanceButtonLabel, offsetButtonLabel, fitDimButtonLabel,
@@ -36,7 +36,9 @@ import {
 import {
   activePickRect, setPickRect, clearPickRect, pickedComponentRows, pickSummaryOf, figurePointToMm, pickRectFromDrag, pickOverlayStyle,
   dragKindOf, bindView, activeView, reconcileView, panDeltaPx, pinchArgsOf, wheelZoomedView,
+  DETAIL_BASE_SNAP_PX, previewVertexPoints, nearestPointWithin, draftViewOfImport,
 } from './detailHelperPick.js';
+import { isTapDistance } from '../interaction/holdGesture.js';
 import {
   FIGURE_WHEEL_ZOOM_FACTOR, viewOfTransform, transformOfView, panView, pinchView, fitViewToRect, autoScaleOfPrimitives, contentBoundsOfPrimitives, viewLimitsOf,
 } from '../structural/sectionFigure/figureView.js';
@@ -184,7 +186,7 @@ function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy
  * ホイール＝拡大縮小。ドラッグ中は部品内の state と svg の CSS だけを動かし、親の state（＝重いプレビューの再描画）は
  * 離したとき（ホイールはフレームごと）の onView／onPick 1 回だけ。
  */
-function FigureGestureLayer({ t, info, view, onView, svgRef, canPick, pickRect, onPick, busy }) {
+function FigureGestureLayer({ t, info, view, onView, svgRef, canPick, pickRect, onPick, busy, basePointMode, vertexPoints, onBasePoint }) {
   const layerRef = useRef(null);
   const pointers = useRef(new Map()); // 押している指: pointerId → { clientX, clientY }
   const gesture = useRef(null);       // 進行中の操作（押下時の t・view・rect を持ち、終わるまでその値で計算する）
@@ -349,6 +351,10 @@ function FigureGestureLayer({ t, info, view, onView, svgRef, canPick, pickRect, 
         onView(panView(g.base, dx, dy, g.contentBounds));
       } else if (g.kind === 'pinch' && pinched) {
         onView(pinchView(...pinchArgsOf(g, pinched)));
+      } else if (g.kind === 'press' && basePointMode && isTapDistance(Math.hypot(e.clientX - g.from.clientX, e.clientY - g.from.clientY))) {
+        // 基準点を指すモードのタップ（長押しが成立していても動かなければ同じ）。範囲外なら null を渡す。
+        onBasePoint(nearestPointWithin(vertexPoints, figurePointToMm(e, g.rect, g.t), DETAIL_BASE_SNAP_PX / g.t.scale));
+        endDragStyle(view, t);
       } else endDragStyle(view, t);
     }
     pointers.current.delete(e.pointerId);
@@ -356,7 +362,7 @@ function FigureGestureLayer({ t, info, view, onView, svgRef, canPick, pickRect, 
 
   const style = pickOverlayStyle(live ?? pickRect, t);
   return (
-    <div className={`dthlp-pick-layer${armed && canPick ? ' dthlp-pick-layer--armed' : ''}`} ref={layerRef}
+    <div className={`dthlp-pick-layer${armed && canPick ? ' dthlp-pick-layer--armed' : ''}${basePointMode ? ' dthlp-pick-layer--armed' : ''}`} ref={layerRef}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={e => onPointerEnd(e, true)}
@@ -428,6 +434,8 @@ export function DetailHelperPanel({ onClose }) {
   const [dxfMessage, setDxfMessage] = useState(null); // { text, isError }（DXF・PDF 共通）
   const [importView, setImportView] = useState(null); // 図読込みのプレビューの view（bindView(scene, view)）
   const [draftView, setDraftView] = useState(null);   // ペン入力のプレビューの view（bindView(下書きの key, view)）
+  const [basePointFor, setBasePointFor] = useState(null); // 頂点指定モードの下書きの key（null＝off。次のタップで図の頂点を基準にする）
+  const [basePointMiss, setBasePointMiss] = useState(false); // 直前のタップが頂点から遠かった
   const dxfInputRef = useRef(null);
   const pdfDocRef = useRef(null);    // pdfjs の文書（状態に入れない）
   const pdfLoaderRef = useRef(null); // ui/pdfLoader.js（初回の PDF を開くときに動的 import）
@@ -485,6 +493,25 @@ export function DetailHelperPanel({ onClose }) {
   );
   const setShownView = next => (showDxf ? setImportView(bindView(viewOwner, next)) : setDraftView(bindView(viewOwner, next)));
   const figureSvgRef = useRef(null);
+  // 基準点を指す（ペン入力タブだけ。試し込み中・読み取り専用・忙しいときは使えない＝モードも解く）
+  const canBasePoint = !showDxf && !fitOn && !doc.readOnly && !busy && shownPrims.length > 0;
+  // モードは下書きの key に結び付く（別の下書きへ移ると解ける）。使えない状態の間は off として扱う。
+  const basePointMode = basePointFor === form.key && canBasePoint;
+  const setBasePointMode = on => setBasePointFor(on ? form.key : null);
+  const vertexPoints = useMemo(() => (basePointMode ? previewVertexPoints(shownPrims) : []), [basePointMode, shownPrims]);
+  // 範囲外（p が null）は文言を出してモードを保つ（もう一度指せる。ボタンで解除）
+  function handleBasePoint(p) {
+    if (!p) { setBasePointMiss(true); return; }
+    const point = { s: p.x, t: p.y };
+    edit(f => rebaseOrigin(f, point));
+    // 指した点が画面に留まるよう view の中心も図と同じ量だけ動かす（view は undo の外。受容）
+    if (shownView) {
+      const delta = rebaseDelta(form, point);
+      setShownView({ ...shownView, cx: shownView.cx + (delta.s ?? 0), cy: shownView.cy + (delta.t ?? 0) });
+    }
+    setBasePointMode(false);
+    setBasePointMiss(false);
+  }
   const pickRectNow = showDxf ? activePickRect(imported) : null;
   const canFitRect = !busy && !!pickRectNow && shownPrims.length > 0;
   const provenanceNotice = provenanceNoticeOf(form);
@@ -628,6 +655,8 @@ export function DetailHelperPanel({ onClose }) {
     if (r.error) { setDxfMessage({ text: r.error, isError: true }); return; }
     guardDiscard(() => {
       replaceDoc(draftDocOf(r.form));
+      // 拡大した場所のまま開く: 下書きの座標は基準点 P が原点（offsetMm＝start−P）なので、view の中心から P を引く
+      setDraftView(bindView(r.form.key, draftViewOfImport(shownView, r.basePoint)));
       setLeftTab(DETAIL_HELPER_TABS.PEN);
       setDxfMessage(null);
     });
@@ -896,7 +925,7 @@ export function DetailHelperPanel({ onClose }) {
           <div className="dthlp-toolbar">
             {!showDxf && (<>
               <button className={`dthlp-btn${fitOn ? '' : ' dthlp-btn--active'}`} onClick={() => setFitOn(false)}>{DETAIL_HELPER_TEXT.fitOff}</button>
-              <button className={`dthlp-btn${fitOn ? ' dthlp-btn--active' : ''}`} onClick={() => setFitOn(true)}>{DETAIL_HELPER_TEXT.fitOn}</button>
+              <button className={`dthlp-btn${fitOn ? ' dthlp-btn--active' : ''}`} onClick={() => { setFitOn(true); setBasePointFor(null); }}>{DETAIL_HELPER_TEXT.fitOn}</button>
               {fitOn && fitFields.map(({ field, label }) => (
                 <button key={field} className="dthlp-btn dthlp-btn--small" onClick={() => openNumpad({ kind: 'fit', field }, fitDims[field], label)}>
                   {fitDimButtonLabel(label, fitDims[field])}
@@ -910,7 +939,14 @@ export function DetailHelperPanel({ onClose }) {
                 {DETAIL_HELPER_TEXT.viewFitRect}
               </button>
             )}
+            {!showDxf && (
+              <button className={`dthlp-btn${basePointMode ? ' dthlp-btn--active' : ''}`} aria-pressed={basePointMode} disabled={!basePointMode && !canBasePoint}
+                onClick={() => { setBasePointMode(!basePointMode); setBasePointMiss(false); }}>
+                {DETAIL_HELPER_TEXT.basePoint}
+              </button>
+            )}
             <span className="dthlp-hint">{showDxf ? DETAIL_HELPER_TEXT.gestureHint : DETAIL_HELPER_TEXT.gestureHintPen}</span>
+            {basePointMode && <span className="dthlp-hint">{basePointMiss ? DETAIL_HELPER_TEXT.basePointMiss : DETAIL_HELPER_TEXT.basePointHint}</span>}
           </div>
           {!showDxf && fitOn && wallNotice && <div className="dthlp-error">{wallNotice}</div>}
           {!showDxf && fitted?.error && <div className="dthlp-error">{fitted.error.message}</div>}
@@ -928,6 +964,7 @@ export function DetailHelperPanel({ onClose }) {
                 overlay={(t, info) => (
                   <FigureGestureLayer t={t} info={info} view={shownView} onView={setShownView} svgRef={figureSvgRef}
                     canPick={showDxf && !!imported?.scene} pickRect={pickRectNow} busy={busy}
+                    basePointMode={basePointMode} vertexPoints={vertexPoints} onBasePoint={handleBasePoint}
                     onPick={r => (pdf ? setPdf(p => setPickRect(p, r)) : setDxf(d => setPickRect(d, r)))} />
                 )}
               />

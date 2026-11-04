@@ -134,6 +134,9 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   viewAll: '全体', viewFitRect: '矩形に寄せる',
   gestureHint: 'ドラッグ＝移動・長押し後のドラッグ＝矩形・ピンチ／ホイール＝拡大縮小',
   gestureHintPen: 'ドラッグ＝移動・ピンチ／ホイール＝拡大縮小',
+  // 基準点を指す（S7d-4。ペン入力タブ）
+  basePoint: '基準点を指す', basePointHint: '基準にしたい頂点をタップしてください（もう一度ボタンで解除）',
+  basePointMiss: '近くに頂点がありません。頂点の近くをタップしてください',
   pickSummary: (inRect, total, selected) => `矩形内 ${inRect} ／ 全 ${total} 成分・選択 ${selected}`,
   // DXF のレイヤ on/off（S7d）
   layers: 'レイヤ', layersAllOn: '全部 on',
@@ -728,6 +731,41 @@ export function setAnchor(form, strokeId, datumId, vertexIndex) {
       : old.offsetMm;
   }
   return { ...form, anchors: [...rest, next] };
+}
+
+/**
+ * 図の点 P（プレビューの図座標 mm）が origin の基準線に来るよう、図全体を平行移動する（基準点を指す）。
+ * 軸ごとに Δ＝(その軸の origin の Datum の offset)−P[軸] を、その軸の基準に載る全 Anchor（origin・end）の offsetMm へ足す。
+ * 同じ Δ を両方へ足すので、fit の形（end−origin の差＝伸縮の長さ）は変わらない。
+ * offsetMm を持たない Anchor にもキーが付く（rebase を明示した結果。normalize がキーを足さない規約は変えない）。
+ * origin の offset 欄が数でない（入力途中など）ときは 0 として扱う（プレビューと同じ）。origin 自体が無い軸、基準の見つからない
+ * Anchor は触らない。どの Anchor も変わらなければ同じ form を返す（edit が弾く＝無効な undo の 1 手を積まない）。
+ * 既知の限界: origin の Anchor を持たないストロークは動かない。P が有限でなければ RangeError（呼び出し側のバグ）。
+ */
+export function rebaseOrigin(form, p) {
+  const delta = rebaseDelta(form, p);
+  const datumAxis = new Map(form.datums.map(d => [d.id, d.axis]));
+  let changed = false;
+  const anchors = form.anchors.map(a => {
+    const dv = delta[datumAxis.get(a.datumId)];
+    if (dv === undefined) return a;
+    changed = true;
+    return { ...a, offsetMm: (Number.isFinite(a.offsetMm) ? a.offsetMm : 0) + dv };
+  });
+  return changed ? { ...form, anchors } : form;
+}
+
+/** rebaseOrigin が各軸へ足す量 { s?, t? }（origin の無い軸はキー無し）。P が有限でなければ RangeError。 */
+export function rebaseDelta(form, p) {
+  if (!Number.isFinite(p?.s) || !Number.isFinite(p?.t)) throw new RangeError('rebaseOrigin: P は有限の {s, t} が必要です');
+  const delta = {};
+  for (const axis of [DetailAxis.S, DetailAxis.T]) {
+    const origin = form.datums.find(d => d.kind === DetailDatumKind.ORIGIN && d.axis === axis);
+    if (!origin) continue;
+    const off = parseNumberText(origin.offset);
+    delta[axis] = (Number.isFinite(off) ? off : 0) - p[axis];
+  }
+  return delta;
 }
 
 /** あるストロークがある基準に載せている頂点（無ければ null）。 */
