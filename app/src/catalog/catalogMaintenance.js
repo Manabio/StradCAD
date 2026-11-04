@@ -1392,9 +1392,11 @@ const FIXTURE_SYMBOL_DETAIL_SLOTS = Object.freeze(Object.keys(FIXTURE_SYMBOL_DET
 export function detailFigureOptionsFor(slot, list, currentKey = '') {
   const target = DETAIL_SLOT_TARGETS[slot];
   if (!target) return [];
-  const options = list
-    .filter(e => e.category === target.category && e.view === target.view && e.subject === target.subject)
-    .map(e => ({ value: e.key, label: e.label })); // 呼称だけ（キーは出さない。ユーザー指示 2026-11-04）
+  const hits = list.filter(e => e.category === target.category && e.view === target.view && e.subject === target.subject);
+  // 選択肢は呼称だけ（キーは出さない。ユーザー指示 2026-11-04）。同じ呼称の図が複数あるときだけ、その図にキーを添えて区別する。
+  const labelCount = new Map();
+  for (const e of hits) labelCount.set(e.label, (labelCount.get(e.label) ?? 0) + 1);
+  const options = hits.map(e => ({ value: e.key, label: labelCount.get(e.label) > 1 ? `${e.label}（${e.key}）` : e.label }));
   if (currentKey !== '' && !options.some(o => o.value === currentKey)) {
     // 実在するが slot の分類に合わない図と、そもそも存在しないキーを分ける。
     const exists = list.some(e => e.key === currentKey);

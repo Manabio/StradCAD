@@ -2270,6 +2270,21 @@ test('detailFigureOptionsFor: jamb は plan・subject jamb だけ、head は sec
   assert.deepEqual(detailFigureOptionsFor('unknownSlot', FIG_LIST), []);
 });
 
+test('detailFigureOptionsFor: 選択肢は呼称だけ。同じ呼称の図が複数あるときだけ、その図にキーを添えて区別する（別の呼称の図は呼称のまま）', () => {
+  const dup = [
+    { ...detailFig('df-j1', DT[DetailSlot.JAMB]), label: '方立A' },
+    { ...detailFig('df-j2', DT[DetailSlot.JAMB]), label: '方立A' },
+    { ...detailFig('df-j3', DT[DetailSlot.JAMB]), label: '方立B' },
+    { ...detailFig('df-h1', DT[DetailSlot.HEAD]), label: '方立A' }, // 別 slot の同名は数えない
+  ];
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.JAMB, dup), [
+    { value: 'df-j1', label: '方立A（df-j1）' },
+    { value: 'df-j2', label: '方立A（df-j2）' },
+    { value: 'df-j3', label: '方立B' },
+  ]);
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.HEAD, dup), [{ value: 'df-h1', label: '方立A' }]);
+});
+
 test('detailFigureOptionsFor: 現在の値が一覧に無ければ末尾に足す。存在しないキーは「見つかりません」・実在するが枠に合わない図は「この枠には使えません」（合う図なら足さない）', () => {
   const lost = detailFigureOptionsFor(DetailSlot.JAMB, FIG_LIST, 'df-gone');
   assert.deepEqual(lost.at(-1), { value: 'df-gone', label: '（見つかりません）df-gone' });
