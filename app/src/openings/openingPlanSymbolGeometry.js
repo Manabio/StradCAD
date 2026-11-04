@@ -11,7 +11,8 @@ import { HINGED_MECHANISMS, SASH_OPEN_MECHANISMS, hingeSideMatters, OpeningMecha
 // viewport.js は mobx と @core しか import しない純モジュールのため、node:test 単体import制約
 // （抽出純モジュールはnode:testから単体import可能に保つ）に抵触しない（openingTagPlacement.js と同じ）。
 import { LodLevel } from '../viewport.js';
-import { FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM } from '../core/constants.js';
+import { FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM, WINDOW_FRAME_JAMB_WIDTH_MM } from '../core/constants.js';
+import { OpeningCategory } from '../core.js';
 
 export const DOOR_OPEN_ANGLE_DEG = 90;
 
@@ -20,6 +21,11 @@ export const DOOR_OPEN_ANGLE_DEG = 90;
 export const SASH_DEPTH_MM         = 40; // 一般LODの見込帯（固定）
 // 枠寸法・扉厚は組込みの方立図（detail/detailBuiltins.js）と共有するため core/constants.js が唯一の定義。既存の import 先を変えないよう再輸出する。
 export { FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM };
+
+/** 方立の全幅。窓は WINDOW_FRAME_JAMB_WIDTH_MM、建具（category 不明含む）は FRAME_JAMB_WIDTH_MM。開口幅の半分で頭打ち。 */
+export function jambWidthFor(opening) {
+  return Math.min(opening.category === OpeningCategory.WINDOW ? WINDOW_FRAME_JAMB_WIDTH_MM : FRAME_JAMB_WIDTH_MM, opening.width / 2);
+}
 
 /**
  * 開き戸が開く直交方向(±1。isVertical壁ならx、水平壁ならy)。蝶番系以外は0を返す。

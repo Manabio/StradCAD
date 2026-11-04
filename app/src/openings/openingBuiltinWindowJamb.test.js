@@ -291,6 +291,8 @@ test('frameDefaultKey: 片開き戸＝slot 別・窓の方立＝方立の種別�
   assert.equal(frameDefaultKey(opening(WINDOWS[0]), DetailSlot.HEAD, OpeningMechanism.FIXED), undefined, '窓の上枠は対象外');
   assert.equal(frameDefaultKey(opening(entryOf('window', 'doubleSliding')), JAMB, OpeningMechanism.SLIDE_DOUBLE), undefined, '引き違い窓');
   assert.equal(frameDefaultKey({ category: 'window', subType: 'x' }, JAMB, OpeningMechanism.FRAME_ONLY), undefined, '三方枠');
+  assert.equal(frameDefaultKey({ category: 'window', subType: 'x' }, JAMB, undefined), undefined, '機構未指定の窓（種別の参照切れ）');
+  assert.equal(frameDefaultKey({ category: 'window', subType: 'x' }, JAMB, 'noSuchMechanism'), undefined, '実装外の機構の窓');
   assert.equal(frameDefaultKey({ category: 'fitting', subType: 'swingIn' }, JAMB, OpeningMechanism.SWING_IN), undefined, '建具');
   assert.equal(frameDefaultKey({ subType: 'fixed' }, JAMB, OpeningMechanism.FIXED), undefined, 'category 欠落');
   assert.equal(frameDefaultKey(null, JAMB, OpeningMechanism.FIXED), undefined, 'opening なし');

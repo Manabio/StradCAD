@@ -13,19 +13,25 @@ import {
 } from '../catalog/catalogMaintenance.js';
 import { withDetailRef } from '../core/detailRefs.js';
 import { paramMmOf } from '../detail/detailPlacement.js';
-import { resolveDetailFigure, swingDoorDefaultKey } from './openingDetailFit.js';
+import { resolveDetailFigure, frameDefaultKey } from './openingDetailFit.js';
 import { detailFigureRefsFor, subTypeDetailFigureRefsFor, detailFigureCatalog } from './openingCatalog.js';
 import { fixtureSymbolOf } from './openingNumbering.js';
 
-/** 三方枠（FRAME_ONLY）と片開き戸だけに出す slot（方立・上枠）。 */
+/** 三方枠（FRAME_ONLY）と片開き戸に出す slot（方立・上枠。窓は方立だけ。frameDetailSlotsFor）。 */
 export const FRAME_DETAIL_REF_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot.HEAD]);
 
-/** select を出す slot（表示順）。姿図（S6b）は全機構の建具に出し、方立・上枠は三方枠と片開き戸だけ。 */
+/** select を出す slot（表示順）。姿図（S6b）は全機構の建具に出し、方立・上枠は三方枠・片開き戸・窓（方立だけ。frameDetailSlotsFor）。 */
 export const OPENING_DETAIL_REF_SLOTS = Object.freeze([...FRAME_DETAIL_REF_SLOTS, DetailSlot.FIGURE]);
 
-/** 方立・上枠の select を出す建具か（三方枠か片開き戸）。建具エディタの絞りの唯一の判断。 */
-export function frameDetailSlotsApply(opening, isFrameOnly) {
-  return isFrameOnly === true || opening?.subType === SWING_LEAF_SUBTYPE;
+/**
+ * 方立・上枠の select を出す slot（建具エディタの絞りの唯一の判断）。三方枠・片開き戸＝方立と上枠、
+ * 暗黙の既定の方立を持つ窓（frameDefaultKey が定義される＝実装済みの機構で、引き違い・三方枠でない窓）＝方立だけ、他は無し。
+ * @param {string} [mechanism] OpeningMechanism（窓の判定に使う。未指定・実装外の機構の窓は描画に方立が出ないので対象外）
+ * @returns {string[]} DetailSlot の配列
+ */
+export function frameDetailSlotsFor(opening, isFrameOnly, mechanism) {
+  if (isFrameOnly === true || opening?.subType === SWING_LEAF_SUBTYPE) return [...FRAME_DETAIL_REF_SLOTS];
+  return frameDefaultKey(opening, DetailSlot.JAMB, mechanism) !== undefined ? [DetailSlot.JAMB] : [];
 }
 
 /** R16: 図の param → 写し先の Opening の項目。 */
@@ -42,13 +48,13 @@ function detailFigureEntries() {
 /**
  * @param {{detailRefs?: object|null}} opening
  * @param {object[]} [figureList] 詳細図エントリ（省略時は三層合成後）
- * @param {{frameSlots?: boolean}} [opts] frameSlots＝方立・上枠の select を出すか（既定 true。三方枠・片開き戸で true。
- *   false なら姿図だけ）
+ * @param {{frameSlots?: string[]}} [opts] frameSlots＝方立・上枠のうち select を出す slot（既定は両方。frameDetailSlotsFor の戻り値。
+ *   空なら姿図だけ）
  * @returns {Array<{slot:string, label:string, value:string, options:Array<{value:string,label:string}>}>}
  *   value＝建具個別の上書きのキー（未上書きは ''）。options の先頭は未上書き（記号〔姿図は建具種別〕の設定を使う）。
  */
-export function openingDetailRefSelects(opening, figureList = detailFigureEntries(), { frameSlots = true } = {}) {
-  return OPENING_DETAIL_REF_SLOTS.filter(slot => frameSlots || !FRAME_DETAIL_REF_SLOTS.includes(slot)).map(slot => {
+export function openingDetailRefSelects(opening, figureList = detailFigureEntries(), { frameSlots = FRAME_DETAIL_REF_SLOTS } = {}) {
+  return OPENING_DETAIL_REF_SLOTS.filter(slot => frameSlots.includes(slot) || !FRAME_DETAIL_REF_SLOTS.includes(slot)).map(slot => {
     const key = opening?.detailRefs?.[slot];
     const value = typeof key === 'string' ? key : '';
     const useBase = slot === DetailSlot.FIGURE ? OPENING_DETAIL_REF_TEXT.useSubType : OPENING_DETAIL_REF_TEXT.useSymbol;
@@ -65,14 +71,15 @@ export function openingDetailRefSelects(opening, figureList = detailFigureEntrie
  * slot の選択（value '' ＝未上書き）を反映した次の detailRefs（凍結した正規形か null）。
  * 選んだキーが記号の割当て（detailFigures）の同じ slot のキーと一致するときは上書きとして持たず外す
  * （既定へ畳むのはキーが一致するときだけ。射影した値では比べない）。
+ * mechanism＝建具の機構（窓の方立の既定キーが機構で決まる。frameDefaultKey）。
  */
-export function detailRefsAfterSelect(opening, slot, value) {
+export function detailRefsAfterSelect(opening, slot, value, mechanism) {
   // 畳む先の既定の参照: 方立・上枠は建具記号の割当て、姿図は建具種別の割当て
   const baseRefs = slot === DetailSlot.FIGURE
     ? subTypeDetailFigureRefsFor(opening?.category, opening?.subType)
     : detailFigureRefsFor(fixtureSymbolOf(opening));
-  // 片開き戸は記号に割当てが無いとき組込みの既定が基準（同キーの選択は既定扱い＝上書きとして持たない。S8d）
-  const baseKey = baseRefs?.[slot] ?? (opening?.subType === SWING_LEAF_SUBTYPE ? swingDoorDefaultKey(slot) : undefined);
+  // 片開き戸・窓の方立は記号に割当てが無いとき組込みの既定が基準（同キーの選択は既定扱い＝上書きとして持たない。S8d・S8f-2）
+  const baseKey = baseRefs?.[slot] ?? frameDefaultKey(opening, slot, mechanism);
   const folded = typeof value === 'string' && value !== '' && value === baseKey ? '' : value;
   return withDetailRef(opening?.detailRefs ?? null, slot, folded);
 }

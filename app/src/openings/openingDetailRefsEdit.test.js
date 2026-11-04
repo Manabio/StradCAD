@@ -3,7 +3,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { observable, runInAction } from 'mobx';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '../core.js';
-import { DetailSlot, SWING_LEAF_SUBTYPE, DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY } from '../core/constants.js';
+import {
+  DetailSlot, SWING_LEAF_SUBTYPE, DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY,
+  DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY, DETAIL_BUILTIN_WINDOW_JAMB_KEY,
+} from '../core/constants.js';
 import { withDetailRef } from '../core/detailRefs.js';
 import { undoManager } from '../undoManager.js';
 import { clearOverlays, setOverlay, composeCatalog } from '../catalog/catalogRegistry.js';
@@ -15,8 +18,9 @@ import { openingSubSignature, openingSignature } from './openingNumbering.js';
 import { collectDetailFitFailures } from './openingDetailFitCheck.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import {
-  openingDetailRefSelects, detailRefsAfterSelect, detailDimensionsToCopy, OPENING_DETAIL_REF_SLOTS, frameDetailSlotsApply,
+  openingDetailRefSelects, detailRefsAfterSelect, detailDimensionsToCopy, OPENING_DETAIL_REF_SLOTS, frameDetailSlotsFor,
 } from './openingDetailRefsEdit.js';
+import { OpeningMechanism } from './openingCatalog.js';
 import {
   jambFigure, headFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol, elevationFigure, subTypeEntry, installElevationFigures,
 } from './openingDetailTestFixtures.js';
@@ -54,29 +58,59 @@ test('select: 三方枠は方立・上枠・姿図の 3 つ。先頭は「記号
   assert.equal(sels[1].value, '');
 });
 
-test('select: 三方枠・片開き戸以外（frameSlots:false）は姿図の select だけ。frameSlots:true なら方立・上枠・姿図の 3 本', () => {
-  const sels = openingDetailRefSelects({ detailRefs: { [DetailSlot.FIGURE]: 'df-f' } }, [], { frameSlots: false });
+test('select: frameSlots が空なら姿図の select だけ。省略・[JAMB, HEAD] なら 3 本・[JAMB] なら方立と姿図の 2 本', () => {
+  const sels = openingDetailRefSelects({ detailRefs: { [DetailSlot.FIGURE]: 'df-f' } }, [], { frameSlots: [] });
   assert.deepEqual(sels.map(s => s.slot), [DetailSlot.FIGURE]);
   assert.equal(sels[0].value, 'df-f');
   assert.match(sels[0].options.at(-1).label, /見つかりません/, '参照切れは黙って未上書きに見せない');
-  const withFrame = openingDetailRefSelects({ detailRefs: null }, [], { frameSlots: true });
-  assert.deepEqual(withFrame.map(s => s.slot), [DetailSlot.JAMB, DetailSlot.HEAD, DetailSlot.FIGURE]);
+  const both = [DetailSlot.JAMB, DetailSlot.HEAD, DetailSlot.FIGURE];
+  assert.deepEqual(openingDetailRefSelects({ detailRefs: null }, [], { frameSlots: [JAMB, HEAD] }).map(s => s.slot), both);
+  assert.deepEqual(openingDetailRefSelects({ detailRefs: null }, []).map(s => s.slot), both, '省略時は従来どおり');
+  assert.deepEqual(openingDetailRefSelects({ detailRefs: null }, [], { frameSlots: [JAMB] }).map(s => s.slot), [JAMB, DetailSlot.FIGURE]);
 });
 
-test('frameDetailSlotsApply: 三方枠か片開き戸（singleSwing）で真・sliding と null で偽', () => {
-  assert.equal(frameDetailSlotsApply({ subType: SWING_LEAF_SUBTYPE }, false), true);
-  assert.equal(frameDetailSlotsApply({ subType: 'sliding' }, true), true);
-  assert.equal(frameDetailSlotsApply({ subType: 'sliding' }, false), false);
-  assert.equal(frameDetailSlotsApply(null, false), false);
-  const slotsOf = o => openingDetailRefSelects(o, [], { frameSlots: frameDetailSlotsApply(o, false) }).map(s => s.slot);
-  assert.deepEqual(slotsOf({ subType: SWING_LEAF_SUBTYPE, detailRefs: null }), [DetailSlot.JAMB, DetailSlot.HEAD, DetailSlot.FIGURE]);
-  assert.deepEqual(slotsOf({ subType: 'sliding', detailRefs: null }), [DetailSlot.FIGURE]);
+test('frameDetailSlotsFor（S8f-2）: 三方枠・片開き戸＝方立と上枠／窓（引き違い・三方枠を除く）＝方立だけ／他・機構未指定／実装外の窓＝空', () => {
+  const win = subType => ({ category: OpeningCategory.WINDOW, subType });
+  assert.deepEqual(frameDetailSlotsFor({ subType: 'threeSidedFrame' }, true, OpeningMechanism.FRAME_ONLY), [JAMB, HEAD]);
+  assert.deepEqual(frameDetailSlotsFor({ category: OpeningCategory.FITTING, subType: SWING_LEAF_SUBTYPE }, false, OpeningMechanism.SWING), [JAMB, HEAD]);
+  assert.deepEqual(frameDetailSlotsFor(win('fixed'), false, OpeningMechanism.FIXED), [JAMB]);
+  assert.deepEqual(frameDetailSlotsFor(win('casement'), false, OpeningMechanism.SWING), [JAMB]);
+  assert.deepEqual(frameDetailSlotsFor(win('doubleSliding'), false, OpeningMechanism.SLIDE_DOUBLE), [], '引き違い窓は対象外');
+  assert.deepEqual(frameDetailSlotsFor({ category: OpeningCategory.FITTING, subType: 'sliding' }, false, OpeningMechanism.SLIDE_SINGLE), [], '引き戸');
+  assert.deepEqual(frameDetailSlotsFor(win('fixed'), false, undefined), [], '機構未指定（種別の参照切れ）の窓は描画に方立が出ないので対象外');
+  assert.deepEqual(frameDetailSlotsFor(win('fixed'), false, 'noSuchMechanism'), [], '実装外の機構の窓も対象外');
+  assert.deepEqual(frameDetailSlotsFor({ category: OpeningCategory.FITTING, subType: 'x' }, false, undefined), [], '窓でも片開き戸でもない建具は機構によらず空');
+  assert.deepEqual(frameDetailSlotsFor(null, false, undefined), []);
+  const slotsOf = (o, mech) => openingDetailRefSelects(o, [], { frameSlots: frameDetailSlotsFor(o, false, mech) }).map(s => s.slot);
+  assert.deepEqual(slotsOf({ ...win('fixed'), detailRefs: null }, OpeningMechanism.FIXED), [JAMB, DetailSlot.FIGURE], '窓は方立＋姿図の 2 本');
+  assert.deepEqual(slotsOf({ ...win('doubleSliding'), detailRefs: null }, OpeningMechanism.SLIDE_DOUBLE), [DetailSlot.FIGURE], '引き違い窓は姿図だけ');
+});
+
+test('detailRefsAfterSelect（S8f-2）: 窓は組込みの方立キーを選んでも上書きにならない。形違いの別キーは残り、記号の割当てがあればそれが基準', () => {
+  const fixed = { category: OpeningCategory.WINDOW, subType: 'fixed', detailRefs: null };
+  assert.equal(detailRefsAfterSelect(fixed, JAMB, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, OpeningMechanism.FIXED), null);
+  assert.deepEqual(detailRefsAfterSelect(fixed, JAMB, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY, OpeningMechanism.FIXED),
+    { [JAMB]: DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY }, '形違いの組込みは既定ではない');
+  assert.deepEqual(detailRefsAfterSelect(fixed, JAMB, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, undefined),
+    { [JAMB]: DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY }, '機構未指定なら既定が無く、sash 以外のキーでも畳まない');
+  assert.deepEqual(detailRefsAfterSelect(fixed, JAMB, DETAIL_BUILTIN_WINDOW_JAMB_KEY, undefined),
+    { [JAMB]: DETAIL_BUILTIN_WINDOW_JAMB_KEY }, '機構未指定なら sash のキーでも畳まない');
+  const casement = { category: OpeningCategory.WINDOW, subType: 'casement', detailRefs: null };
+  assert.equal(detailRefsAfterSelect(casement, JAMB, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY, OpeningMechanism.SWING), null);
+  // 記号に割当てがあるとき基準は記号の割当て（組込みの既定ではない）
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { [JAMB]: jambFigure('df-win-sym-j') });
+  const withSym = { ...fixed, fixtureType: sym };
+  assert.equal(detailRefsAfterSelect(withSym, JAMB, 'df-win-sym-j', OpeningMechanism.FIXED), null, '記号の割当てと同じキーは畳む');
+  assert.deepEqual(detailRefsAfterSelect(withSym, JAMB, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, OpeningMechanism.FIXED),
+    { [JAMB]: DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY }, '記号に割当てがあれば組込みの既定キーも上書き');
+  clearOverlays();
 });
 
 test('detailRefsAfterSelect（S8e-3）: 片開き戸は記号の割当て無しなら組込みの既定キーへ畳む。他の図は残す・片開き戸以外は畳まない', () => {
   const swing = { subType: SWING_LEAF_SUBTYPE, detailRefs: null };
-  assert.equal(detailRefsAfterSelect(swing, JAMB, DETAIL_BUILTIN_DOOR_JAMB_KEY), null);
-  assert.equal(detailRefsAfterSelect(swing, HEAD, DETAIL_BUILTIN_DOOR_HEAD_KEY), null);
+  assert.equal(detailRefsAfterSelect(swing, JAMB, DETAIL_BUILTIN_DOOR_JAMB_KEY, OpeningMechanism.SWING), null);
+  assert.equal(detailRefsAfterSelect(swing, HEAD, DETAIL_BUILTIN_DOOR_HEAD_KEY), null, '片開き戸は機構を渡さなくても従来どおり');
   assert.deepEqual(detailRefsAfterSelect(swing, JAMB, 'df-other'), { [JAMB]: 'df-other' });
   assert.deepEqual(detailRefsAfterSelect(swing, JAMB, DETAIL_BUILTIN_DOOR_HEAD_KEY), { [JAMB]: DETAIL_BUILTIN_DOOR_HEAD_KEY }, '別 slot の既定キーは畳まない');
   const other = { subType: 'sliding', detailRefs: null };

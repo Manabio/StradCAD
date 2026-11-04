@@ -269,6 +269,57 @@ test('【失敗系】片開き戸: 明示の割当てがあっても壁が引け
   assert.deepEqual(collectDetailFitFailures(stubSwingGraph([[0, 60]], { ...refs, axisCL: null })), []);
 });
 
+// ---- 窓（S8f-2）: 方立（平面）の明示の割当てだけが対象。見付は jambWidthFor（窓 25） ----
+
+test('窓: 明示の方立の図が壁厚に合わない → JAMB の行 1 件（見付 25・面間の壁厚・出 12）。FIX 窓（sashOpen）と外開き窓（notched）の両方', () => {
+  for (const subType of ['fixed', 'casement']) {
+    const sym = uniqueSymbolKey();
+    installFrameSymbol(sym, { [JAMB]: materialBoundFigure(`df-chk-win-${subType}`) });
+    const { graph, openings } = graphWithFrames(sym, 1, [{ category: OpeningCategory.WINDOW, subType }]);
+    const [flo, fhi] = wallFaceRange(findHostWall(openings[0], graph), graph);
+    const failures = collectDetailFitFailures(graph);
+    assert.equal(failures.length, 1, subType);
+    assert.equal(failures[0].slot, JAMB);
+    assert.deepEqual([failures[0].wallThickness, failures[0].faceWidth, failures[0].projection], [fhi - flo, 25, 12], subType);
+  }
+});
+
+test('窓: 割当て無し（暗黙の既定）は通知の対象外', () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, {});
+  const { graph } = graphWithFrames(sym, 1, [{ category: OpeningCategory.WINDOW, subType: 'fixed' }]);
+  assert.deepEqual(collectDetailFitFailures(graph), []);
+});
+
+test('【失敗系】窓: 引き違い窓（SLIDE_DOUBLE）は明示の割当てがあっても通知しない（対象外）', () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { [JAMB]: materialBoundFigure('df-chk-win-sd') });
+  const { graph } = graphWithFrames(sym, 1, [{ category: OpeningCategory.WINDOW, subType: 'doubleSliding' }]);
+  assert.deepEqual(collectDetailFitFailures(graph), []);
+});
+
+test('【失敗系】窓: 種別の参照切れ（findCatalogEntry が null）は明示の方立があっても通知しない', () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { [JAMB]: materialBoundFigure('df-chk-win-gone') });
+  const { graph } = graphWithFrames(sym, 1, [{ category: OpeningCategory.WINDOW, subType: 'no-such' }]);
+  assert.deepEqual(collectDetailFitFailures(graph), []);
+});
+
+test('窓: 上枠は試さない（slots=[HEAD, FIGURE] で窓の行なし・全 slot でも JAMB だけ）', () => {
+  const sym = uniqueSymbolKey();
+  installFrameSymbol(sym, { [JAMB]: materialBoundFigure('df-chk-win-h') });
+  const { graph } = graphWithFrames(sym, 1, [{ category: OpeningCategory.WINDOW, subType: 'fixed' }]);
+  assert.deepEqual(collectDetailFitFailures(graph, new Set(), { slots: [HEAD, DetailSlot.FIGURE] }), []);
+  assert.deepEqual(collectDetailFitFailures(graph).map(f => f.slot), [JAMB]);
+});
+
+test('【失敗系】窓: 明示の割当てがあっても壁が引けない（壁なし・axisCL なし）なら空で例外も出ない', () => {
+  setOverlay(CatalogKind.DETAIL_FIGURE, { user: [needs80Head('df-chk-win-n80')] });
+  const over = { category: OpeningCategory.WINDOW, subType: 'fixed', detailRefs: { [JAMB]: 'df-chk-win-n80' } };
+  assert.deepEqual(collectDetailFitFailures(stubSwingGraph([], over)), []);
+  assert.deepEqual(collectDetailFitFailures(stubSwingGraph([[0, 60]], { ...over, axisCL: null })), []);
+});
+
 test('片開き戸: 建具個別の detailRefs が参照切れ → 既定へ戻らず「見つかりません」の行（描画は従来）。fit できる図なら空', () => {
   const sym = uniqueSymbolKey();
   installFrameSymbol(sym, {});

@@ -14,7 +14,7 @@ import {
 import { detailFrameKindOf } from './openingPlanSymbolGeometry.js';
 import { ElevationLineRole, ElevationDash, weightForRole } from '../elevation/elevationStyle.js';
 import { line, polyline } from '../elevation/elevationPrimitives.js';
-import { OpeningMechanism, detailFigureEntry, detailFigureRefsFor, fitDetailLocalMemo, subTypeDetailFigureRefsFor } from './openingCatalog.js';
+import { OpeningMechanism, IMPLEMENTED_MECHANISMS, detailFigureEntry, detailFigureRefsFor, fitDetailLocalMemo, subTypeDetailFigureRefsFor } from './openingCatalog.js';
 import { placeDetailSides, placeDetailElevation, withoutCollinearPoints } from './openingDetailFrame.js';
 import { effectiveHeight, effectiveSillHeight } from './openingNumbering.js';
 
@@ -120,6 +120,8 @@ const WINDOW_JAMB_DEFAULT_KEYS = Object.freeze({
 export function frameDefaultKey(opening, slot, mechanism) {
   if (opening?.subType === SWING_LEAF_SUBTYPE) return swingDoorDefaultKey(slot);
   if (opening?.category !== OpeningCategory.WINDOW || slot !== DetailSlot.JAMB) return undefined;
+  // 機構の分からない窓（種別の参照切れ）・実装外の機構は描画に方立が出ないので対象外
+  if (mechanism === undefined || !IMPLEMENTED_MECHANISMS.has(mechanism)) return undefined;
   if (mechanism === OpeningMechanism.SLIDE_DOUBLE || mechanism === OpeningMechanism.FRAME_ONLY) return undefined;
   return WINDOW_JAMB_DEFAULT_KEYS[detailFrameKindOf(mechanism)];
 }

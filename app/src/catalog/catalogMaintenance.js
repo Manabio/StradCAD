@@ -1329,7 +1329,7 @@ export function collectKnownCatalogKeys(kind, builtinList) {
  * entry→formの変換（fixtureSymbolFormFromEntry）を経てからこの関数を呼ぶため）。
  * @param {{ frameOnly?: boolean }|null} form フォーム値。
  * 方立・上枠の詳細図の割当て欄（showDetailSelects）は記号の機構によらず全記号に出す（記号は機構を持たない。
- * 割当ては三方枠と片開き戸で使い、他の機構の建具では無視される）。
+ * 割当ては三方枠・片開き戸（方立・上枠）・窓（方立）で使い、他の機構の建具では無視される）。
  * @returns {{ showProfile: boolean, showDetailSelects: boolean }}
  */
 export function fixtureSymbolFormFieldsFor(form) {
@@ -1354,7 +1354,7 @@ export const FIXTURE_SYMBOL_DETAIL_SLOT_TEXT = Object.freeze({
 });
 
 /** 建具記号フォームの方立・上枠の割当て欄に添える説明（どの建具で効くか）。 */
-export const FIXTURE_SYMBOL_DETAIL_HINT = '三方枠・片開き戸で使う';
+export const FIXTURE_SYMBOL_DETAIL_HINT = '三方枠・片開き戸（方立・上枠）・窓（方立）で使う';
 
 /**
  * 建具エディタ（openings/OpeningEditor.jsx）の詳細図の上書き欄の文言（S6a）。select の見出しは上の
@@ -1436,7 +1436,7 @@ export function buildFixtureSymbolEntry({
     entry.mechanism = FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM;
     if (FIXTURE_SYMBOL_PROFILES.includes(profile)) entry.profile = profile;
   }
-  // 詳細図の割当て（全記号。三方枠と片開き戸で使う。両方空なら項目ごと持たない）。
+  // 詳細図の割当て（全記号。三方枠・片開き戸・窓で使う。両方空なら項目ごと持たない）。
   const detailFigures = {};
   const jamb = (detailJamb ?? '').trim();
   const head = (detailHead ?? '').trim();
@@ -1496,7 +1496,7 @@ export function fixtureSymbolPreviewEntry(form) {
  * いるため、ここでの重複検査は不要（keyは変わらない）。label必須・category必須は追加・編集の
  * 両方で検査する（planSaveEntry側のkindDef.validateでも検査されるが、フォーム表示用の日本語
  * メッセージをここで先に出す——他種別のvalidateMaterialEntryと同じ役割分担）。
- * 詳細図の割当て（detailJamb／detailHead）: 全記号が持てる（三方枠と片開き戸で使う）。指定するキーは
+ * 詳細図の割当て（detailJamb／detailHead）: 全記号が持てる（三方枠・片開き戸・窓で使う）。指定するキーは
  * detailFigureList（三層合成後の詳細図エントリ）の中に、そのslotの絞り込み（detailFigureOptionsFor）で
  * 残る図として存在すること。detailFigureList を省略した場合は「図が1つも無い」扱い＝指定は全て拒否
  * （存在を確かめられないキーを黙って通さない）。

@@ -59,7 +59,7 @@ import {
   swingClosedLeafSpan, closedAngleFor, leafOpenAngle, angleVectors,
   swingDoubleLeafSpecs, swingChildLeafSpecs, fireDoorLeafSpecs, fireFoldLeafSpecs,
   trackOf, trackPerp, resolveSlideLayoutPanels, foldZigzagPoints, frameOnlyJambProfiles,
-  frameOnlyPerpRange, clampFrameFaceWidth,
+  frameOnlyPerpRange, clampFrameFaceWidth, jambWidthFor,
   DOOR_OPEN_ANGLE_DEG, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
 } from './openingPlanSymbolGeometry.js';
 import { resolveDetailFrame, resolveSwingDoorFrame, frameDefaultKey } from './openingDetailFit.js';
@@ -142,10 +142,8 @@ export const FRAME_HINGE_INSET_MM = FRAME_JAMB_WIDTH_MM - DOOR_HINGE_GAP_MM;
 // 戸先側後退量: 反対側の方立の「本体20mm」境界にぴったり納まる位置
 const FRAME_LATCH_INSET_MM = FRAME_JAMB_WIDTH_MM - FRAME_KAKARI_WIDTH_MM;
 
-/** 方立の全幅。窓は WINDOW_FRAME_JAMB_WIDTH_MM、建具（category 不明含む）は FRAME_JAMB_WIDTH_MM。開口幅の半分で頭打ち。 */
-export function jambWidthFor(opening) {
-  return Math.min(opening.category === OpeningCategory.WINDOW ? WINDOW_FRAME_JAMB_WIDTH_MM : FRAME_JAMB_WIDTH_MM, opening.width / 2);
-}
+// 方立の全幅 jambWidthFor は openingPlanSymbolGeometry.js が定義（通知 openingDetailFitCheck.js が描画の閉包なしで引くため）。既存の import 先は変えない。
+export { jambWidthFor };
 // 開き戸 詳細LODの専用inset（方立の全幅基準。窓は25基準、建具は従来の定数）
 export function hingeInsetFor(opening) {
   return opening.category === OpeningCategory.WINDOW ? WINDOW_FRAME_JAMB_WIDTH_MM - DOOR_HINGE_GAP_MM : FRAME_HINGE_INSET_MM;

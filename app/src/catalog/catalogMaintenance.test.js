@@ -22,7 +22,7 @@ import {
   collectExportableEntries, formatBuiltinSource, formatCatalogSourceLine,
   DEFAULT_PANEL_X, DEFAULT_PANEL_Y, materialFormHasDimensions, materialFormHasBackingClass,
   initialMaterialDimensions, materialFormWithCategory, validateMaterialFormDimensions,
-  detailFigureOptionsFor, fixtureSymbolFormWithFrameOnly,
+  detailFigureOptionsFor, fixtureSymbolFormWithFrameOnly, FIXTURE_SYMBOL_DETAIL_HINT,
 } from './catalogMaintenance.js';
 import { DetailSlot, DETAIL_SLOT_TARGETS, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
 import { setOverlay, clearOverlays, overlayFor, docDiffMap, composeCatalog, markOverlayUntrusted } from './catalogRegistry.js';
@@ -2014,6 +2014,10 @@ test('fixtureSymbolFormFieldsFor: 方立・上枠の割当て欄（showDetailSel
   for (const form of [{ frameOnly: true }, { frameOnly: false }, {}, null]) {
     assert.equal(fixtureSymbolFormFieldsFor(form).showDetailSelects, true);
   }
+});
+
+test('FIXTURE_SYMBOL_DETAIL_HINT（S8f-2）: 注記は三方枠・片開き戸（方立・上枠）・窓（方立）で使うと書く', () => {
+  assert.equal(FIXTURE_SYMBOL_DETAIL_HINT, '三方枠・片開き戸（方立・上枠）・窓（方立）で使う');
 });
 
 test('【失敗系】fixtureSymbolFormFieldsFor: エントリの形（mechanism:FIXTURE_SYMBOL_FRAME_ONLY_MECHANISM）を渡してもshowProfile:false（フォーム形専用であることの固定）', () => {
