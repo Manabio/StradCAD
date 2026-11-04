@@ -3,7 +3,7 @@
 部分詳細図（建具の枠・部屋の取り合い・屋根・器具の姿図を、寸法に合わせて各図へ重ねる図）の登録と反映。純モジュールは `detail/`、登録画面は `ui/DetailHelperPanel.jsx`（判断は `ui/detailHelperForm.js`）、割当ては保守パネルの建具記号タブ。用語は `glossary.md`。方立（平面）・上枠（展開）の割当ては三方枠（WF/SF/SSF）・片開き戸・窓の方立（平面だけ。引き違い窓を除く）で使う（MVP は三方枠だけ。片開き戸は S8e・窓は S8f）。
 
 ## 置き場
-- 新カタログ種別 `detailFigure`（7 種別目）。三層（本体＞ライブラリ＞同梱）の照合・差分通知・上書き印がそのまま効く（`catalog-model.md`）。本体は組込みの巾木 出 10（`df-builtin-baseboard-10`）・天板 厚 20（`df-builtin-kneecap-20`）・片開き戸の方立と上枠（`df-builtin-door-jamb-30`・`-head-30`。S8e）・窓の方立 3 種（`df-builtin-window-jamb-25`・`-open-25`・`-notched-25`。S8f-1）だけ（`detail/detailBuiltins.js`）。
+- 新カタログ種別 `detailFigure`（7 種別目）。三層（本体＞ライブラリ＞同梱）の照合・差分通知・上書き印がそのまま効く（`catalog-model.md`）。本体は組込みの巾木 出 10（`df-builtin-baseboard-10`）・天板 厚 20（`df-builtin-kneecap-20`）・片開き戸の方立と上枠（`df-builtin-door-jamb-30`・`-head-30`。S8e）・窓の方立 3 種（`df-builtin-window-jamb-25`・`-open-25`・`-notched-25`。S8f-1）・窓の上枠と下枠（`df-builtin-window-head-25`・`-sill-25`。S8f-3b）だけ（`detail/detailBuiltins.js`）。
 - 同梱するのは**使用中だけ**（建具記号の `detailFigures` から推移展開で届く図）。読み込んだ DXF・PDF とその由来の図（`provenance.source` が `'dxf'` か `'pdf'`）は同梱しない（R10。S7a・S7b で実装済み＝`usedEntries.js` の `isImportedFigure` が推移展開と回復後の再展開で除く）。割当てだけが文書に残り、図を持たない環境では既定の描きに戻る。
 - 参照の担い手は建具記号エントリの任意項目 `detailFigures:{jamb,head}`。三方枠の断面形の選び先 `profile` が既に建具記号にある前例に揃え、FBS を触らずに通す。建具個別の上書き（`opening.detailRefs`）は S6a で永続化（FBS 末尾 28・29、undo は建具編集の EDITABLE、読み替えは walker の rewrite）。建具エディタの select（方立・上枠の 2 つ。三方枠と片開き戸だけに出る。先頭は「記号の設定を使う」）と、R16 の明示ボタン（三方枠だけ。片開き戸の見付・出幅は Opening の項目でない＝R5）「図の寸法を建具へ」（解決後の方立の図の param 束縛 mm を見付・出幅へ写す。undo あり・自動の書き戻しなし）。判断は `openings/openingDetailRefsEdit.js`。
 
@@ -116,6 +116,14 @@
 - 建具エディタの方立・上枠の select は slot の配列 `frameDetailSlotsFor(opening, isFrameOnly, mechanism)` で絞る: 三方枠・片開き戸＝方立と上枠、窓＝方立だけ（上枠・下枠は S8f-3）、引き違い窓などは姿図だけ。判断は `frameDefaultKey` に寄せ、機構の集合を複製しない（jsx にも書かない）。機構の分からない窓（種別の参照切れ）と実装外の機構の窓は描画にも方立が出ないので対象外（`frameDefaultKey` が undefined）。
 - 「同キーの選択＝既定扱い」の畳み込みの基準は 記号の割当て ?? `frameDefaultKey(opening, slot, mechanism)`。窓は方立の種別ごとの組込みキーなので、形違いの組込みを選ぶと上書きとして残る。
 - 通知（`collectDetailFitFailures`）は窓の明示の方立も対象（片開き戸と同じ関数 `collectFrameFailures`）。壁厚はホスト壁の両仕上げ面の間、見付は `jambWidthFor`（窓 25）で、描画と同じ式を共有する。窓の上枠は試さない。保守パネルの注記は「三方枠・片開き戸（方立・上枠）・窓（方立）で使う」。
+
+## 窓の上枠・下枠の暗黙の既定（S8f-3b）
+- 展開の窓の断面（`openingSection.js` の `window`）の上枠・下枠を、割当て無しなら組込みの図（`df-builtin-window-head-25`・`-sill-25`。見付 25 の矩形）で描く。出力は 3a の矩形と同値で、差は図から描いた矩形の `source:'detail'` だけ（片開き戸の上枠と同じ関数 `sectionFramePrimitives`。下枠は coord2 側＝窓台の上端から上へ s が伸びる鏡像を使う）。下枠は slot の分類に subject SILL が要るので上枠と別の図。
+- 探索順: 上枠は R9（head ＞ jamb の流用）のまま、下枠は **sill だけ**（R5。下枠は水切り・水返しで形が違うので方立・上枠を黙って流用しない）。引き違い窓（SLIDE_DOUBLE）も上枠・下枠の既定が効く（方立だけ対象外）。
+- **掃き出し窓（窓台 0）は下枠を描かず既定キーも無い**（R1。判定は `windowHasSill`＝`openingNumbering.js` が唯一の定義。`openingSection.js` と `frameDefaultKey` の循環 import を避けて置いた）。
+- 既定を使うのは見付が全幅 25 のときだけ（高さ 50 未満の窓は見付が頭打ちされ、組込みの固定 25 と食い違うので従来の矩形。平面の方立の R4 と同型）。明示の割当ては fw へ fit する。fit できない・参照切れは従来の矩形（source なし）。同梱は窓が 1 つでもあれば方立 3 ＋上枠・下枠 2 の 5 図。
+- 限界・先送り: 障子・竪枠の線は定数のまま／上枠は保守パネルの記号の上枠・方立と建具エディタの窓の方立（R9 の流用）から明示になる。下枠の入口は無い。上枠・下枠の fit 失敗の通知は S8f-3c まで出ない（`openingDetailFitCheck.js` は窓で JAMB しか試さない）。select・通知・保守パネルの注記は S8f-3c。
+- 下枠の t も開く側の面が正（片開き戸の上枠・窓の上枠と同じ）。開く向きの無い窓は帯の奥が正。水切りのような室内外で非対称な下枠の図は屋外側を保証しない＝先送り（断面に屋外の向きを渡す必要）。
 
 ## ヘルパーの組込み層（S8d）
 - 一覧は組込み＋ライブラリ（`helperLibraryRows`。出所バッジ 組込み／ライブラリ／上書き。同キーは組込みの位置の上書き 1 行）。組込みは読み取り専用で開き、「編集（上書きを作る）」で同キーのまま解錠→保存が `overridesBuiltin` のライブラリ項目になる（`planSave` が builtinList を渡す。同一内容は「変更なし」）。上書きは開いている文書（保存で同梱を外す）と同梱を持たない文書に効く。保存済みの文書は同梱（組込みの写し）が勝ち、合わせ直すまで従来の形（材と同じ規約）。

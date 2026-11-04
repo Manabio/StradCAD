@@ -724,6 +724,9 @@ export const DETAIL_BUILTIN_DOOR_HEAD_KEY = 'df-builtin-door-head-30';
 export const DETAIL_BUILTIN_WINDOW_JAMB_KEY = 'df-builtin-window-jamb-25';
 export const DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY = 'df-builtin-window-jamb-open-25';
 export const DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY = 'df-builtin-window-jamb-notched-25';
+/** 窓の上枠・下枠（展開の断面。S8f-3b）の組込み図のキー。窓があれば割当て無しの暗黙の既定として使う（下枠は窓台のある窓だけ）。見付は 25。 */
+export const DETAIL_BUILTIN_WINDOW_HEAD_KEY = 'df-builtin-window-head-25';
+export const DETAIL_BUILTIN_WINDOW_SILL_KEY = 'df-builtin-window-sill-25';
 /** 片開き戸の建具種別キー（openingCatalog.js の FITTING_CATALOG）。catalog/ は openings/ を引けないので暗黙の既定の同梱判定（usedEntries.js）と共有できるようここに置く。 */
 export const SWING_LEAF_SUBTYPE = 'singleSwing';
 

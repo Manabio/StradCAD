@@ -10,7 +10,7 @@ import {
   PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumRole, DetailDatumKind, DetailAxis, DetailDash,
   DetailSlot, DetailFigureSource, DETAIL_FIGURE_VERSION, FRAME_OVERHANG_MM, SWING_LEAF_SUBTYPE,
   DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
-  DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY,
+  DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY,
 } from '../core/constants.js';
 import { detailBuiltinFigures, fitLocal } from '../detail/detailPlacement.js';
 import { LodLevel } from '../viewport.js';
@@ -288,7 +288,7 @@ test('frameDefaultKey: 片開き戸＝slot 別・窓の方立＝方立の種別�
   for (const [kind, entry] of Object.entries(KIND_ENTRIES)) {
     assert.equal(frameDefaultKey(opening(entry), JAMB, entry.mechanism), KIND_KEYS[kind], kind);
   }
-  assert.equal(frameDefaultKey(opening(WINDOWS[0]), DetailSlot.HEAD, OpeningMechanism.FIXED), undefined, '窓の上枠は対象外');
+  assert.equal(frameDefaultKey(opening(WINDOWS[0]), DetailSlot.HEAD, OpeningMechanism.FIXED), DETAIL_BUILTIN_WINDOW_HEAD_KEY, '窓の上枠（S8f-3b）');
   assert.equal(frameDefaultKey(opening(entryOf('window', 'doubleSliding')), JAMB, OpeningMechanism.SLIDE_DOUBLE), undefined, '引き違い窓');
   assert.equal(frameDefaultKey({ category: 'window', subType: 'x' }, JAMB, OpeningMechanism.FRAME_ONLY), undefined, '三方枠');
   assert.equal(frameDefaultKey({ category: 'window', subType: 'x' }, JAMB, undefined), undefined, '機構未指定の窓（種別の参照切れ）');

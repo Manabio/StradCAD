@@ -11,7 +11,7 @@
  * 座標系: 呼び出し側が「帯の起点x0」「伸びる向き dir(+1/-1)」「床のz=0」を与える。返す矩形は
  * 図のローカル座標（yは上向き負）。
  */
-import { effectiveHeight, effectiveFrameProjection, fixtureSymbolOf } from './openingNumbering.js';
+import { effectiveHeight, effectiveFrameProjection, fixtureSymbolOf, windowHasSill } from './openingNumbering.js';
 import { OpeningCategory } from '@core';
 import {
   DetailSlot, SWING_LEAF_SUBTYPE, DETAIL_PRIM_SOURCE, DETAIL_FIT_EPS_MM, WINDOW_FRAME_JAMB_WIDTH_MM,
@@ -26,7 +26,7 @@ import {
   swingOpenPerpDir, frameOnlyPerpRange, frameOnlyJambProfiles, clampFrameFaceWidth,
   trackPerp, trackOf, resolveSlideLayoutPanels,
 } from './openingPlanSymbolGeometry.js';
-import { resolveDetailFrame, resolveSwingDoorFrame } from './openingDetailFit.js';
+import { resolveDetailFrame, resolveSwingDoorFrame, frameDefaultKey } from './openingDetailFit.js';
 
 // 従来の断面帯（枠40＋扉40＋枠40）。描き方の指定が無い建具はこのまま。
 const LEGACY_FRAME_W = 40;
@@ -124,13 +124,8 @@ export function isWindowSection(o) {
   return methodFor(o) === 'window';
 }
 
-/**
- * 窓台があるか（窓台高さ≠0）。掃き出し窓（窓台0）だけが下枠を描かず、障子・竪枠の線は床まで届く。
- * 床線の判定（elevationFigure.js reachesFloor＝窓台が0）と同じ境界（負の窓台＝不正値は従来どおり床下に描く）。
- */
-export function windowHasSill(o) {
-  return sillOf(o) !== 0;
-}
+// 窓台の有無は openingNumbering.js が唯一の定義（openingDetailFit.js と共有。循環 import を避けるため）。既存の import 元のため再輸出する。
+export { windowHasSill };
 
 /**
  * 窓・片開き戸の断面の枠の見付(mm)。窓＝窓の見付（開口高さの半分で頭打ち。上枠と下枠が交わらない）、
@@ -236,23 +231,27 @@ const isAxisAlignedRect = points => points.length === 4 && points.every((p, i) =
   return Math.abs(p.along - q.along) <= DETAIL_FIT_EPS_MM || Math.abs(p.perp - q.perp) <= DETAIL_FIT_EPS_MM;
 });
 
-// 片開き戸の断面の上枠（部分詳細図 S8e-2）。建具個別の detailRefs ＞ 記号の detailFigures の head（無ければ jamb の流用。R9）の図があれば
-// この断面の寸法（coord1=上端・coord2=開口下端・見込帯の壁の面＝帯の端から出幅ずつ内側・見付 30）で fit して写し、
-// 無ければ組込みの上枠（暗黙の既定。従来の矩形と同じ出力）。図が引けない（null）・fit できない（error）ときは従来の矩形（source なし）。
-// 断面の帯は常に「壁の面−出幅〜壁の面＋出幅」で見付も常に 30（従来の式に頭打ちが無い）ので、方立の R4 に当たる除外は無い。
-// t の正の側（扉が閉じる側）＝開く側の面は、atFar なら帯の奥（mm の大きい側）＝perp の増える向き。図は coord1 側の 1 組だけ使う。
+// 断面の上枠・下枠（部分詳細図 S8e-2・S8f-3b）。建具個別の detailRefs ＞ 記号の detailFigures の slot の図（head は無ければ jamb の流用。R9。
+// sill は sill だけ＝流用なし。R5）があればこの断面の寸法（coord1=上端・coord2=開口下端・見込帯の壁の面＝帯の端から出幅ずつ内側・見付 fw）で
+// fit して写し、無ければ defaultKey の組込み図（暗黙の既定。従来の矩形と同じ出力。片開き戸は slot HEAD の既定・窓は frameDefaultKey）。
+// 図が引けない（null）・fit できない（error）ときは従来の矩形（source なし。上枠＝上端から fw・下枠＝開口下端の上へ fw）。
+// 断面の帯は常に「壁の面−出幅〜壁の面＋出幅」で、見付も常に fw（従来の式に頭打ちが無い）ので、方立の R4 に当たる除外は無い。
+// t の正の側（扉が閉じる側）＝開く側の面は、atFar なら帯の奥（mm の大きい側）＝perp の増える向き。上枠は coord1 側（sides[0]）・
+// 下枠は coord2 側（sides[1]＝開口下端から上へ s が伸びる鏡像）の 1 組だけ使う。
 // 展開の図は source=DETAIL_PRIM_SOURCE を付ける（R3。輪郭が 4 点の軸平行な矩形なら従来と同じ rect、それ以外は閉じた polyline）。
-function swingHeadPrimitives(o, { top, sillTop, full, atFar, at, rect, polylinePrim, cutWeight, opts }) {
-  const legacy = () => [rect(0, full, top, top + FRAME_JAMB_WIDTH_MM, cutWeight)];
+function sectionFramePrimitives(o, { slot, fw, defaultKey, top, sillTop, full, atFar, at, rect, polylinePrim, cutWeight, opts }) {
+  const isSill = slot === DetailSlot.SILL;
+  const legacy = () => [isSill ? rect(0, full, sillTop - fw, sillTop, cutWeight) : rect(0, full, top, top + fw, cutWeight)];
   const wall = Number.isFinite(opts.wallThicknessMm) ? opts.wallThicknessMm : FALLBACK_WALL_THICKNESS_MM;
   const resolved = resolveSwingDoorFrame({
-    symbolKey: fixtureSymbolOf(o), detailRefs: o.detailRefs ?? null, slot: DetailSlot.HEAD, coord1: top, coord2: sillTop,
+    symbolKey: fixtureSymbolOf(o), detailRefs: o.detailRefs ?? null, slot, coord1: top, coord2: sillTop,
     faceMin: FRAME_OVERHANG_MM, faceMax: FRAME_OVERHANG_MM + wall, wallThickness: wall,
-    tSign: atFar ? 1 : -1, faceWidth: FRAME_JAMB_WIDTH_MM, projection: FRAME_OVERHANG_MM,
+    tSign: atFar ? 1 : -1, faceWidth: fw, projection: FRAME_OVERHANG_MM,
+    defaultKey, // undefined＝片開き戸の slot 別の既定（resolveSwingDoorFrame の省略時）・null＝既定なし
   });
   if (resolved === null || resolved.error) return legacy();
   const source = { source: DETAIL_PRIM_SOURCE };
-  return resolved.sides[0].map(st => {
+  return resolved.sides[isSill ? 1 : 0].map(st => {
     const ps = st.points;
     if (st.closed && isAxisAlignedRect(ps)) {
       const perps = ps.map(p => p.perp), alongs = ps.map(p => p.along);
@@ -310,7 +309,9 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
     // 扉の上端は戸当たり（かかり代）まで＝上枠の見付のうち本体ぶん（30-10=20）だけ下がる。
     const leafTop = top + (FRAME_JAMB_WIDTH_MM - FRAME_KAKARI_WIDTH_MM);
     return [
-      ...swingHeadPrimitives(o, { top, sillTop, full, atFar, at, rect, polylinePrim, cutWeight, opts }),
+      ...sectionFramePrimitives(o, {
+        slot: DetailSlot.HEAD, fw: FRAME_JAMB_WIDTH_MM, defaultKey: undefined, top, sillTop, full, atFar, at, rect, polylinePrim, cutWeight, opts,
+      }),
       rect(leafLo, leafLo + leaf, leafTop, sillTop - DOOR_LEAF_BOTTOM_MM, silhouetteWeight), // 扉
       // 扉のない側の枠の縦線。**見えがかりなので細線**（ユーザー明示指示2026-09
       // 「「13」D: 建具建枠の見えがかりは細線」）。呼び出し側が detailWeight を渡さない場合は
@@ -334,8 +335,13 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
     const sashBottom = hasSill ? sillTop - fw + kakari : sillTop;
     const { sashes, glassAt } = windowSashLayout(entry, { full, atFar, open });
     const sashDrawn = sashBottom > sashTop;
-    const prims = [rect(0, full, top, top + fw, cutWeight)];
-    if (hasSill) prims.push(rect(0, full, sillTop - fw, sillTop, cutWeight));
+    // 上枠・下枠は組込みの部分詳細図が暗黙の既定（建具個別 ＞ 記号の割当て ＞ 既定。S8f-3b）。下枠は窓台のある窓だけ（掃き出し窓は描かない）。
+    const mechanism = entry.mechanism;
+    // 既定は見付が全幅 25 のときだけ（組込み図の見付は固定 25。高さの半分で頭打ちした窓は従来の矩形。平面の方立の R4 相当）。明示の割当ては fw へ fit する。
+    const defaultKeyFor = slot => (fw === WINDOW_FRAME_JAMB_WIDTH_MM ? (frameDefaultKey(o, slot, mechanism) ?? null) : null);
+    const frameCtx = { fw, top, sillTop, full, atFar, at, rect, polylinePrim, cutWeight, opts };
+    const prims = sectionFramePrimitives(o, { ...frameCtx, slot: DetailSlot.HEAD, defaultKey: defaultKeyFor(DetailSlot.HEAD) });
+    if (hasSill) prims.push(...sectionFramePrimitives(o, { ...frameCtx, slot: DetailSlot.SILL, defaultKey: defaultKeyFor(DetailSlot.SILL) }));
     if (sashDrawn) {
       for (const s of sashes) prims.push(rect(s.lo, s.hi, sashTop, sashBottom, silhouetteWeight));
       if (glassAt !== null) prims.push(linePrim(at(glassAt), sashTop, at(glassAt), sashBottom, { weight: silhouetteWeight }));

@@ -61,6 +61,15 @@ export function effectiveSillHeight(opening) {
   return opening.category === OpeningCategory.WINDOW ? (opening.sillHeight ?? 0) : 0;
 }
 
+/**
+ * 窓台があるか（窓台高さ≠0）。掃き出し窓（窓台0）だけが下枠を描かず、障子・竪枠の線は床まで届く。
+ * 床線の判定（elevationFigure.js reachesFloor＝窓台が0）と同じ境界（負の窓台＝不正値は従来どおり床下に描く）。
+ * 展開の断面（openingSection.js）と下枠の既定キー（openingDetailFit.js frameDefaultKey）が共有する唯一の式。
+ */
+export function windowHasSill(opening) {
+  return effectiveSillHeight(opening) !== 0;
+}
+
 /** レバーハンドル取付高さの既定値(mm、FLから)。 */
 export const DEFAULT_HANDLE_HEIGHT = 1050;
 

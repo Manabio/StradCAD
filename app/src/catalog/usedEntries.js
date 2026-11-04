@@ -17,6 +17,7 @@ import {
   DetailLenMode, DetailProvenanceSource, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY,
   DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY, SWING_LEAF_SUBTYPE, OpeningCategory,
   DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
+  DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
 } from '../core/constants.js';
 import { parseBaseboardHeightMm } from '../core/baseboardHeight.js';
 import { moveParts } from '../detail/detailModel.js';
@@ -49,7 +50,7 @@ export function collectUsedMaterialCodes(snapshot) {
 /**
  * 暗黙の既定（S8c）で使う組込みの詳細図キー。detailRefs には現れない参照なので SNAPSHOT_REF_WALKERS（alias の書き換えと共有）には
  * 足さず、使用キーの収集だけに数える（上書きがあれば同梱され、別環境でも同じ形で描かれる）。
- * 巾木高さが解析できる部屋が 1 つでもあれば巾木、腰壁（hasKnee）の記録が 1 つでもあれば天板、片開き戸が 1 つでもあれば方立と上枠、窓が 1 つでもあれば窓の方立 3 つ。
+ * 巾木高さが解析できる部屋が 1 つでもあれば巾木、腰壁（hasKnee）の記録が 1 つでもあれば天板、片開き戸が 1 つでもあれば方立と上枠、窓が 1 つでもあれば窓の方立 3 つと上枠・下枠 2 つ。
  * @param {object|null|undefined} snapshot
  * @returns {string[]}
  */
@@ -63,9 +64,12 @@ function implicitDetailFigureKeys(snapshot) {
   if ((snapshot?.openings ?? []).some(o => o?.subType === SWING_LEAF_SUBTYPE)) {
     keys.push(DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY);
   }
-  // 窓（category window）が 1 つでもあれば、平面の方立の組込み図 3 つ（S8f-1。方立の種別ごと）。
+  // 窓（category window）が 1 つでもあれば、平面の方立の組込み図 3 つ（S8f-1。方立の種別ごと）と展開の上枠・下枠 2 つ（S8f-3b）。
   if ((snapshot?.openings ?? []).some(o => o?.category === OpeningCategory.WINDOW)) {
-    keys.push(DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY);
+    keys.push(
+      DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
+      DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
+    );
   }
   return keys;
 }

@@ -4,6 +4,7 @@ import {
   DetailDash, DetailParam, DETAIL_FIGURE_VERSION, KNEE_CAP_THICKNESS_MM, DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY,
   DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY,
   DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
+  DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
   WINDOW_FRAME_JAMB_WIDTH_MM, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
 } from '../core/constants.js';
 
@@ -208,4 +209,29 @@ const WINDOW_JAMB_OPEN_25 = pairedFrameFigure({
   anchorVertices: [1, 2, 3],
 });
 
-export default [BASEBOARD_10, KNEE_CAP_20, DOOR_JAMB_30, DOOR_HEAD_30, WINDOW_JAMB_NOTCHED_25, WINDOW_JAMB_25, WINDOW_JAMB_OPEN_25];
+// 窓の上枠・下枠（展開の断面。S8f-3b）。見付 25 × （出幅＋壁厚＋出幅）の閉じた矩形。下枠は slot の分類に subject SILL が要るので別の図
+// （形は同じ。向きは置く側の鏡像＝placeDetailSides の coord2 側で決まる）。
+const WINDOW_HEAD_25 = pairedFrameFigure({
+  key: DETAIL_BUILTIN_WINDOW_HEAD_KEY,
+  label: `窓の上枠（見付 ${WINDOW_FRAME_JAMB_WIDTH_MM}）`,
+  view: DetailView.SECTION,
+  subject: DetailSubject.HEAD,
+  closed: true,
+  moves: rectFrameMoves(WINDOW_FRAME_JAMB_WIDTH_MM),
+  anchorVertices: [0, 2, 3],
+});
+
+const WINDOW_SILL_25 = pairedFrameFigure({
+  key: DETAIL_BUILTIN_WINDOW_SILL_KEY,
+  label: `窓の下枠（見付 ${WINDOW_FRAME_JAMB_WIDTH_MM}）`,
+  view: DetailView.SECTION,
+  subject: DetailSubject.SILL,
+  closed: true,
+  moves: rectFrameMoves(WINDOW_FRAME_JAMB_WIDTH_MM),
+  anchorVertices: [0, 2, 3],
+});
+
+export default [
+  BASEBOARD_10, KNEE_CAP_20, DOOR_JAMB_30, DOOR_HEAD_30, WINDOW_JAMB_NOTCHED_25, WINDOW_JAMB_25, WINDOW_JAMB_OPEN_25,
+  WINDOW_HEAD_25, WINDOW_SILL_25,
+];

@@ -10,18 +10,20 @@ import {
   DetailSlot, DetailDash, DETAIL_PRIM_SOURCE, DetailFigureSource, DETAIL_FIT_EPS_MM, DOOR_LEAF_THICKNESS_MM,
   DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY, SWING_LEAF_SUBTYPE, OpeningCategory,
   DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
+  DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
 } from '../core/constants.js';
 import { detailFrameKindOf } from './openingPlanSymbolGeometry.js';
 import { ElevationLineRole, ElevationDash, weightForRole } from '../elevation/elevationStyle.js';
 import { line, polyline } from '../elevation/elevationPrimitives.js';
 import { OpeningMechanism, IMPLEMENTED_MECHANISMS, detailFigureEntry, detailFigureRefsFor, fitDetailLocalMemo, subTypeDetailFigureRefsFor } from './openingCatalog.js';
 import { placeDetailSides, placeDetailElevation, withoutCollinearPoints } from './openingDetailFrame.js';
-import { effectiveHeight, effectiveSillHeight } from './openingNumbering.js';
+import { effectiveHeight, effectiveSillHeight, windowHasSill } from './openingNumbering.js';
 
-// 要求された枠の図を探す slot の順（head は head の図が無ければ jamb を流用する＝R9）。
+// 要求された枠の図を探す slot の順（head は head の図が無ければ jamb を流用する＝R9。sill は下枠だけ＝方立・上枠を流用しない。S8f-3 R5）。
 const SLOT_ORDER = Object.freeze({
   [DetailSlot.JAMB]: [DetailSlot.JAMB],
   [DetailSlot.HEAD]: [DetailSlot.HEAD, DetailSlot.JAMB],
+  [DetailSlot.SILL]: [DetailSlot.SILL],
   [DetailSlot.FIGURE]: [DetailSlot.FIGURE],
 });
 
@@ -111,18 +113,23 @@ const WINDOW_JAMB_DEFAULT_KEYS = Object.freeze({
 });
 
 /**
- * 枠の暗黙の既定の組込み図のキー（無ければ undefined）。片開き戸＝slot ごと（swingDoorDefaultKey）・窓＝方立（JAMB）だけ方立の種別ごと
- * （引き違い窓 SLIDE_DOUBLE・三方枠 FRAME_ONLY は対象外）。建具エディタが「同キーの選択＝既定扱い」へ畳む基準にも使える。
- * @param {{category?:string, subType?:string}} opening
+ * 枠の暗黙の既定の組込み図のキー（無ければ undefined）。片開き戸＝slot ごと（swingDoorDefaultKey）・窓＝方立（JAMB）は方立の種別ごと
+ * （引き違い窓 SLIDE_DOUBLE・三方枠 FRAME_ONLY は対象外）、上枠（HEAD）・下枠（SILL。展開の断面。S8f-3b）は引き違い窓も含む窓の共通の図
+ * （下枠は窓台のある窓だけ。掃き出し窓は下枠を描かない）。建具エディタが「同キーの選択＝既定扱い」へ畳む基準にも使える。
+ * @param {{category?:string, subType?:string, sillHeight?:number}} opening
  * @param {string} slot DetailSlot
  * @param {string} mechanism OpeningMechanism（窓の方立の種別の判定に使う）
  */
 export function frameDefaultKey(opening, slot, mechanism) {
   if (opening?.subType === SWING_LEAF_SUBTYPE) return swingDoorDefaultKey(slot);
-  if (opening?.category !== OpeningCategory.WINDOW || slot !== DetailSlot.JAMB) return undefined;
-  // 機構の分からない窓（種別の参照切れ）・実装外の機構は描画に方立が出ないので対象外
+  if (opening?.category !== OpeningCategory.WINDOW) return undefined;
+  if (slot !== DetailSlot.JAMB && slot !== DetailSlot.HEAD && slot !== DetailSlot.SILL) return undefined;
+  // 機構の分からない窓（種別の参照切れ）・実装外の機構は描画に方立・上枠・下枠が出ないので対象外
   if (mechanism === undefined || !IMPLEMENTED_MECHANISMS.has(mechanism)) return undefined;
-  if (mechanism === OpeningMechanism.SLIDE_DOUBLE || mechanism === OpeningMechanism.FRAME_ONLY) return undefined;
+  if (mechanism === OpeningMechanism.FRAME_ONLY) return undefined;
+  if (slot === DetailSlot.HEAD) return DETAIL_BUILTIN_WINDOW_HEAD_KEY;
+  if (slot === DetailSlot.SILL) return windowHasSill(opening) ? DETAIL_BUILTIN_WINDOW_SILL_KEY : undefined;
+  if (mechanism === OpeningMechanism.SLIDE_DOUBLE) return undefined;
   return WINDOW_JAMB_DEFAULT_KEYS[detailFrameKindOf(mechanism)];
 }
 
@@ -138,7 +145,7 @@ const snapNear = (v, refs) => refs.find(r => Math.abs(v - r) <= DETAIL_FIT_EPS_M
  * どれも無いときだけ組込みの上枠（R9 の流用）。明示の方立の図は上枠にも流用される（上枠は同じ戸当たりの断面なので物理的に正しい）が、
  * 既定の上枠は従来の矩形（R2。方立の既定を流用すると欠き込みが出て従来と一致しない）。
  * @param {object} p resolveDetailFrame と同じ（slot は既定 JAMB）に、faceMax・tSign を加えたもの。wallThickness＝faceMax−faceMin をそのまま渡す。
- *   defaultKey＝割当て無しのときの組込み図のキー（省略時は片開き戸の slot 別の既定。窓の方立は frameDefaultKey の結果を渡す。S8f-1）
+ *   defaultKey＝割当て無しのときの組込み図のキー（省略時は片開き戸の slot 別の既定。窓の方立は frameDefaultKey の結果を渡す。S8f-1。null を渡すと引数の既定（片開き戸の表）に落ちず「既定なし」になる。detailFigureEntry(null) が null を返すため）
  * @returns {null | {error:{code:string, message:string}, source:string} | {sides: object[][], profiles: object[], source:string}}
  *   null＝従来の描きへ戻る（参照切れ・既定の組込みが引けない）。error＝fit できない（呼び出し側は従来の描きへ。明示の割当てだけ通知の対象）。
  */

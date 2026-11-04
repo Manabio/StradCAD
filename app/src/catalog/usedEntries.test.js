@@ -11,6 +11,7 @@ import { SNAPSHOT_REF_WALKERS } from './codeNormalization.js';
 import {
   DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY, DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY, SWING_LEAF_SUBTYPE,
   DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
+  DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
 } from '../core/constants.js';
 
 function baseSnapshot(overrides) {
@@ -646,13 +647,14 @@ test('collectUsedKeys: 片開き戸（subType が SWING_LEAF_SUBTYPE）が 1 つ
   assert.deepEqual([...used.detailFigure].sort(), [DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY].sort());
 });
 
-test('collectUsedKeys: 窓（category window）が 1 つでもあれば窓の方立の組込み 3 つが入る（S8f-1）。片開き戸の図は入らない', () => {
+test('collectUsedKeys: 窓（category window）が 1 つでもあれば窓の方立 3 つと上枠・下枠 2 つの組込みが入る（S8f-1・S8f-3b）。片開き戸の図は入らない', () => {
   const used = collectUsedKeys({ openings: [
     { id: 'o1', category: 'window', subType: 'fixed' },
     { id: 'o2', category: 'fitting', subType: 'swingIn' },
   ] });
   assert.deepEqual([...used.detailFigure].sort(), [
     DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
+    DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
   ].sort());
 });
 
