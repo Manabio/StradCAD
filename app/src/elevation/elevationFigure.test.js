@@ -2048,6 +2048,19 @@ test('【失敗系・隅の建具断面・床線】窓台のある隅の窓(sill
   assert.deepEqual(floorLineOf(p2).map(p => [p.x1, p.x2]), [[0, 4000]]);
 });
 
+test('【窓の隅断面・床線】掃き出し窓（窓台0）は下枠が無くても床線を枠の外縁まで伸ばす（始端-157・終端4157）', () => {
+  const sweepOut = { sillHeight: 0, height: 2000, category: OpeningCategory.WINDOW, subType: 'doubleSliding' };
+  const g0 = makeGraph({ openings: [{ ...perpOpeningFor(), ...sweepOut }], walls: [perpWall({ lo: -145, hi: 0 })] });
+  const p0 = buildFaceFigure(makeFace(), baseCtx({ graph: g0, prevFace: makePerpFace(), nextFace: null }));
+  assert.deepEqual(floorLineOf(p0).map(p => [p.x1, p.x2]), [[-157, 4000]]);
+  const head = p0.find(p => p.type === 'rect' && p.weight === 'thick' && p.h === 25);
+  assert.deepEqual([head.x, head.w, head.y], [-157, 169, -2000], '窓の上枠（見付25・見込は壁厚145+24）');
+  assert.equal(p0.filter(p => p.type === 'rect' && p.weight === 'thick' && p.h === 25).length, 1, '下枠は描かない');
+  const g1 = makeGraph({ openings: [endOpening(sweepOut)], walls: [endWall()] });
+  const p1 = buildFaceFigure(makeFace(), baseCtx({ graph: g1, prevFace: null, nextFace: endNextFace() }));
+  assert.deepEqual(floorLineOf(p1).map(p => [p.x1, p.x2]), [[0, 4157]]);
+});
+
 // ---- 三方枠（WF=solid／SF=bent）の隅断面と床線（S10-10）。見込＝壁の面から面＋2×出幅・床線は枠の外縁まで ----
 // 合成 graph の壁は軸CLの実効値と axisValue から面の範囲が決まる（wallFaceRange。反対側の壁が無ければ軸CL対称）。
 function frameHostWall(faceLo, faceHi, axisId) {

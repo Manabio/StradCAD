@@ -13,15 +13,18 @@
  */
 import { effectiveHeight, effectiveFrameProjection, fixtureSymbolOf } from './openingNumbering.js';
 import { OpeningCategory } from '@core';
-import { DetailSlot, SWING_LEAF_SUBTYPE, DETAIL_PRIM_SOURCE, DETAIL_FIT_EPS_MM } from '../core/constants.js';
+import {
+  DetailSlot, SWING_LEAF_SUBTYPE, DETAIL_PRIM_SOURCE, DETAIL_FIT_EPS_MM, WINDOW_FRAME_JAMB_WIDTH_MM,
+} from '../core/constants.js';
 import { graphList } from '../graphReadScope.js';
 import { rect as rectPrim, line as linePrim, polyline as polylinePrim } from '../elevation/elevationPrimitives.js';
-import { findCatalogEntry, frameProfileFor, OpeningMechanism } from './openingCatalog.js';
+import { findCatalogEntry, frameProfileFor, OpeningMechanism, IMPLEMENTED_MECHANISMS } from './openingCatalog.js';
 import { findHostWall, wallFaceRange } from './openingGeometry.js';
 import { frameOnlyInnerRect } from './openingElevationFigure.js';
 import {
   FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM, FRAME_OVERHANG_MM,
   swingOpenPerpDir, frameOnlyPerpRange, frameOnlyJambProfiles, clampFrameFaceWidth,
+  trackPerp, trackOf, resolveSlideLayoutPanels,
 } from './openingPlanSymbolGeometry.js';
 import { resolveDetailFrame, resolveSwingDoorFrame } from './openingDetailFit.js';
 
@@ -84,8 +87,8 @@ export function openingOpenPerpDir(o) {
 }
 
 /**
- * その建具の断面帯の全幅(mm)。呼び出し側が帯の配置（面端からの伸び・壁厚の中央寄せ）を
- * 決めるために先に引ける。
+ * その建具の断面帯の全幅(mm)。呼び出し側は帯を「壁の材の範囲の下端−出幅」から +方向へこの幅だけ置く
+ * （中央寄せはしない）。
  * @param {import('@core').Opening} o
  * @returns {number}
  */
@@ -108,8 +111,82 @@ export function openingSectionWidthMm(o, opts = {}) {
 const SECTION_METHODS = { [SWING_LEAF_SUBTYPE]: 'swingLeaf' };
 
 function methodFor(o) {
-  if (findCatalogEntry(o?.category, o?.subType)?.mechanism === OpeningMechanism.FRAME_ONLY) return 'frameOnly';
-  return SECTION_METHODS[o?.subType] ?? 'legacy';
+  const entry = findCatalogEntry(o?.category, o?.subType);
+  if (entry?.mechanism === OpeningMechanism.FRAME_ONLY) return 'frameOnly';
+  if (SECTION_METHODS[o?.subType]) return SECTION_METHODS[o.subType];
+  // 窓（種別が引けて機構が実装済み）は上枠・下枠＋障子の断面。参照切れ・実装外の機構は従来の描き方（平面も目印だけ）。
+  if (o?.category === OpeningCategory.WINDOW && entry && IMPLEMENTED_MECHANISMS.has(entry.mechanism)) return 'window';
+  return 'legacy';
+}
+
+/** 窓の断面の描き方（上枠・下枠＋障子）で描く建具か。 */
+export function isWindowSection(o) {
+  return methodFor(o) === 'window';
+}
+
+/**
+ * 窓台があるか（窓台高さ≠0）。掃き出し窓（窓台0）だけが下枠を描かず、障子・竪枠の線は床まで届く。
+ * 床線の判定（elevationFigure.js reachesFloor＝窓台が0）と同じ境界（負の窓台＝不正値は従来どおり床下に描く）。
+ */
+export function windowHasSill(o) {
+  return sillOf(o) !== 0;
+}
+
+/**
+ * 窓・片開き戸の断面の枠の見付(mm)。窓＝窓の見付（開口高さの半分で頭打ち。上枠と下枠が交わらない）、
+ * 片開き戸ほか＝建具の見付（三方枠は frameOnlyInnerRect）。3c の通知（上枠・下枠が壁厚に合うか）と描画が共有する。
+ * @param {import('@core').Opening} o
+ * @returns {number}
+ */
+export function sectionFrameFaceWidthFor(o) {
+  return isWindowSection(o)
+    ? clampFrameFaceWidth(WINDOW_FRAME_JAMB_WIDTH_MM, 0, effectiveHeight(o))
+    : FRAME_JAMB_WIDTH_MM;
+}
+
+// 開く向き（±1。開かない・引けないは0）。呼び出し側の指定（opts.openPerpDir）が建具自身の導出に優先する。
+const openDirOf = (o, opts) => opts.openPerpDir ?? openingOpenPerpDir(o);
+
+/**
+ * 開く側の壁面が帯の**奥側**（mmの大きい側）に来るか。壁面は帯の端から FRAME_OVERHANG_MM だけ内側にある
+ * （枠が壁面から12ずつ外へ出るため）。帯のmmは呼び出し側の向き（x0からdir方向）なので、世界座標の増える向きとの
+ * 対応を `worldPerDirSign`（+1で一致）で受け取る。開かない（0）は奥側。
+ */
+function openSideAtFar(o, opts) {
+  const openDir = openDirOf(o, opts);
+  const sign = opts.worldPerDirSign ?? 1;
+  return openDir === 0 ? true : (openDir > 0) === (sign > 0);
+}
+
+/**
+ * 窓の障子の置き方（帯のmm座標。0〜full）。平面の記号と同じ分け方——開き系は開く側の壁の面、
+ * 引き違い系はトラック、FIXは障子なしでガラスの線1本、他は中央。
+ * @param {object} entry - 窓のカタログ種別
+ * @param {{full:number, atFar:boolean, open:boolean}} ctx - open＝開き系（開く向きが±1）
+ * @returns {{sashes: {lo:number, hi:number}[], glassAt: number|null}}
+ */
+export function windowSashLayout(entry, { full, atFar, open }) {
+  const leaf = DOOR_LEAF_THICKNESS_MM;
+  const around = c => ({ lo: c - leaf / 2, hi: c + leaf / 2 });
+  if (open) {
+    const lo = atFar ? full - FRAME_OVERHANG_MM - leaf : FRAME_OVERHANG_MM;
+    return { sashes: [{ lo, hi: lo + leaf }], glassAt: null };
+  }
+  if (entry.mechanism === OpeningMechanism.FIXED) return { sashes: [], glassAt: full / 2 };
+  if (entry.mechanism === OpeningMechanism.SLIDE_DOUBLE) {
+    return { sashes: [0, 1].map(k => around(trackPerp(full / 2, k, 2, full))), glassAt: null };
+  }
+  if (entry.mechanism === OpeningMechanism.SLIDE_LAYOUT) {
+    const panels = resolveSlideLayoutPanels(entry);
+    // 空判定を先に（slideLayout 欄の無い種別を許す。平面 openingPlanSymbol.js と同じ順）。
+    if (panels.length > 0) {
+      const tracks = entry.slideLayout?.tracks;
+      const hasFix = panels.some(p => p.fix);
+      const used = [...new Set(panels.map((p, i) => trackOf(p, i, tracks, hasFix)))].sort((a, b) => a - b);
+      return { sashes: used.map(k => around(trackPerp(full / 2, k, tracks, full))), glassAt: null };
+    }
+  }
+  return { sashes: [around(full / 2)], glassAt: null };
 }
 
 /** 三方枠（機構 FRAME_ONLY）の断面の描き方（frameOnly）で描く建具か。呼び出し側が壁の範囲の取り方を分けるのに使う。 */
@@ -225,11 +302,7 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
     // 平面と同じ導出（openingOpenPerpDir）で、開く側の**壁の面**から壁の中へ扉厚ぶん。
     // 帯のmmは呼び出し側の向き（x0からdir方向）なので、世界座標の増える向きとの対応を
     // `worldPerDirSign`（+1で一致）で受け取り、必要なら鏡像にする。
-    const openDir = opts.openPerpDir ?? openingOpenPerpDir(o);
-    const sign = opts.worldPerDirSign ?? 1;
-    // 開く側の壁面が帯の**奥側**（mmの大きい側）に来るか。壁面は帯の端から
-    // FRAME_OVERHANG_MM だけ内側にある（枠が壁面から12ずつ外へ出るため）。
-    const atFar = openDir === 0 ? true : (openDir > 0) === (sign > 0);
+    const atFar = openSideAtFar(o, opts);
     const leafLo = atFar ? full - FRAME_OVERHANG_MM - leaf : FRAME_OVERHANG_MM;
     // **扉のない側の枠の縦線は見えがかりで描く**（ユーザー明示指示2026-09）——開口を覗くと、
     // 扉が無い側は枠の見込面が奥まで見え、その端（枠の外縁）が1本の縦線として現れる。
@@ -245,6 +318,36 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
       linePrim(at(freeEdgeMm), top + FRAME_JAMB_WIDTH_MM, at(freeEdgeMm), sillTop,
         { weight: opts.detailWeight ?? silhouetteWeight }),
     ];
+  }
+
+  if (methodFor(o) === 'window') {
+    // 窓の縦断面: 上枠・下枠（見付 fw。CUT）＋障子（見え掛かり。SILHOUETTE）＋竪枠の見え掛かり（細線）。
+    // 障子は枠にかかり代ぶん掛かる。窓台0（掃き出し窓）は下枠を描かず、障子・竪枠の線は床まで。
+    const entry = findCatalogEntry(o.category, o.subType);
+    const full = openingSectionWidthMm(o, opts);
+    const fw = sectionFrameFaceWidthFor(o);
+    const open = openDirOf(o, opts) !== 0;
+    const atFar = openSideAtFar(o, opts);
+    const hasSill = windowHasSill(o);
+    const kakari = Math.min(FRAME_KAKARI_WIDTH_MM, fw); // 見付より深く掛からない（開口が極端に低くても開口の外へ出ない）
+    const sashTop = top + fw - kakari;
+    const sashBottom = hasSill ? sillTop - fw + kakari : sillTop;
+    const { sashes, glassAt } = windowSashLayout(entry, { full, atFar, open });
+    const sashDrawn = sashBottom > sashTop;
+    const prims = [rect(0, full, top, top + fw, cutWeight)];
+    if (hasSill) prims.push(rect(0, full, sillTop - fw, sillTop, cutWeight));
+    if (sashDrawn) {
+      for (const s of sashes) prims.push(rect(s.lo, s.hi, sashTop, sashBottom, silhouetteWeight));
+      if (glassAt !== null) prims.push(linePrim(at(glassAt), sashTop, at(glassAt), sashBottom, { weight: silhouetteWeight }));
+    }
+    // 竪枠の見え掛かり（細線）。開き系は障子の無い側の端だけ、他は両端。上枠の下端から下枠の上端（掃き出しは床）まで。
+    const jambTop = top + fw, jambBottom = hasSill ? sillTop - fw : sillTop;
+    if (jambBottom > jambTop) {
+      for (const e of open ? [atFar ? 0 : full] : [0, full]) {
+        prims.push(linePrim(at(e), jambTop, at(e), jambBottom, { weight: opts.detailWeight ?? silhouetteWeight }));
+      }
+    }
+    return prims;
   }
 
   if (methodFor(o) === 'frameOnly') {

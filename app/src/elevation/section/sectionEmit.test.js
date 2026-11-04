@@ -1666,6 +1666,22 @@ test('【移行・アキ】emitOpenGapMarks: 対角2本（一点鎖線）＋「�
   assert.deepEqual([text.x, text.y], [2000, -1300], 'テキストは抜けの中心');
 });
 
+test('【窓の断面・切断壁の帯】emitColumns: 窓台800の外開き窓を横切る帯は壁1枚の範囲+24の幅で、上枠・下枠のCUT矩形が出る', () => {
+  const opening = {
+    id: 'w1', category: 'window', subType: 'casement', isVertical: false, hingeSide: -1, swingSide: 1,
+    width: 1000, height: 1170, sillHeight: 800,
+  };
+  const columns = [{ x0: 0, x1: 100, worldLo: 0, worldHi: 100, bands: [{
+    kind: 'cut', z0: 800, z1: 1970, openingPassThrough: true, opening,
+    wall: { materialRange: { lo: 0, hi: 100 } },
+  }] }];
+  const prims = emitColumns(columns, makeCut(), { ceilZ: 3000 });
+  const frames = prims.filter(p => p.type === 'rect' && p.weight === 'thick');
+  assert.deepEqual(frames.map(p => [p.x, p.w, p.y, p.h]), [[-12, 124, -1970, 25], [-12, 124, -825, 25]],
+    '帯幅＝壁1枚100+24。帯は壁の下端−12から。上枠・下枠は見付25');
+  assert.equal(prims.filter(p => p.type === 'rect' && p.weight === 'medium').length, 1, '障子1本');
+});
+
 test('【失敗系・移行・アキ】emitOpenGapMarks: 建具の開口には矩形・テキスト・バツのいずれも付けない', () => {
   const columns = [{ x0: 1000, x1: 3000, worldLo: 1000, worldHi: 3000,
     bands: [{ kind: 'wall', z0: 600, z1: 2000, distMm: 500, openingPassThrough: true }] }];
