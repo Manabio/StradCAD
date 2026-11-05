@@ -44,6 +44,7 @@ import {
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
 import { detailFrameTargets, detailElevationTargets } from '../openings/openingDetailFrame.js';
 import { junctionTargets, partTargets, floorStepTargets, ceilingStepTargets } from '../finish/roomDetailTargets.js';
+import { placedFigureTargets, isPlacementFigure } from '../finish/placedFigure/placedFigureTargets.js';
 import { evalNumpadExpr } from './numpadUtils.js';
 import { polyline, text } from '../structural/sectionFigure/svgFigurePrimitives.js';
 
@@ -438,6 +439,8 @@ const DEFAULT_ROLE_BY_AXIS = Object.freeze({
  * t＝origin が SILL・end が HEAD（detailElevationTargets が供給できる組）。
  */
 export function defaultRoleFor(form, axis, kind) {
+  // 姿図の配置（平面・立面側の衛生器具／家具／空調の姿図）: s・t とも配置の原点（他の分類とは分類が重ならないので順序に依らない）
+  if (isPlacementFigure(form)) return DetailDatumRole.PLACEMENT_ORIGIN;
   if (isElevationFigureForm(form) && axis === DetailAxis.T) {
     return kind === DetailDatumKind.END ? DetailDatumRole.HEAD : DetailDatumRole.SILL;
   }
@@ -831,8 +834,8 @@ export function setClassification(form, field, value) {
     subject = DETAIL_VIEW_COMBOS.find(c => c.category === category && c.view === view)?.subject ?? subject;
   }
   const next = { ...form, category, view, subject };
-  // 建具の姿図へ出入りするときは、既定の role のままの基準を移行先の既定へ寄せる（ユーザーが選んだ role は触らない）。
-  if (isElevationFigureForm(form) === isElevationFigureForm(next)) return next;
+  // 建具の姿図・姿図の配置へ出入りするときは、既定の role のままの基準を移行先の既定へ寄せる（ユーザーが選んだ role は触らない）。
+  if (isElevationFigureForm(form) === isElevationFigureForm(next) && isPlacementFigure(form) === isPlacementFigure(next)) return next;
   return {
     ...next,
     datums: next.datums.map(d => (d.role === defaultRoleFor(form, d.axis, d.kind)
@@ -1003,12 +1006,21 @@ function tryFitFloorStep(form, dims, materialMap, targetsOf = floorStepTargets) 
   return fitLocal(fig, t.targets);
 }
 
+// 姿図の配置の試し込み: 寸法に依らない（基準は配置の原点だけ）。基準の対応は finish/placedFigure/placedFigureTargets.js。
+function tryFitPlaced(form) {
+  const fig = entryFromForm(form);
+  const t = placedFigureTargets(fig);
+  if (t.error) return { error: t.error };
+  return fitLocal(fig, t.targets);
+}
+
 /**
  * 試し込み: 取り付け先の寸法に図を合わせる。建具の姿図（figure/elevation/opening）は幅・高さ・窓台、
  * それ以外は三方枠の寸法（壁厚・見付・出幅。文字列か数値）。
  * 基準の対応は S3／S6b（openings/openingDetailFrame.js）と同じ。失敗は { error:{code,message} }（黙って代用しない）。
  */
 export function tryFit(form, dims, { materialMap = null } = {}) {
+  if (isPlacementFigure(form)) return tryFitPlaced(form);
   if (isElevationFigureForm(form)) return tryFitElevation(form, dims);
   if (isFloorStepForm(form)) return tryFitFloorStep(form, dims, materialMap);
   if (isCeilingStepForm(form)) return tryFitFloorStep(form, dims, materialMap, ceilingStepTargets);

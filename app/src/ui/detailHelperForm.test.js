@@ -14,7 +14,7 @@ import {
   newDraft, formFromEntry, entryFromForm, duplicateForm, isDraftDirty, pushHistory, undoDraft, applyPen, penUp, setClosed, setDashRole, DETAIL_DASH_LABELS,
   setMoveLen, setMoveMode, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, libraryRows, defaultFitDims, tryFit,
-  isElevationFigureForm, fitDimFieldsFor, defaultFitDimsFor,
+  isElevationFigureForm, defaultRoleFor, fitDimFieldsFor, defaultFitDimsFor,
   previewPrimitivesOf, parseNumberText, planSave, saveContextFor, saveDecision, afterSaveDoc, penStep, describeError,
   wallThicknessNotice, displayLen, freshDocOf, docFromEntry, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, DETAIL_HELPER_MESSAGES, DETAIL_ROLE_LABELS, DETAIL_MODE_LABELS, DETAIL_PARAM_LABELS,
   DETAIL_MATERIAL_FIELD_LABELS, DETAIL_DATUM_KIND_LABELS, DETAIL_AXIS_LABELS, PEN_BUTTONS, PEN_DIR_LABELS,
@@ -614,6 +614,53 @@ test('docContextFor: 注入された overlayFor／docDiffMap から同梱キー�
   const ctx = docContextFor('k', { overlayFor: kind => ({ doc: [{ key: 'a' }, { key: 'b' }], user: [], kind }), docDiffMap: (kind, list) => (kind === 'k' && list.length === 0 ? diffMap : null) });
   assert.deepEqual([...ctx.docKeys], ['a', 'b']);
   assert.equal(ctx.diffMap, diffMap);
+});
+
+// 姿図の配置（図/平面/衛生器具）の下書き。R20・D10・R15・D25（開）。頂点 2＝(20,10)・基準 d1（s）・d2（t）とも頂点 2 に載せる。
+function placedDraft() {
+  let f = newDraft({ idFactory });
+  f = setClassification(f, 'category', DetailCategory.FIGURE);
+  f = setClassification(f, 'view', DetailView.PLAN);
+  f = setClassification(f, 'subject', DetailSubject.SANITARY);
+  f = drawAll({ ...f, label: '便器' }, [[PenDir.RIGHT, '20'], [PenDir.DOWN, '10'], [PenDir.RIGHT, '15'], [PenDir.DOWN, '25']]);
+  return setAnchor(setAnchor(f, 's1', 'd2', 2), 's1', 'd1', 2);
+}
+
+test('姿図の配置: 新規基準の既定 role は s・t とも PLACEMENT_ORIGIN。他の分類の既定は不変', () => {
+  const f = placedDraft();
+  assert.deepEqual(f.datums.map(d => d.role), [DetailDatumRole.PLACEMENT_ORIGIN, DetailDatumRole.PLACEMENT_ORIGIN]);
+  assert.equal(defaultRoleFor(f, DetailAxis.S, DetailDatumKind.ORIGIN), DetailDatumRole.PLACEMENT_ORIGIN);
+  assert.equal(defaultRoleFor(f, DetailAxis.T, DetailDatumKind.END), DetailDatumRole.PLACEMENT_ORIGIN);
+  assert.equal(addDatum(f, {}).datums.at(-1).role, DetailDatumRole.PLACEMENT_ORIGIN, '追加した基準も配置の原点');
+  const frame = newDraft({ idFactory });
+  assert.deepEqual(frame.datums.map(d => d.role), [DetailDatumRole.OPENING_OUTER, DetailDatumRole.WALL_FINISH_FACE]);
+});
+
+test('姿図の配置: 分類を建具の姿図 ⇄ 配置図に変えると既定 role の基準は移行先の既定へ再計算される（選んだ role は触らない）', () => {
+  const placed = placedDraft();
+  const toOpening = setClassification(setClassification(placed, 'view', DetailView.ELEVATION), 'subject', DetailSubject.OPENING);
+  assert.deepEqual(toOpening.datums.map(d => d.role), [DetailDatumRole.OPENING_OUTER, DetailDatumRole.SILL]);
+  const back = setClassification(toOpening, 'subject', DetailSubject.FURNITURE);
+  assert.deepEqual(back.datums.map(d => d.role), [DetailDatumRole.PLACEMENT_ORIGIN, DetailDatumRole.PLACEMENT_ORIGIN]);
+  // 平面 ⇄ 立面側の配置図どうしは role を変えない
+  assert.deepEqual(setClassification(placed, 'view', DetailView.ELEVATION).datums.map(d => d.role), [DetailDatumRole.PLACEMENT_ORIGIN, DetailDatumRole.PLACEMENT_ORIGIN]);
+  // ユーザーが選んだ role は配置図へ移っても触らない
+  const chosen = setDatumField(toOpening, 'd1', 'role', DetailDatumRole.HEAD);
+  assert.equal(setClassification(chosen, 'subject', DetailSubject.HVAC).datums[0].role, DetailDatumRole.HEAD);
+  // 三方枠（paired）から配置図へも寄せる
+  const fromFrame = setClassification(setClassification(newDraft({ idFactory }), 'category', DetailCategory.FIGURE), 'subject', DetailSubject.SANITARY);
+  assert.deepEqual(fromFrame.datums.map(d => d.role), [DetailDatumRole.PLACEMENT_ORIGIN, DetailDatumRole.PLACEMENT_ORIGIN]);
+});
+
+test('姿図の配置 tryFit: placedFigureTargets で解ける（寸法欄に依らない）。別 role の基準を持つ配置図は unsupportedDatum', () => {
+  const f = placedDraft();
+  const fitted = tryFit(f, {});
+  assert.equal(fitted.error, undefined);
+  assert.deepEqual(fitted.strokes[0].points.map(p => [p.s, p.t]), [[-20, -10], [0, -10], [0, 0], [15, 0], [15, 25]]);
+  const bad = tryFit(setDatumField(f, 'd1', 'role', DetailDatumRole.WALL_FINISH_FACE), {});
+  assert.equal(bad.error.code, 'unsupportedDatum');
+  assert.match(bad.error.message, /姿図の配置では使えません/);
+  assert.equal(tryFit({ ...f, strokes: [] }, {}).error.code, 'invalid', '図が不正');
 });
 
 test('displayLen: 空は「—」・それ以外は文字列', () => {

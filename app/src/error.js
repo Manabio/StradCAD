@@ -381,8 +381,12 @@ export const DETAIL_TARGET_JUNCTION = '部屋の取り合い';
 export const DETAIL_TARGET_PART = '腰壁・垂れ壁の部位';
 export const DETAIL_TARGET_PART_STEP = '床の段差の部位';
 export const DETAIL_TARGET_PART_CEILING_STEP = '天井の段差の部位';
+export const DETAIL_TARGET_PLACED_FIGURE = '姿図の配置';
 export const ERR_DETAIL_DATUM_UNSUPPORTED = (datumId, role, target = '三方枠') =>
   `基準 ${datumId}（${role}）は${target}では使えません`;
+// 姿図の配置（PlacedFigure）に配置図でない分類（category・view・subject）の図を渡したとき（finish/placedFigure/placedFigureTargets.js）。
+export const ERR_DETAIL_NOT_PLACED_FIGURE = (classification) =>
+  `${DETAIL_TARGET_PLACED_FIGURE}の対象ではありません: ${classification}`;
 // 部分詳細図ヘルパー（全画面パネル）の動的 import が失敗したときのトースト。
 export const ERR_DETAIL_HELPER_LOAD_FAILED = '部分詳細ヘルパーの読み込みに失敗しました';
 // ---- DXF 読込み（部分詳細図 S7a。detail/dxf/ と ui/detailHelperForm.js）----

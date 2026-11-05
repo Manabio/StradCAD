@@ -23,6 +23,7 @@ const ALLOWED_DIRECT = new Set([
   'detail/dxf/dxfImport.js', 'detail/dxf/dxfProvenance.js', 'detail/pdf/pdfProvenance.js', 'error.js',
   'catalog/catalogKinds.js', 'catalog/catalogMaintenance.js',
   'openings/openingCatalog.js', 'openings/openingDetailFrame.js', 'finish/roomDetailTargets.js',
+  'finish/placedFigure/placedFigureTargets.js', // 姿図の配置の試し込み（S10 P2-2。placedFigureTargets・isPlacementFigure）
   'ui/numpadUtils.js',
   'structural/sectionFigure/svgFigurePrimitives.js',
 ]);
