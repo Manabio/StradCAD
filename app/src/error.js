@@ -367,6 +367,12 @@ export const KNEE_DROP_DETAIL_TEXT = Object.freeze({
 });
 // 仕上げモードの部屋カードの「部分詳細」欄の文言（finish/roomDetailRefsEdit.js）。
 export const ROOM_DETAIL_REF_TEXT = Object.freeze({ section: '部分詳細', none: 'なし' });
+// 姿図の「図の束」（views）の文言。ヘルパー（ui/detailHelperForm.js）・保守パネルの閲覧・差分表示（catalog/catalogDiffView.js）が共有する。
+// キーは DetailPlacementView の値（core/constants.js。ここは葉なので literal で持ち、対応はテストで固定する）。
+export const DETAIL_VIEWS_GROUP_LABEL = '図の束';
+export const DETAIL_PLACEMENT_VIEW_LABEL_TEXT = Object.freeze({
+  front: '正面図', back: '背面図', left: '左側面図', right: '右側面図', ceiling: '見上げ図',
+});
 export const detailSlotLabel = (slot) => (Object.hasOwn(DETAIL_SLOT_LABELS, slot) ? DETAIL_SLOT_LABELS[slot] : slot);
 export const ERR_DETAIL_FIT_FAILED = (label, symbolKey, reason, slot) =>
   `詳細図 ${label} を ${symbolKey} の${detailSlotLabel(slot)}に合わせられません: ${reason}`;

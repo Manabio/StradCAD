@@ -243,6 +243,31 @@ test('【検出力】線の役割 select の配線を壊すと判定が落ちる
   assert.ok(!dashRoleSelectWired(src.replace('value={r.dashRole}', 'value={r.closed}')));
 });
 
+// P2-3: 図の束の 5 select。配置図（canHaveDetailViews）のときだけ出し、候補は placementViewOptions・変更は setPlacementView を edit 経由で・読み取り専用は disabled。式の末尾（/>）まで照合する。
+const placementViewsWired = src =>
+  /const PLACEMENT_VIEW_OPTIONS = labelOptions\(DETAIL_PLACEMENT_VIEW_LABELS\);/.test(src)
+  && /\{canHaveDetailViews\(form\) && \(\s*<div>/.test(src)
+  && /import \{ detailFigureCatalog \} from '\.\.\/openings\/openingCatalog\.js';/.test(src)
+  && /const viewCatalog = canHaveDetailViews\(form\) \? \[\.\.\.detailFigureCatalog\(\)\.values\(\)\] : null;/.test(src)
+  && /\{PLACEMENT_VIEW_OPTIONS\.map\(\(\{ value: view, label \}\) => \(/.test(src)
+  && /<Select value=\{form\.views\?\.\[view\] \?\? ''\} options=\{placementViewOptions\(form, viewCatalog, view\)\} disabled=\{readOnly\}\s*onChange=\{key => edit\(f => setPlacementView\(f, view, key\)\)\} \/>/.test(src);
+
+test('【配線】DetailHelperPanel.jsx(P2-3): 図の束の select が canHaveDetailViews で出し分けられ、setPlacementView を edit 経由で呼び、読み取り専用で disabled', () => {
+  assert.ok(placementViewsWired(stripComments(readSrc('ui/DetailHelperPanel.jsx'))));
+});
+
+test('【検出力】図の束 select の配線を壊すと判定が落ちる（出し分け・disabled・edit を介さない・候補の供給元・setter）', () => {
+  const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
+  assert.ok(!placementViewsWired(src.replace('{canHaveDetailViews(form) && (', '{true && (')));
+  assert.ok(!placementViewsWired(src.replace("options={placementViewOptions(form, viewCatalog, view)} disabled={readOnly}", 'options={placementViewOptions(form, viewCatalog, view)}')));
+  assert.ok(!placementViewsWired(src.replace('edit(f => setPlacementView(f, view, key))', 'setPlacementView(form, view, key)')));
+  assert.ok(!placementViewsWired(src.replace('placementViewOptions(form, viewCatalog, view)', 'PLACEMENT_VIEW_OPTIONS')));
+  assert.ok(!placementViewsWired(src.replace('setPlacementView(f, view, key)', 'setClosed(f, view, key)')));
+  assert.ok(!placementViewsWired(src.replace('labelOptions(DETAIL_PLACEMENT_VIEW_LABELS)', 'labelOptions(DETAIL_DASH_LABELS)')));
+  assert.ok(!placementViewsWired(src.replace('[...detailFigureCatalog().values()]', '[...overlayFor(CatalogKind.DETAIL_FIGURE).user.values()]')));
+  assert.ok(!placementViewsWired(src.replace("import { detailFigureCatalog } from '../openings/openingCatalog.js';", "import { detailFigureCatalog } from '../catalog/catalogRegistry.js';")));
+});
+
 test('【検出力】コメントだけに書いた配線は判定を満たさない', () => {
   const commentOnly = [
     "// runBusy('カタログ適用', () => applyCatalogEditPlan(KIND, plan, {}));",
@@ -256,4 +281,21 @@ test('【検出力】コメントだけに書いた配線は判定を満たさ�
   // 本体が壊れていてコメントにだけ正しい形が残っていても、コメント除去後は通らない
   const broken = "async function handleSave() {\n  // runBusy('カタログ適用', () => applyCatalogEditPlan(KIND, plan, {}));\n  await applyCatalogEditPlan(KIND, plan, {});\n}";
   assert.ok(!savesThroughSharedPath(extractBalancedBody(stripComments(broken), 'async function handleSave() {')));
+});
+
+// P2-3: 図の束の文言（view 名・グループ名）の置き場は error.js だけ。非テストの .js/.jsx に直書きしない（コメントは除く）。
+const VIEWS_WORDING = /正面図|背面図|左側面図|右側面図|見上げ図|図の束/;
+const wordingOutsideErrorJs = () => fs.readdirSync(appSrc, { recursive: true })
+  .map(p => p.replaceAll('\\', '/'))
+  .filter(p => /\.jsx?$/.test(p) && !/\.test\.jsx?$/.test(p) && p !== 'error.js')
+  .filter(p => VIEWS_WORDING.test(stripComments(readSrc(p))));
+
+test('【不変条件】図の束の文言は error.js にだけ直書きされる（他の非テストソースにない）', () => {
+  assert.deepEqual(wordingOutsideErrorJs(), []);
+  assert.ok(VIEWS_WORDING.test(stripComments(readSrc('error.js'))), 'error.js に文言が無い（検査が空振り）');
+});
+
+test('【検出力】図の束の文言の直書き判定は、コード中の文字列に反応しコメントには反応しない', () => {
+  assert.ok(VIEWS_WORDING.test(stripComments("const x = '図の束';")));
+  assert.ok(!VIEWS_WORDING.test(stripComments("// 図の束\nconst x = 1;")));
 });

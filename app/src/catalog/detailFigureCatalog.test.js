@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { planIncomingReconcile, applyReconcilePlan, rewriteDocSymbolDetailFigures } from './incomingReconcile.js';
 import { buildResolveRows, defaultResolveDecision } from './resolveQueue.js';
-import { formatDetailViewLabel, formatCategoryLabel } from './catalogMaintenance.js';
+import { formatDetailViewLabel, formatCategoryLabel, formatDetailViews, DETAIL_PLACEMENT_VIEW_LABELS } from './catalogMaintenance.js';
 import { diffEntries } from './catalogMatch.js';
 import {
   SNAPSHOT_REF_WALKERS, setDocumentAliases, clearDocumentAliases, applyDocumentCodeNormalization,
@@ -33,7 +33,7 @@ import {
 } from '../detail/detailTestFixtures.js';
 import {
   PenDir, DetailSlot, DetailMaterialField, DetailCategory, DetailView, DetailSubject,
-  FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD,
+  FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DetailPlacementView,
 } from '../core/constants.js';
 
 const DF = CatalogKind.DETAIL_FIGURE;
@@ -861,6 +861,15 @@ test('formatDetailViewLabel: plan→平面・section→断面・elevation→立�
   assert.equal(formatDetailViewLabel('oblique'), 'oblique');
   assert.equal(formatDetailViewLabel('constructor'), 'constructor', 'プロトタイプのメンバーを拾わない');
   assert.equal(formatDetailViewLabel(null), '（未設定）');
+});
+
+test('formatDetailViews（P2-3）: DetailPlacementView の順に「ラベル: 図キー」。未知キーは後ろに生で・views 無し／空はフォールバック', () => {
+  assert.equal(formatDetailViews({ ceiling: 'c', front: 'a', left: 'l' }), '正面図: a・左側面図: l・見上げ図: c');
+  assert.equal(formatDetailViews({ front: 'a', oblique: 'x' }), '正面図: a・oblique: x');
+  assert.equal(formatDetailViews(undefined), '（未設定）');
+  assert.equal(formatDetailViews({}), '（なし）');
+  assert.equal(formatDetailViews(['a']), 'a');
+  assert.deepEqual(Object.keys(DETAIL_PLACEMENT_VIEW_LABELS), Object.values(DetailPlacementView), '全 5 値を網羅');
 });
 
 test('formatCategoryLabel(DETAIL_FIGURE): 5 分類の表示名', () => {

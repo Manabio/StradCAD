@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumRole, DetailDatumKind, DetailAxis,
-  DetailParam, DetailMaterialField, DetailDash, DETAIL_VIEW_COMBOS, DETAIL_DRAFT_HISTORY_MAX, SvgFigurePrimitiveType,
+  DetailParam, DetailMaterialField, DetailDash, DetailPlacementView, DETAIL_VIEW_COMBOS, DETAIL_DRAFT_HISTORY_MAX, SvgFigurePrimitiveType,
 } from '../core/constants.js';
 import { DetailValidationError } from '../detail/detailModel.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
@@ -15,6 +15,7 @@ import {
   setMoveLen, setMoveMode, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, libraryRows, defaultFitDims, tryFit,
   isElevationFigureForm, defaultRoleFor, fitDimFieldsFor, defaultFitDimsFor,
+  DETAIL_PLACEMENT_VIEW_LABELS, DETAIL_HELPER_TEXT, placementViewOptions, setPlacementView,
   previewPrimitivesOf, parseNumberText, planSave, saveContextFor, saveDecision, afterSaveDoc, penStep, describeError,
   wallThicknessNotice, displayLen, freshDocOf, docFromEntry, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, DETAIL_HELPER_MESSAGES, DETAIL_ROLE_LABELS, DETAIL_MODE_LABELS, DETAIL_PARAM_LABELS,
   DETAIL_MATERIAL_FIELD_LABELS, DETAIL_DATUM_KIND_LABELS, DETAIL_AXIS_LABELS, PEN_BUTTONS, PEN_DIR_LABELS,
@@ -661,6 +662,116 @@ test('姿図の配置 tryFit: placedFigureTargets で解ける（寸法欄に依
   assert.equal(bad.error.code, 'unsupportedDatum');
   assert.match(bad.error.message, /姿図の配置では使えません/);
   assert.equal(tryFit({ ...f, strokes: [] }, {}).error.code, 'invalid', '図が不正');
+});
+
+// ---- P2-3: 姿図の図の束（views） ----
+const mkFig = (key, category, view, subject, label = key) => ({ key, label, category, view, subject });
+const VIEW_CATALOG = [
+  mkFig('f_front', DetailCategory.FIGURE, DetailView.ELEVATION, DetailSubject.SANITARY, '便器 正面'),
+  mkFig('f_front2', DetailCategory.FIGURE, DetailView.ELEVATION, DetailSubject.SANITARY, '便器 正面'),
+  mkFig('f_other', DetailCategory.FIGURE, DetailView.ELEVATION, DetailSubject.FURNITURE, '家具 正面'),
+  mkFig('f_plan', DetailCategory.FIGURE, DetailView.PLAN, DetailSubject.SANITARY, '便器 平面'),
+  mkFig('f_ceil', DetailCategory.FIGURE, DetailView.PLAN, DetailSubject.SANITARY, '便器 見上げ'),
+  mkFig('f_hvac_ceil', DetailCategory.FIGURE, DetailView.PLAN, DetailSubject.HVAC, '空調 見上げ'),
+];
+
+test('DETAIL_PLACEMENT_VIEW_LABELS: DetailPlacementView の全 5 値を網羅し、承認済みの文言になる', () => {
+  assert.deepEqual(Object.keys(DETAIL_PLACEMENT_VIEW_LABELS), Object.values(DetailPlacementView));
+  assert.deepEqual(Object.values(DETAIL_PLACEMENT_VIEW_LABELS), ['正面図', '背面図', '左側面図', '右側面図', '見上げ図']);
+  assert.equal(DETAIL_HELPER_TEXT.viewsGroup, '図の束');
+});
+
+test('placementViewOptions: 先頭は「なし」。view ごとに置ける図・同じ主題・自分自身以外だけ。同呼称にはキーを添える', () => {
+  const f = { ...placedDraft(), key: 'dtl_self' };
+  const front = placementViewOptions(f, VIEW_CATALOG, DetailPlacementView.FRONT);
+  assert.deepEqual(front, [
+    { value: '', label: 'なし' },
+    { value: 'f_front', label: '便器 正面（f_front）' },
+    { value: 'f_front2', label: '便器 正面（f_front2）' },
+  ]);
+  // 見上げ図は平面の図の中から（衛生器具は天伏に置けない＝空調だけ）
+  assert.deepEqual(placementViewOptions(f, VIEW_CATALOG, DetailPlacementView.CEILING), [{ value: '', label: 'なし' }]);
+  const hvac = setClassification(f, 'subject', DetailSubject.HVAC);
+  assert.deepEqual(placementViewOptions(hvac, VIEW_CATALOG, DetailPlacementView.CEILING).map(o => o.value), ['', 'f_hvac_ceil']);
+  // 自分自身は除く
+  const self = { ...f, key: 'f_front' };
+  assert.deepEqual(placementViewOptions(self, VIEW_CATALOG, DetailPlacementView.FRONT).map(o => o.value), ['', 'f_front2']);
+});
+
+test('【失敗系】placementViewOptions: 配置図でない form・未知の view・catalog 無しは「なし」だけ。参照切れ／分類違いのキーは理由付きで残す', () => {
+  const none = [{ value: '', label: 'なし' }];
+  assert.deepEqual(placementViewOptions(newDraft({ idFactory }), VIEW_CATALOG, DetailPlacementView.FRONT), none);
+  assert.deepEqual(placementViewOptions(placedDraft(), VIEW_CATALOG, 'oblique'), none);
+  assert.deepEqual(placementViewOptions(placedDraft(), null, DetailPlacementView.FRONT), none);
+  const missing = setPlacementView(placedDraft(), DetailPlacementView.BACK, 'gone');
+  assert.deepEqual(placementViewOptions(missing, VIEW_CATALOG, DetailPlacementView.BACK).at(-1), { value: 'gone', label: '（見つかりません）gone' });
+  const wrong = setPlacementView(placedDraft(), DetailPlacementView.BACK, 'f_other');
+  assert.deepEqual(placementViewOptions(wrong, VIEW_CATALOG, DetailPlacementView.BACK).at(-1), { value: 'f_other', label: '（この枠には使えません）f_other' });
+});
+
+test('setPlacementView: 設定・上書き・解除。空になったら views ごと消す。他の項目は不変', () => {
+  const f = placedDraft();
+  const a = setPlacementView(f, DetailPlacementView.FRONT, 'f_front');
+  assert.deepEqual(a.views, { front: 'f_front' });
+  assert.equal(a.label, f.label);
+  const b = setPlacementView(a, DetailPlacementView.LEFT, 'f_l');
+  assert.deepEqual(b.views, { front: 'f_front', left: 'f_l' });
+  assert.deepEqual(setPlacementView(b, DetailPlacementView.FRONT, 'f_x').views, { front: 'f_x', left: 'f_l' });
+  assert.deepEqual(setPlacementView(b, DetailPlacementView.FRONT, '').views, { left: 'f_l' });
+  const c = setPlacementView(a, DetailPlacementView.FRONT, '');
+  assert.equal(Object.hasOwn(c, 'views'), false, '空になったら項目ごと消える');
+  assert.equal(isDraftDirty(c, f), false);
+});
+
+test('【失敗系】setPlacementView: views が文字列・配列のとき {} から始める。未知キーは set 時に落とさず残す', () => {
+  const f = placedDraft();
+  assert.deepEqual(setPlacementView({ ...f, views: 'x' }, DetailPlacementView.FRONT, 'k').views, { front: 'k' });
+  assert.deepEqual(setPlacementView({ ...f, views: ['a'] }, DetailPlacementView.FRONT, 'k').views, { front: 'k' });
+  assert.deepEqual(setPlacementView({ ...f, views: { oblique: 'z' } }, DetailPlacementView.FRONT, 'k').views, { oblique: 'z', front: 'k' });
+});
+
+test('【失敗系】setPlacementView: 配置図でない form・未知の view・文字列でない値は同一参照を返す。無いものの解除も不変', () => {
+  const plain = newDraft({ idFactory });
+  assert.equal(setPlacementView(plain, DetailPlacementView.FRONT, 'f_front'), plain);
+  const f = placedDraft();
+  assert.equal(setPlacementView(f, 'oblique', 'f_front'), f);
+  assert.equal(setPlacementView(f, DetailPlacementView.FRONT, null), f);
+  assert.equal(setPlacementView(f, DetailPlacementView.FRONT, ''), f, 'views の無い form の解除は同一参照');
+});
+
+test('views の往復: formFromEntry ⇄ entryFromForm。views 無しは無し・空は書かない・順序は DetailPlacementView の順', () => {
+  const f = placedDraft();
+  const e0 = entryFromForm(f);
+  assert.equal(Object.hasOwn(e0, 'views'), false);
+  assert.equal(Object.hasOwn(formFromEntry(e0), 'views'), false);
+  const withViews = setPlacementView(setPlacementView(setPlacementView(f, DetailPlacementView.CEILING, 'c'), DetailPlacementView.FRONT, 'a'), DetailPlacementView.LEFT, 'l');
+  const e1 = entryFromForm(withViews);
+  assert.deepEqual(Object.keys(e1.views), ['front', 'left', 'ceiling']);
+  assert.deepEqual(formFromEntry(e1).views, e1.views);
+  assert.deepEqual(entryFromForm(formFromEntry(e1)), e1);
+  // 空の {} は書かない（持てない分類の {} は BAD_VIEWS のため）。null も無しと同じ
+  assert.equal(Object.hasOwn(entryFromForm({ ...f, views: {} }), 'views'), false);
+  assert.equal(Object.hasOwn(formFromEntry({ ...e0, views: null }), 'views'), false);
+  // 保存形は検証を通る
+  assert.equal(validation(withViews).ok, true);
+});
+
+test('setClassification: 図の束を持てない分類へ変えると views を落とす（BAD_VIEWS を避ける）。配置図どうしでは保つ', () => {
+  const f = setPlacementView(placedDraft(), DetailPlacementView.FRONT, 'f_front');
+  assert.deepEqual(setClassification(f, 'subject', DetailSubject.HVAC).views, { front: 'f_front' });
+  const toOpening = setClassification(setClassification(f, 'view', DetailView.ELEVATION), 'subject', DetailSubject.OPENING);
+  assert.equal(Object.hasOwn(toOpening, 'views'), false);
+  assert.equal(validation(toOpening).errors.some(e => e.code === DetailValidationError.BAD_VIEWS), false);
+  // 平面の配置図を立面側へ（views を持てない）
+  assert.equal(Object.hasOwn(setClassification(f, 'view', DetailView.ELEVATION), 'views'), false);
+  // 落とさなければ BAD_VIEWS になる（検出力）
+  assert.equal(validation({ ...toOpening, views: { front: 'f_front' } }).errors.some(e => e.code === DetailValidationError.BAD_VIEWS), true);
+});
+
+test('fitDimFieldsFor: 姿図の配置（平面・立面側とも）は寸法欄を出さない。他の分類は従来どおり', () => {
+  assert.deepEqual(fitDimFieldsFor(placedDraft()), []);
+  assert.deepEqual(fitDimFieldsFor(setClassification(placedDraft(), 'view', DetailView.ELEVATION)), []);
+  assert.ok(fitDimFieldsFor(newDraft({ idFactory })).length > 0);
 });
 
 test('displayLen: 空は「—」・それ以外は文字列', () => {

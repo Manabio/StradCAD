@@ -21,7 +21,7 @@ import {
   DetailMaterialField, DetailDash, DetailProvenanceSource, DETAIL_VIEW_COMBOS, DETAIL_FIGURE_VERSION,
   DETAIL_FIGURE_KEY_PREFIX, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_DRAFT_HISTORY_MAX,
   DETAIL_SLOT_TARGETS, DetailSlot, DetailEdgeMark, ROOM_DETAIL_SLOTS, KNEE_DROP_DETAIL_SLOTS, DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM, DETAIL_FIT_DEFAULT_BASEBOARD_HEIGHT_MM, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
-  DXF_PROVENANCE_FIELDS, DXF_PREVIEW_STYLE,
+  DXF_PROVENANCE_FIELDS, DXF_PREVIEW_STYLE, DetailPlacementView, DETAIL_VIEWS_FIELD,
 } from '../core/constants.js';
 import { readDxf, buildDxfScene } from '../detail/dxf/dxfImport.js';
 import { buildDxfProvenance, baseNameOf } from '../detail/dxf/dxfProvenance.js';
@@ -29,10 +29,10 @@ import { buildPdfProvenance } from '../detail/pdf/pdfProvenance.js';
 import {
   WARN_DXF_UNIT_UNKNOWN, WARN_DXF_CONTOUR_OPEN, WARN_DXF_SELF_INTERSECT, WARN_DXF_LICENSE_UNKNOWN, WARN_DXF_INSERT_DEPTH,
   WARN_DXF_INSERT_CYCLE, WARN_DXF_UNSUPPORTED_ENTITY, WARN_DXF_NONUNIFORM_SCALE, WARN_DXF_ENTITY_LIMIT,
-  WARN_DXF_SELF_INTERSECT_UNCHECKED, WARN_DXF_NO_DIGEST, MSG_IMPORTED_DELETE_IN_USE,
+  WARN_DXF_SELF_INTERSECT_UNCHECKED, WARN_DXF_NO_DIGEST, MSG_IMPORTED_DELETE_IN_USE, DETAIL_VIEWS_GROUP_LABEL, ROOM_DETAIL_REF_TEXT,
   ERR_DXF_BINARY, ERR_DXF_BAD_GROUP_CODE, ERR_DXF_TRUNCATED, ERR_DXF_UNEXPECTED, ERR_DXF_NOT_BYTES,
 } from '../error.js';
-import { validateDetailFigure, DetailValidationError } from '../detail/detailModel.js';
+import { validateDetailFigure, DetailValidationError, canHaveDetailViews } from '../detail/detailModel.js';
 import { penWalk } from '../detail/detailPen.js';
 import { previewPrimitives, airEdgeOverlays, datumGuidePrimitives, previewDimGap, PREVIEW_DIM_GAP_MM, PREVIEW_LABEL_OFFSET_MM, PREVIEW_LABEL_SIZE_PX } from '../detail/detailPreview.js';
 import { fitLocal } from '../detail/detailPlacement.js';
@@ -40,11 +40,12 @@ import { CatalogKind } from '../catalog/catalogKinds.js';
 import {
   formatDetailSubjectLabel, formatDetailViewLabel, formatCategoryLabel, categoryOptionsFor, rowEditState, planSaveEntry,
   formatDetailProvenance, isImportedFigure, IMPORTED_SOURCES, planRevertToBuiltin,
+  DETAIL_PLACEMENT_VIEW_LABELS, DETAIL_OPTION_NOTE_WRONG_SLOT, DETAIL_OPTION_NOTE_MISSING,
 } from '../catalog/catalogMaintenance.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
 import { detailFrameTargets, detailElevationTargets } from '../openings/openingDetailFrame.js';
 import { junctionTargets, partTargets, floorStepTargets, ceilingStepTargets } from '../finish/roomDetailTargets.js';
-import { placedFigureTargets, isPlacementFigure } from '../finish/placedFigure/placedFigureTargets.js';
+import { placedFigureTargets, isPlacementFigure, isPlaceableViewFigure } from '../finish/placedFigure/placedFigureTargets.js';
 import { evalNumpadExpr } from './numpadUtils.js';
 import { polyline, text } from '../structural/sectionFigure/svgFigurePrimitives.js';
 
@@ -145,7 +146,10 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   dxfClosedLabel: '閉', dxfOpenLabel: '開', dxfVertexUnit: '頂点',
   // ストロークの線の役割（T2-2）
   lineRole: '線の役割', dashSolid: '実線', dashDashed: '破線', dashSwing: '開き勝手',
+  // 姿図の図の束（P2-3。各 view の名前は DETAIL_PLACEMENT_VIEW_LABELS、未割当ては ROOM_DETAIL_REF_TEXT.none を再利用する）
+  viewsGroup: DETAIL_VIEWS_GROUP_LABEL,
 });
+export { DETAIL_PLACEMENT_VIEW_LABELS };
 /** ストロークの線の役割（Line.dashRole）の表示名。 */
 export const DETAIL_DASH_LABELS = Object.freeze({
   [DetailDash.SOLID]:  DETAIL_HELPER_TEXT.dashSolid,
@@ -243,7 +247,10 @@ export function usesBaseboardHeightParam(form) {
     && (form?.strokes ?? []).some(s => (s?.moves ?? []).some(m => m?.mode === DetailLenMode.PARAM && m.param === DetailParam.BASEBOARD_HEIGHT));
 }
 /** 現在の分類に合う試し込みの欄。 */
-export const fitDimFieldsFor = form => (isElevationFigureForm(form) ? ELEVATION_FIT_DIM_FIELDS
+// 姿図の配置は寸法に依らない（tryFitPlaced は寸法欄を見ない）ので欄を出さない。
+const PLACEMENT_FIT_DIM_FIELDS = Object.freeze([]);
+export const fitDimFieldsFor = form => (isPlacementFigure(form) ? PLACEMENT_FIT_DIM_FIELDS
+  : isElevationFigureForm(form) ? ELEVATION_FIT_DIM_FIELDS
   : isFloorStepForm(form) || isCeilingStepForm(form) ? FLOOR_STEP_FIT_DIM_FIELDS
     : usesBaseboardHeightParam(form) ? BASEBOARD_FIT_DIM_FIELDS
       : junctionSlotOf(form) || partSlotOf(form) ? JUNCTION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
@@ -515,9 +522,11 @@ function entryMoveOf(fm) {
 
 /** カタログのエントリ → フォーム。数値は String() で文字列にする。エントリが持つ未知の項目は extra に保つ。 */
 export function formFromEntry(entry) {
-  const { key, label, category, view, subject, strokes, datums, anchors, ...extra } = entry;
+  const { key, label, category, view, subject, strokes, datums, anchors, [DETAIL_VIEWS_FIELD]: views, ...extra } = entry;
   return {
     key, label: label ?? '', category, view, subject,
+    // 図の束は null／無しなら持たない（フォームに views キーを足さない＝印なしの図はフォームも不変）
+    ...(views == null ? {} : { [DETAIL_VIEWS_FIELD]: views }),
     strokes: (strokes ?? []).map(s => ({ ...s, line: s.line ?? defaultLine(), closed: s.closed ?? false, moves: (s.moves ?? []).map(formMoveOf) })),
     datums: (datums ?? []).map(d => {
       const { offsetMm, ...rest } = d;
@@ -526,6 +535,19 @@ export function formFromEntry(entry) {
     anchors: (anchors ?? []).map(a => ({ ...a })),
     extra,
   };
+}
+
+/** 図の束の保存形。空（無し・{}）は項目ごと持たない（持てない分類の {} は BAD_VIEWS のため）。DetailPlacementView の順に並べ、未知のキーは後ろに残す（検証が知らせる）。 */
+function viewsEntryPart(form) {
+  const views = form[DETAIL_VIEWS_FIELD];
+  if (views == null) return {};
+  if (typeof views !== 'object' || Array.isArray(views)) return { [DETAIL_VIEWS_FIELD]: views }; // 壊れた値はそのまま（検証が知らせる）
+  if (Object.keys(views).length === 0) return {};
+  const known = Object.values(DetailPlacementView).filter(v => Object.hasOwn(views, v));
+  const out = {};
+  for (const k of known) out[k] = views[k];
+  for (const k of Object.keys(views)) if (!known.includes(k)) out[k] = views[k];
+  return { [DETAIL_VIEWS_FIELD]: out };
 }
 
 /** フォーム → カタログのエントリ（文字列の数値は parseNumberText で数値へ。読めない欄は NaN になり検証が理由を返す）。 */
@@ -537,6 +559,7 @@ export function entryFromForm(form) {
   return {
     ...extra,
     key: form.key, label: form.label, category: form.category, view: form.view, subject: form.subject,
+    ...viewsEntryPart(form),
     strokes: form.strokes.map(s => ({ ...s, moves: s.moves.map(entryMoveOf) })),
     datums: form.datums.map(d => {
       const { offset, ...rest } = d;
@@ -833,7 +856,11 @@ export function setClassification(form, field, value) {
   if (!DETAIL_VIEW_COMBOS.some(c => c.category === category && c.view === view && c.subject === subject)) {
     subject = DETAIL_VIEW_COMBOS.find(c => c.category === category && c.view === view)?.subject ?? subject;
   }
-  const next = { ...form, category, view, subject };
+  let next = { ...form, category, view, subject };
+  // 図の束を持てない分類へ変えたら束を落とす（持てない分類の views は BAD_VIEWS になる）
+  if (next[DETAIL_VIEWS_FIELD] !== undefined && !canHaveDetailViews(next)) {
+    next = Object.fromEntries(Object.entries(next).filter(([k]) => k !== DETAIL_VIEWS_FIELD));
+  }
   // 建具の姿図・姿図の配置へ出入りするときは、既定の role のままの基準を移行先の既定へ寄せる（ユーザーが選んだ role は触らない）。
   if (isElevationFigureForm(form) === isElevationFigureForm(next) && isPlacementFigure(form) === isPlacementFigure(next)) return next;
   return {
@@ -841,6 +868,48 @@ export function setClassification(form, field, value) {
     datums: next.datums.map(d => (d.role === defaultRoleFor(form, d.axis, d.kind)
       ? { ...d, role: defaultRoleFor(next, d.axis, d.kind) } : d)),
   };
+}
+
+// ================================================================
+// 姿図の図の束（views。平面の配置図だけ）
+// ================================================================
+
+/**
+ * 図の束の view ごとの select の選択肢。先頭は未割当て（ROOM_DETAIL_REF_TEXT.none）。
+ * 候補＝catalog（詳細図エントリの配列）のうち、その view に置ける図（isPlaceableViewFigure）・同じ主題・自分自身以外。
+ * 同じ呼称が複数あるときだけキーを添える（detailFigureOptionsFor と同じ）。割当て済みのキーが候補に無いときは、
+ * 「見つかりません」（存在しない）／「この枠には使えません」（実在するが合わない）を付けて末尾に足す（黙って「なし」に見せない）。
+ * @returns {Array<{ value: string, label: string }>}
+ */
+export function placementViewOptions(form, catalog, view) {
+  const none = { value: '', label: ROOM_DETAIL_REF_TEXT.none };
+  if (!canHaveDetailViews(form) || !Object.values(DetailPlacementView).includes(view)) return [none];
+  const list = catalog ?? [];
+  const hits = list.filter(e => e.key !== form.key && e.subject === form.subject && isPlaceableViewFigure(e, view));
+  const labelCount = new Map();
+  for (const e of hits) labelCount.set(e.label, (labelCount.get(e.label) ?? 0) + 1);
+  const options = [none, ...hits.map(e => ({ value: e.key, label: labelCount.get(e.label) > 1 ? `${e.label}（${e.key}）` : e.label }))];
+  const current = form[DETAIL_VIEWS_FIELD]?.[view];
+  if (typeof current === 'string' && current !== '' && !options.some(o => o.value === current)) {
+    const exists = list.some(e => e.key === current);
+    options.push({ value: current, label: `${exists ? DETAIL_OPTION_NOTE_WRONG_SLOT : DETAIL_OPTION_NOTE_MISSING}${current}` });
+  }
+  return options;
+}
+
+/**
+ * 図の束の 1 view を設定する。keyOrEmpty が '' なら解除（束が空になったら views ごと消す）。
+ * 配置図でない form・未知の view は同一参照を返す（edit は同一参照なら履歴に積まない）。
+ */
+export function setPlacementView(form, view, keyOrEmpty) {
+  if (!canHaveDetailViews(form) || !Object.values(DetailPlacementView).includes(view)) return form;
+  if (typeof keyOrEmpty !== 'string') return form;
+  const { [DETAIL_VIEWS_FIELD]: prev, ...rest } = form;
+  const views = { ...(prev !== null && typeof prev === 'object' && !Array.isArray(prev) ? prev : {}) };
+  if (keyOrEmpty === '') delete views[view];
+  else views[view] = keyOrEmpty;
+  if (Object.keys(views).length === 0) return prev === undefined ? form : rest;
+  return { ...form, [DETAIL_VIEWS_FIELD]: views }; // 既にあるキーは位置を保つ（isDraftDirty は JSON 比較）
 }
 
 // ================================================================

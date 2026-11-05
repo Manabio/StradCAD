@@ -33,9 +33,9 @@ import { stripOverridesBuiltin, isImportedFigure, IMPORTED_SOURCES } from './use
 export { isImportedFigure, IMPORTED_SOURCES };
 import {
   DetailCategory, DetailView, DetailSubject, DetailSlot, DETAIL_SLOT_TARGETS, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD,
-  DetailProvenanceSource,
+  DetailProvenanceSource, DetailPlacementView,
 } from '../core/constants.js';
-import { MSG_IMPORTED_NOT_IN_FILE } from '../error.js';
+import { MSG_IMPORTED_NOT_IN_FILE, DETAIL_PLACEMENT_VIEW_LABEL_TEXT } from '../error.js';
 
 /** 材の役割（カテゴリ）。materialData.js の MATERIAL_CATEGORY と同じ3値
  * （本体マスタは静的 import できないため、ここでは値の集合だけを持つ）。 */
@@ -234,6 +234,27 @@ export const DETAIL_SUBJECT_LABELS = Object.freeze({
 /** 部分詳細図の主題の表示名。未知の値は formatReadonlyValue にフォールバックする（投げない）。 */
 export function formatDetailSubjectLabel(value) {
   return typeof value === 'string' && Object.hasOwn(DETAIL_SUBJECT_LABELS, value) ? DETAIL_SUBJECT_LABELS[value] : formatReadonlyValue(value);
+}
+
+/** 姿図の「図の束」の表示名（DetailPlacementView → 文言）。ヘルパーの select と保守パネルの閲覧で共有する。 */
+export const DETAIL_PLACEMENT_VIEW_LABELS = Object.freeze({
+  [DetailPlacementView.FRONT]:   DETAIL_PLACEMENT_VIEW_LABEL_TEXT.front,
+  [DetailPlacementView.BACK]:    DETAIL_PLACEMENT_VIEW_LABEL_TEXT.back,
+  [DetailPlacementView.LEFT]:    DETAIL_PLACEMENT_VIEW_LABEL_TEXT.left,
+  [DetailPlacementView.RIGHT]:   DETAIL_PLACEMENT_VIEW_LABEL_TEXT.right,
+  [DetailPlacementView.CEILING]: DETAIL_PLACEMENT_VIEW_LABEL_TEXT.ceiling,
+});
+
+/**
+ * 詳細図の views（図の束）を閲覧用の 1 行にする。DetailPlacementView の順に「正面図: 図キー」を「・」で並べる。
+ * 未知のキー・非文字列の値は後ろに生のまま足す（壊れた束を隠さない）。views が無い（null/undefined）・空は formatReadonlyValue に委ねる。
+ */
+export function formatDetailViews(views) {
+  if (views === null || typeof views !== 'object' || Array.isArray(views) || Object.keys(views).length === 0) return formatReadonlyValue(views);
+  const known = Object.values(DetailPlacementView).filter(v => Object.hasOwn(views, v));
+  const unknown = Object.keys(views).filter(k => !known.includes(k));
+  return [...known.map(v => [DETAIL_PLACEMENT_VIEW_LABELS[v], views[v]]), ...unknown.map(k => [k, views[k]])]
+    .map(([label, value]) => `${label}: ${formatReadonlyValue(value)}`).join('・');
 }
 
 const PROVENANCE_TEXT = Object.freeze({
@@ -1372,8 +1393,8 @@ export const OPENING_DETAIL_REF_TEXT = Object.freeze({
 });
 
 // 現在の値が選択肢に無いときの行の前置き（実在するが枠に合わない図／存在しないキー）。
-const DETAIL_OPTION_NOTE_WRONG_SLOT = '（この枠には使えません）';
-const DETAIL_OPTION_NOTE_MISSING = '（見つかりません）';
+export const DETAIL_OPTION_NOTE_WRONG_SLOT = '（この枠には使えません）';
+export const DETAIL_OPTION_NOTE_MISSING = '（見つかりません）';
 
 /** 閲覧タブの「使用中」印を付けられないときの表示（使用状況の取得失敗）。 */
 export function formatCatalogUsageError(message) {

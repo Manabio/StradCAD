@@ -3,7 +3,7 @@ import './CatalogMaintenancePanel.css';
 import {
   CatalogKind, kindDef, MATERIAL_CLASSES, FIXTURE_SYMBOL_PROFILES, KNOWN_OPENING_MECHANISMS,
 } from '../catalog/catalogKinds.js';
-import { DetailSlot } from '../core/constants.js';
+import { DetailSlot, DETAIL_VIEWS_FIELD } from '../core/constants.js';
 import { parseMaterialCode } from '../catalog/materialCode.js';
 import { docDiffMap, overlayFor, removeDocEntry } from '../catalog/catalogRegistry.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip, fieldLabel } from '../catalog/catalogDiffView.js';
@@ -16,7 +16,7 @@ import {
   buildKindTabs, buildMaterialRows, buildCatalogRows, collectKnownMaterialCodes, nextMaterialCode,
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserCatalogEntry, commitUserEntries,
-  realignPlansFor, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel, formatDetailViewLabel, formatDetailSubjectLabel, formatDetailProvenance,
+  realignPlansFor, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel, formatDetailViewLabel, formatDetailSubjectLabel, formatDetailProvenance, formatDetailViews,
   isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY, BACKING_CLASS_OPTIONS,
   rowEditState, lockedFieldsFor, planSaveEntry, planRevertToBuiltin, planRemoveUserEntry,
   materialFormHasDimensions, materialFormHasBackingClass, initialMaterialDimensions,
@@ -75,7 +75,7 @@ const ORIGIN_LABELS = Object.freeze({ doc: '同梱', user: 'ライブラリ', bu
 const READONLY_KIND_FIELDS = Object.freeze({
   [CatalogKind.BOUNDARY_MASTER]: Object.freeze(['label', 'kind', 'layers', 'derivedFrom', 'fields']),
   // 部分詳細図（S2）: 閲覧のみ。strokes 等の図の中身は表示しない（編集・描画プレビューはヘルパー S4）。
-  [CatalogKind.DETAIL_FIGURE]: Object.freeze(['label', 'category', 'view', 'subject', 'provenance']),
+  [CatalogKind.DETAIL_FIGURE]: Object.freeze(['label', 'category', 'view', 'subject', 'provenance', DETAIL_VIEWS_FIELD]),
 });
 
 /** layers（境界マスター）1件を「役割: コード or src」の1行文字列にする。 */
@@ -111,6 +111,9 @@ function formatReadonlyFieldValue(kind, field, value) {
   }
   if (kind === CatalogKind.DETAIL_FIGURE && field === 'provenance') {
     return formatDetailProvenance(value);
+  }
+  if (kind === CatalogKind.DETAIL_FIGURE && field === DETAIL_VIEWS_FIELD) {
+    return formatDetailViews(value);
   }
   return formatReadonlyValue(value);
 }
@@ -1001,7 +1004,7 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
               <span className="catmnt-form-label">キー</span>
               <span className="catmnt-code-readout">{def.keyOf(selectedRow.entry)}</span>
             </div>
-            {fieldDefs.map(field => (
+            {fieldDefs.filter(field => field !== DETAIL_VIEWS_FIELD || selectedRow.entry[field] != null).map(field => (
               <div className="catmnt-form-row" key={field}>
                 <span className="catmnt-form-label">{fieldLabel(kind, field)}</span>
                 <span

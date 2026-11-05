@@ -100,6 +100,12 @@ test('fieldLabel（S6b）: 建具種別の detailFigures は「詳細図」（�
   assert.equal(fieldLabel('fixtureSymbol', 'detailFigures'), '詳細図');
 });
 
+test('fieldLabel（P2-3）: 詳細図の views は「図の束」（adoptDoc の差分表示に生の項目名を出さない）', () => {
+  assert.equal(fieldLabel('detailFigure', 'views'), '図の束');
+  assert.equal(fieldLabel('detailFigure', 'subject'), '主題');
+  assert.equal(fieldLabel('material', 'views'), 'views', '他の種別には効かない');
+});
+
 test('fieldLabel: FIELD_LABELSに登録済みの項目はその日本語ラベルを返す（material/section/openingSubType）', () => {
   assert.equal(fieldLabel('material', 'thickness'), '厚');
   assert.equal(fieldLabel('section', 'height'), 'せい');

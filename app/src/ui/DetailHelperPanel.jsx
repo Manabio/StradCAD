@@ -4,6 +4,8 @@ import { CatalogKind } from '../catalog/catalogKinds.js';
 import { overlayFor, docDiffMap } from '../catalog/catalogRegistry.js';
 import { planRemoveUserEntry, applyCatalogEditPlan } from '../catalog/catalogMaintenance.js';
 import { DetailLenMode, DetailEdgeMark } from '../core/constants.js';
+import { canHaveDetailViews } from '../detail/detailModel.js';
+import { detailFigureCatalog } from '../openings/openingCatalog.js';
 import { detailBuiltinFigures } from '../detail/detailPlacement.js';
 import { saveUserCatalog } from '../storage/db.js';
 import { markDirty } from '../dirtyState.js';
@@ -22,7 +24,7 @@ import {
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, saveDecision, planSave, afterSaveDoc,
   deleteConfirmMessage, defaultFitDimsFor, fitDimFieldsFor, tryFit, previewPrimitivesOf, labelOptions, pushHistory,
   displayLen, strokeLabel, strokeTitle, moveSpanLabel, distanceButtonLabel, offsetButtonLabel, fitDimButtonLabel,
-  libraryMetaLabel, wallThicknessNotice,
+  libraryMetaLabel, wallThicknessNotice, DETAIL_PLACEMENT_VIEW_LABELS, placementViewOptions, setPlacementView,
   helperLibraryRows, libraryOriginOf, libraryRowActions, libraryEntryOf, planRevert, unlockDoc, docForLibraryEntry, LIBRARY_ORIGIN,
   loadDxf, setDxfUnit, toggleDxfLayer, setDxfLayers, dxfLayerRows, toggleDxfComponent, setDxfProvenanceField, dxfComponentRows, dxfUnitHint, dxfWarningTexts,
   dxfPreviewPrimitives, draftFromDxf, draftDocOf, provenanceNoticeOf, DETAIL_HELPER_TABS, setProvenanceField,
@@ -68,6 +70,7 @@ const PARAM_OPTIONS = labelOptions(DETAIL_PARAM_LABELS);
 const FIELD_OPTIONS = labelOptions(DETAIL_MATERIAL_FIELD_LABELS);
 const KIND_OPTIONS = labelOptions(DETAIL_DATUM_KIND_LABELS);
 const AXIS_OPTIONS = labelOptions(DETAIL_AXIS_LABELS);
+const PLACEMENT_VIEW_OPTIONS = labelOptions(DETAIL_PLACEMENT_VIEW_LABELS);
 
 function Select({ value, options, onChange, disabled, empty, title }) {
   return (
@@ -482,6 +485,8 @@ export function DetailHelperPanel({ onClose }) {
     [materialList, fitOverrides, form],
   );
   const fitFields = fitDimFieldsFor(form);
+  // 図の束の候補（三層合成後の詳細図。配置図のときだけ読む）
+  const viewCatalog = canHaveDetailViews(form) ? [...detailFigureCatalog().values()] : null;
   // 部屋の取り合いの材束縛を解く材マップ（材コード→材。材の一覧が読めるまでは null＝材束縛の図は UNRESOLVED_MATERIAL）
   const materialMap = useMemo(() => (materialList ? new Map(materialList.map(m => [m.code, m])) : null), [materialList]);
   const fitted = useMemo(() => (fitOn ? tryFit(form, fitDims, { materialMap }) : null), [fitOn, form, fitDims, materialMap]);
@@ -1013,6 +1018,17 @@ export function DetailHelperPanel({ onClose }) {
             <label className="dthlp-row">{DETAIL_HELPER_TEXT.fieldSubject}
               <Select value={form.subject} options={options.subjects} onChange={v => edit(f => setClassification(f, 'subject', v), { track: false })} />
             </label>
+            {canHaveDetailViews(form) && (
+              <div>
+                <span>{DETAIL_HELPER_TEXT.viewsGroup}</span>
+                {PLACEMENT_VIEW_OPTIONS.map(({ value: view, label }) => (
+                  <label key={view} className="dthlp-row">{label}
+                    <Select value={form.views?.[view] ?? ''} options={placementViewOptions(form, viewCatalog, view)} disabled={readOnly}
+                      onChange={key => edit(f => setPlacementView(f, view, key))} />
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="dthlp-block" inert={inertWhenReadOnly}>

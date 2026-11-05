@@ -1870,9 +1870,24 @@ test('【不変条件・部分詳細図S2】CatalogMaintenancePanel.jsx: READONL
   const m = /const READONLY_KIND_FIELDS = Object\.freeze\(\{([\s\S]*?)\n\}\);/.exec(code);
   assert.ok(m, 'CatalogMaintenancePanel.jsx に READONLY_KIND_FIELDS が見つからない');
   assert.ok(
-    /\[CatalogKind\.DETAIL_FIGURE\]: Object\.freeze\(\['label', 'category', 'view', 'subject', 'provenance'\]\)/.test(m[1]),
+    /\[CatalogKind\.DETAIL_FIGURE\]: Object\.freeze\(\['label', 'category', 'view', 'subject', 'provenance', DETAIL_VIEWS_FIELD\]\)/.test(m[1]),
     'READONLY_KIND_FIELDS に [CatalogKind.DETAIL_FIGURE] の閲覧項目が無い（部分詳細図タブの詳細欄が空になる）',
   );
+});
+
+test('【不変条件・部分詳細図P2-3】CatalogMaintenancePanel.jsx: 図の束（views）の行は formatDetailViews で整形し、views を持つ図の行だけ出す', () => {
+  const code = stripComments(readSrc('ui/CatalogMaintenancePanel.jsx'));
+  assert.ok(
+    /kind === CatalogKind\.DETAIL_FIGURE && field === DETAIL_VIEWS_FIELD\) \{\s*return formatDetailViews\(value\);\s*\}/.test(code),
+    'formatReadonlyFieldValue が views を formatDetailViews で整形していない',
+  );
+  assert.ok(
+    /fieldDefs\.filter\(field => field !== DETAIL_VIEWS_FIELD \|\| selectedRow\.entry\[field\] != null\)\.map\(field => \(/.test(code),
+    '閲覧タブが views の無い図にも「図の束」の行を出す（または filter が外れている）',
+  );
+  // 検出力: 整形・出し分けを外した文字列は通らない
+  assert.ok(!/kind === CatalogKind\.DETAIL_FIGURE && field === DETAIL_VIEWS_FIELD\) \{\s*return formatDetailViews\(value\);\s*\}/.test(code.replace('return formatDetailViews(value);', 'return formatReadonlyValue(value);')));
+  assert.ok(!/fieldDefs\.filter\(field => field !== DETAIL_VIEWS_FIELD \|\| selectedRow\.entry\[field\] != null\)\.map\(field => \(/.test(code.replace('.filter(field => field !== DETAIL_VIEWS_FIELD || selectedRow.entry[field] != null)', '')));
 });
 
 // ---- 部分詳細図 S5: 割当て UI・プレビューの detailRefs・使用中の 1 回取得（コメント除去後の本体を検査）----
