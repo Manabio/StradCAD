@@ -1825,7 +1825,6 @@
     "y": -1960
    },
    {
-    "dash": "center",
     "openingId": "97ed5949-8f67-40a9-8b61-8beebdb1e23d",
     "type": "line",
     "x1": 6847.5,
@@ -1834,7 +1833,6 @@
     "y2": -1000
    },
    {
-    "dash": "center",
     "openingId": "97ed5949-8f67-40a9-8b61-8beebdb1e23d",
     "type": "line",
     "x1": 6847.5,
@@ -3664,7 +3662,6 @@
     "y": -1960
    },
    {
-    "dash": "center",
     "openingId": "63bdd553-8f14-49fe-9472-273c4e1f5d13",
     "type": "line",
     "x1": 4497.5,
@@ -3673,7 +3670,6 @@
     "y2": -1000
    },
    {
-    "dash": "center",
     "openingId": "63bdd553-8f14-49fe-9472-273c4e1f5d13",
     "type": "line",
     "x1": 4497.5,
@@ -6876,7 +6872,6 @@
     "y": -1960
    },
    {
-    "dash": "center",
     "openingId": "5d5318c7-26c3-4ace-8c68-87e23f46f5c9",
     "type": "line",
     "x1": 14250,
@@ -6885,7 +6880,6 @@
     "y2": -1000
    },
    {
-    "dash": "center",
     "openingId": "5d5318c7-26c3-4ace-8c68-87e23f46f5c9",
     "type": "line",
     "x1": 14250,

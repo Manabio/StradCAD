@@ -7,6 +7,10 @@ import {
   Plane, PlanGraph, Project, CenterLineType, Discipline, OpeningCategory, RoomKind, RoomFeature, ShapeType,
 } from '@core';
 import { FacadeDirection, FacadeSkipReason } from '../core/constants.js';
+import { buildOpeningPlanSymbol } from '../openings/openingPlanSymbol.js';
+import { findHostWall } from '../openings/openingGeometry.js';
+import { findCatalogEntry } from '../openings/openingCatalog.js';
+import { LodLevel } from '../viewport.js';
 import { clearOverlays } from '../catalog/catalogRegistry.js';
 import { elevationFigure, installElevationFigures } from '../openings/openingDetailTestFixtures.js';
 import { generateExteriorWalls } from '../finish/wallGeneration.js';
@@ -126,6 +130,58 @@ for (const c of LEFT_HINGE_CASES) {
     assert.ok(apex.x < apex.latchX, `吊元が左: ${apex.x} < ${apex.latchX}`);
   });
 }
+
+// ---- 開き線の線種（見る側）。期待の「外へ開く」は平面記号（戸板の線の先端が建物の矩形の外か）から独立に決める ----
+const HOUSE = { x0: 0, x1: 4000, y0: 0, y1: 3000 }; // rectGraph の建物（通り芯の矩形）
+const outsideHouse = (x, y) => x < HOUSE.x0 || x > HOUSE.x1 || y < HOUSE.y0 || y > HOUSE.y1;
+// 平面記号の戸板（role:'leaf'）の先端が建物の外にあるか（＝外へ開く戸）。
+function planOpensOutward(graph, opening) {
+  const host = findHostWall(opening, graph);
+  const prims = buildOpeningPlanSymbol(opening, {
+    entry: findCatalogEntry(opening.category, opening.subType), lodLevel: LodLevel.STANDARD,
+    axisValue: host.axisValue, exteriorDirOf: () => host.faceDir,
+  });
+  const leaf = prims.find(p => p.type === 'line' && p.role === 'leaf');
+  assert.ok(leaf, '前提: 平面記号に戸板の線がある');
+  return outsideHouse(leaf.x2, leaf.y2);
+}
+// 開き線（V 字の斜線 2 本）の線種。2 本は同じ線種。
+function veeDash(prims) {
+  const sloped = prims.filter(p => p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2);
+  assert.equal(sloped.length, 2, `V 字の斜線は 2 本: ${JSON.stringify(sloped)}`);
+  assert.equal(sloped[0].dash, sloped[1].dash, '2 本は同じ線種');
+  return sloped[0].dash;
+}
+
+for (const c of LEFT_HINGE_CASES) {
+  test(`開き線の線種（${c.dir} 面）: 外へ開く戸＝実線（手前）・内へ開く戸＝一点鎖線（向こう）（外へ開くかは平面記号から決める）`, () => {
+    const seen = new Set();
+    for (const swingSide of [1, -1]) {
+      const { p1, graph, cl } = rectGraph();
+      const o = addOpening(graph, cl[c.axis], c.side, cl[c.ref], c.center, 800, DOOR, { height: 2000, hingeSide: c.hingeSide, swingSide });
+      const outward = planOpensOutward(graph, o);
+      seen.add(outward);
+      const face = faceOf(modelOf(p1, graph), c.dir);
+      assert.equal(face.openingCounts.drawn, 1);
+      assert.equal(veeDash(openingPrims(face)), outward ? undefined : 'center', `swingSide=${swingSide} outward=${outward}`);
+    }
+    assert.deepEqual([...seen].sort(), [false, true], '前提: swingSide ±1 で外開きと内開きの両方が出る');
+  });
+}
+
+test('開き線の線種: 突出し窓（外開き）は実線・内倒し窓は一点鎖線（東面）', () => {
+  const dashOf = subType => {
+    const { p1, graph, cl } = rectGraph();
+    addOpening(graph, cl.x1, 1, cl.y0, 1500, 900, { category: OpeningCategory.WINDOW, subType }, { sillHeight: 800, height: 900 });
+    const face = faceOf(modelOf(p1, graph), FacadeDirection.EAST);
+    assert.equal(face.openingCounts.drawn, 1);
+    const sloped = openingPrims(face).filter(p => p.type === 'line' && p.x1 !== p.x2 && p.y1 !== p.y2);
+    assert.equal(sloped.length, 2, subType);
+    return sloped.map(p => p.dash);
+  };
+  assert.deepEqual(dashOf('projectedOut'), [undefined, undefined]);
+  assert.deepEqual(dashOf('hopper'), ['center', 'center']);
+});
 
 test('対象外: 内壁の建具・外壁でも線分の範囲外の建具・wallSide が内側（室内側の壁）の建具は出ない', () => {
   const { p1, graph, cl } = rectGraph({ split: true });

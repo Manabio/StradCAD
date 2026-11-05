@@ -20,6 +20,7 @@ import { openingSectionPrimitives, openingSectionWallRange, openingSectionOverha
 import { openingTagPartsOf, effectiveHeight, effectiveSillHeight } from '../openings/openingNumbering.js';
 import { findCatalogEntry, isDoorlessMechanism } from '../openings/openingCatalog.js';
 import { buildOpeningElevation, frameOnlyInnerRect } from '../openings/openingElevationFigure.js';
+import { openingOpensTowardViewer, openingExteriorPerp } from '../openings/openingViewSide.js';
 import {
   translatePrimitive, mirrorPrimitiveX, line, polyline, text, dim, circle, tag, hit,
 } from './elevationPrimitives.js';
@@ -765,7 +766,7 @@ export function buildFaceFigure(face, ctx) {
   // （openingBelongsToFaceRoom。実機「6」C＝階段の展開に階段下の部屋の建具が出ていた）。
   const openings = openingsOnFace(face, graph).filter(o => openingBelongsToFaceRoom(o, face, room, graph));
   appendOpenings(prims, {
-    openings, face, project, scale, lineWeightsPx, openingTagRowY, floorDyAt, detailWeight,
+    openings, face, graph, project, scale, lineWeightsPx, openingTagRowY, floorDyAt, detailWeight,
   });
 
   appendCornerSections(prims, {
@@ -1473,7 +1474,7 @@ function appendOpenSpans(prims, {
  * 建具ごとのプリミティブ範囲には openingId を付ける。
  */
 function appendOpenings(prims, {
-  openings, face, project, scale, lineWeightsPx, openingTagRowY, floorDyAt, detailWeight,
+  openings, face, graph, project, scale, lineWeightsPx, openingTagRowY, floorDyAt, detailWeight,
 }) {
   // 開口（建具の姿＋記号丸。項目1・2）。姿図は openings/openingElevationFigure.js の
   // buildOpeningElevation を編集用寸法・動作線・FL基準線を抑制したうえで再利用する
@@ -1502,8 +1503,13 @@ function appendOpenings(prims, {
     // 指定寸法）から少なくともその分だけ内側に描く——細線と中線の間の余白が1pxになる中心間距離
     // （elevationStyle.js faceGapLimitMm。scale未確定の1パス目は0＝モデル寸法）。
     const minFaceMm = faceGapLimitMm(scale, lineWeightsPx, 'thin', 'medium');
+    // 開き線の線種は見る側で決まる: 見る側の壁面の方向＝face.inward（部屋側）。共有壁の建具は面ごとに片側が一点鎖線になる。
+    const mechanism = entry?.mechanism;
+    const towardViewer = openingOpensTowardViewer(o, mechanism, {
+      viewerPerp: face.inward, exteriorPerp: openingExteriorPerp(o, mechanism, graph), entry,
+    });
     const figurePrims = buildOpeningElevation(o, {
-      entry, includeDims: false, includeMotionArrows: false, includeLevelLine: false, minFaceMm,
+      entry, includeDims: false, includeMotionArrows: false, includeLevelLine: false, minFaceMm, towardViewer,
     });
     const oriented = face.dirSign < 0 ? figurePrims.map(p => mirrorPrimitiveX(p, o.width)) : figurePrims;
     for (const p of oriented) prims.push(translatePrimitive(p, x, floorDyAt(localX)));

@@ -11,11 +11,13 @@
  * - 位置: 図の X＝u − uMin（姿図の x=0 を u の小さい端へ）、Y＝glZ − FL ＋ 姿図の y（姿図は FL=0・上が負）。
  * - 隠れ: 建具全体で判定する。中心と四隅の 5 点を壁の包絡＋屋根（facadeGeometry.js isHidden）で調べ、1 点でも見えれば
  *   丸ごと描き、全部隠れれば描かない（線ごとの切り欠きはしない。S3 の割り切り）。
- * - 内外の線種: 姿図をそのまま（鏡像に）するだけで、外開き／内開きの線種を入れ替えない（S3 の割り切り）。
+ * - 内外の線種: 立面は外から見る（viewerPerp＝segment.outwardSign）。openings/openingViewSide.js の towardViewer を姿図へ渡し、
+ *   手前（外）へ開く建具は開き線が実線、向こう（内）へ開く建具は一点鎖線。
  */
 import { COORD_EPS_MM } from '../elevation/elevationStyle.js';
 import { translatePrimitive, mirrorPrimitiveX } from '../elevation/elevationPrimitives.js';
 import { buildOpeningElevation } from '../openings/openingElevationFigure.js';
+import { openingOpensTowardViewer } from '../openings/openingViewSide.js';
 import { findCatalogEntry } from '../openings/openingCatalog.js';
 import { effectiveHeight, effectiveSillHeight } from '../openings/openingNumbering.js';
 import { projectToView, isFacingSegment, isHidden } from './facadeGeometry.js';
@@ -75,8 +77,12 @@ export function buildFacadeOpenings(inputs, view, { uMin, profiles, minFaceMm = 
       const depth = p1.depth;
       const probes = [[(uLo + uHi) / 2, (zLo + zHi) / 2], [uLo, zLo], [uLo, zHi], [uHi, zLo], [uHi, zHi]];
       if (probes.every(([u, z]) => isHidden(profiles, u, z, depth, roofs, normal))) { counts.hidden++; continue; }
+      // 見る側は外（segment.outwardSign）。室外側も同じ向き（外壁なので）。
+      const towardViewer = openingOpensTowardViewer(o, entry.mechanism, {
+        viewerPerp: segment.outwardSign, exteriorPerp: segment.outwardSign, entry,
+      });
       const figure = buildOpeningElevation(o, {
-        entry, includeDims: false, includeMotionArrows: false, includeLevelLine: false, minFaceMm,
+        entry, includeDims: false, includeMotionArrows: false, includeLevelLine: false, minFaceMm, towardViewer,
       });
       // u が壁の座標と逆向き（coord1 の u が coord2 の u より大きい）なら姿図を左右反転する。
       const mirror = p1.u > p2.u;

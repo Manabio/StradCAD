@@ -9412,7 +9412,6 @@
     "y": -2360
    },
    {
-    "dash": "center",
     "openingId": "210b42ff-766f-402d-bf6d-f0352a42e8bf",
     "type": "line",
     "x1": 8935.5,
@@ -9421,7 +9420,6 @@
     "y2": -1200
    },
    {
-    "dash": "center",
     "openingId": "210b42ff-766f-402d-bf6d-f0352a42e8bf",
     "type": "line",
     "x1": 8935.5,
@@ -9633,7 +9631,6 @@
     "y": -2360
    },
    {
-    "dash": "center",
     "openingId": "e0c07a48-58f0-4d1a-92ff-cb70c8e87f72",
     "type": "line",
     "x1": 12127.5,
@@ -9642,7 +9639,6 @@
     "y2": -1200
    },
    {
-    "dash": "center",
     "openingId": "e0c07a48-58f0-4d1a-92ff-cb70c8e87f72",
     "type": "line",
     "x1": 12127.5,

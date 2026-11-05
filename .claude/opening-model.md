@@ -49,6 +49,9 @@
 ## 平面記号（IMPLEMENTED_MECHANISMS）と姿図（mechanismPrimitives）の実装は独立
 `IMPLEMENTED_MECHANISMS`（`openings/openingPlanSymbol.js`が参照）と`openingElevationFigure.js`の`mechanismPrimitives`は別々に機構をカバーし、揃っている前提を作らない。平面のみ実装済みの機構は姿図側で`entry.label`のテキスト表示にフォールバックする（クラッシュはしない）——姿図側の未実装は`IMPLEMENTED_MECHANISMS`から見えないため、姿図を追加するときは`mechanismPrimitives`のswitchへ機構を足すだけでよく、平面側の変更は不要。
 
+## 姿図の開き線は見る側で線種を変えられる（towardViewer）
+`buildOpeningElevation`の`towardViewer`（true＝手前へ開く／false＝向こうへ開く／null＝従来）は開き線（V字）の dash だけを変える（手前＝実線、向こう＝一点鎖線。機構・扉／窓の区別なし。ユーザー裁定 2026-11-05）。判定は`openings/openingViewSide.js`の`openingOpensTowardViewer`（蝶番系は平面記号と同じ`swingOpenPerpDir`、吊元を持たない窓は室外側から。自由扉・引き戸等は null）。FREE・FOLD・PIVOT は開き線を持つが開く向きが一意でない（両方向・折れ・回転）ため判定が null＝従来の線種のまま。引き戸等は開き線を持たず影響なし。FIRE_FOLD は吊元があり向きが一意なので対象（`fireAngle` 90／180 とも同じ側へ開く）。PIVOT・PIVOT_H の回転軸（枠から延びる一点鎖線）は開く向きの表現ではなく軸を示す中心線なので対象外。AWNING の斜線 1 本は V 字ではなく判定も null で対象外。既知の限界: FREE・PIVOT の両方向の開き線をどう描くかは未裁定。建具モードの姿図・建具表・カタログは渡さない＝従来どおり。既知の限界: 部分詳細図の姿図が解決できた建具（`detailPrimitives`）は`mechanismPrimitives`を通らないので`towardViewer`が効かない（T2 で`DetailDash.SWING`により対応予定）。
+
 ## 平面記号の組立ては openings/openingPlanSymbol.js へ抽出（純関数。react-konvaを引かない）
 `renderer/OpeningsLayer.jsx`は判断を一切持たない——host壁・面線・カタログentryを引いて`openings/openingPlanSymbol.js`の純関数へ委ね、返ってきたワールドmm単位のプリミティブ列をKonva要素へ機械的に変換するだけ（ステップ11「作図P2」・2026-09-23。`openingTagPlacement.js`⇄`OpeningTagLayer.jsx`と同じ分離。node:testから単体importできる）。線の太さは記号の役割（記号本体・枠材・扉本体・動作弧）で決まり、その決定を純関数側の1箇所に集約する——jsx側には持たせない。角度計算・leaf仕様決定・トラック配置等の純粋な数値計算は引き続き`openings/openingPlanSymbolGeometry.js`に置き、`openingPlanSymbol.js`はそれを呼んで機構ごとにプリミティブを組み立てる層。判断（太さの役割決定を含む）を`.jsx`側に残すと結線ミスがテストで検出できないため純関数側に一本化する——**不変条件: 2枚leaf構成の対向leafはswingSide（回転センス）を反転して渡す（反転しないと2枚が壁の反対側へ開く）**。
 

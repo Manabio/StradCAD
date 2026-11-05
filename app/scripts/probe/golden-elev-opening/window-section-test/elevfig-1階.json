@@ -267,7 +267,6 @@
     "y": -1960
    },
    {
-    "dash": "dashed",
     "openingId": "0a72b302-48e5-4751-af20-7fbc44325ba7",
     "type": "line",
     "x1": 3800,
@@ -276,7 +275,6 @@
     "y2": -1450
    },
    {
-    "dash": "dashed",
     "openingId": "0a72b302-48e5-4751-af20-7fbc44325ba7",
     "type": "line",
     "x1": 3800,
@@ -749,7 +747,6 @@
     "y": -1960
    },
    {
-    "dash": "center",
     "openingId": "3c1dee7f-78e9-439c-83ee-288536d0a438",
     "type": "line",
     "x1": 9985,
@@ -758,7 +755,6 @@
     "y2": -1450
    },
    {
-    "dash": "center",
     "openingId": "3c1dee7f-78e9-439c-83ee-288536d0a438",
     "type": "line",
     "x1": 9985,
@@ -2346,7 +2342,6 @@
     "y": -1960
    },
    {
-    "dash": "center",
     "openingId": "d93e694a-dd48-4712-985b-bfc1956e73b7",
     "type": "line",
     "x1": 6585,
@@ -2355,7 +2350,6 @@
     "y2": -1000
    },
    {
-    "dash": "center",
     "openingId": "d93e694a-dd48-4712-985b-bfc1956e73b7",
     "type": "line",
     "x1": 6585,
@@ -4651,7 +4645,7 @@
     "y": -1960
    },
    {
-    "dash": "dashed",
+    "dash": "center",
     "openingId": "0a72b302-48e5-4751-af20-7fbc44325ba7",
     "type": "line",
     "x1": 12885,
@@ -4660,7 +4654,7 @@
     "y2": -1450
    },
    {
-    "dash": "dashed",
+    "dash": "center",
     "openingId": "0a72b302-48e5-4751-af20-7fbc44325ba7",
     "type": "line",
     "x1": 12885,

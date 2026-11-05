@@ -12,7 +12,7 @@ import { resolveDetailElevation } from './openingDetailFit.js';
 import { resolveSlideLayoutPanels } from './openingPlanSymbolGeometry.js';
 import { OpeningCategory } from '../core.js';
 // 線種語彙（'thin'|'medium'|'thick'）の単一情報源。
-import { ElevationLineRole, weightForRole } from '../elevation/elevationStyle.js';
+import { ElevationLineRole, ElevationDash, weightForRole } from '../elevation/elevationStyle.js';
 // プリミティブ生成ヘルパー（渡したキーだけ・キー順固定）。arrow／levelLine は SVG 語彙のため svgFigurePrimitives から。
 import { line, text, dim, rect } from '../elevation/elevationPrimitives.js';
 import { arrow, levelLine } from '../structural/sectionFigure/svgFigurePrimitives.js';
@@ -20,6 +20,15 @@ import { arrow, levelLine } from '../structural/sectionFigure/svgFigurePrimitive
 const INSET_MM = 40; // 内側見付の枠inset
 
 function round(v) { return Math.round(v); }
+
+/**
+ * 開き線の線種を「見る側」で決める。towardViewer が null（既定）は canonicalDash（従来どおり）。
+ * 見る側が分かるときは機構・扉／窓の区別なく、手前に開くなら実線（undefined）、向こうへ開くなら一点鎖線。
+ */
+function swingDashFor(towardViewer, canonicalDash) {
+  if (towardViewer == null) return canonicalDash;
+  return towardViewer ? undefined : ElevationDash.CENTER;
+}
 
 // 頂点(apexX,apexY)へ向かう2本のline（一点鎖線/破線/実線の「V」字表現。dashは'center'/'dashed'/undefined）。
 function vee(x1, y1, x2, y2, apexX, apexY, dash) {
@@ -65,7 +74,7 @@ function equalInsetLines(n, top, sillTop, width) {
 
 // 折れ戸・折りたたみ窓（FOLD=2等分／FIRE_FOLD=4等分）: パネル境界の縦線(n-1本)＋各パネルに
 // 破線V（apexは左右交互＝隣接パネルと向き合う折れ方向を表す）。
-function foldPanelPrimitives(n, width, top, sillTop, midY) {
+function foldPanelPrimitives(n, width, top, sillTop, midY, dash) {
   const panelWidth = width / n;
   const prims = [];
   for (let i = 1; i < n; i += 1) {
@@ -77,7 +86,7 @@ function foldPanelPrimitives(n, width, top, sillTop, midY) {
     const apexLeft = i % 2 === 0;
     const apexX = apexLeft ? xLo : xHi;
     const farX = apexLeft ? xHi : xLo;
-    prims.push(...vee(farX, top, farX, sillTop, apexX, midY, 'dashed'));
+    prims.push(...vee(farX, top, farX, sillTop, apexX, midY, dash));
   }
   return prims;
 }
@@ -113,8 +122,10 @@ function slideLayoutPrimitives(entry, width, top, sillTop, midY) {
 }
 
 // 機構別の意匠表現（枠・寸法は呼び出し元 buildOpeningElevation が共通で描く）。
-function mechanismPrimitives(opening, entry, width, top, sillTop) {
+function mechanismPrimitives(opening, entry, width, top, sillTop, towardViewer = null) {
   const mechanism = entry?.mechanism;
+  // 開き線（V字）の線種。見る側に依らない描きは towardViewer=null（従来どおり）。
+  const dashOf = canonicalDash => swingDashFor(towardViewer, canonicalDash);
   const midY = (top + sillTop) / 2;
   const h = sillTop - top; // 開口高さ(mm)。effectiveHeightと同値（top/sillTopの差として再導出）。
   const { hingeSide } = opening;
@@ -124,9 +135,10 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     // 頂点＝吊元側）。hingeX/latchX の規約: hingeSide<0 → 吊元x=0・戸先x=width。
     const hingeX = opening.hingeSide < 0 ? 0 : width;
     const latchX = opening.hingeSide < 0 ? width : 0;
+    const dash = dashOf('center');
     return [
-      line(latchX, top,     hingeX, midY, { dash: 'center' }),
-      line(latchX, sillTop, hingeX, midY, { dash: 'center' }),
+      line(latchX, top,     hingeX, midY, { dash }),
+      line(latchX, sillTop, hingeX, midY, { dash }),
     ];
   }
   if (mechanism === OpeningMechanism.SLIDE_DOUBLE) {
@@ -149,7 +161,7 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     return [text(width / 2, midY, 'FIX', { size: 12, anchor: 'middle', baseline: 'middle' })];
   }
   if (mechanism === OpeningMechanism.SWING_DOUBLE) {
-    return doubleLeafVees(width, top, sillTop, midY, 'center');
+    return doubleLeafVees(width, top, sillTop, midY, dashOf('center'));
   }
   if (mechanism === OpeningMechanism.SWING_CHILD) {
     // 縦線位置=親leaf長（吊元側からwidth×(1-childRatio)）。親・子それぞれに一点鎖線V。
@@ -157,14 +169,15 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     const dividerX = hingeSide < 0 ? width * (1 - childRatio) : width * childRatio;
     const hingeX = hingeSide < 0 ? 0 : width;
     const childX = hingeSide < 0 ? width : 0;
+    const dash = dashOf('center');
     return [
       line(dividerX, top, dividerX, sillTop),
-      ...vee(dividerX, top, dividerX, sillTop, hingeX, midY, 'center'),
-      ...vee(dividerX, top, dividerX, sillTop, childX, midY, 'center'),
+      ...vee(dividerX, top, dividerX, sillTop, hingeX, midY, dash),
+      ...vee(dividerX, top, dividerX, sillTop, childX, midY, dash),
     ];
   }
   if (mechanism === OpeningMechanism.SWING_IN) {
-    return singleLeafVee(hingeSide, width, top, sillTop, midY, 'dashed');
+    return singleLeafVee(hingeSide, width, top, sillTop, midY, dashOf('dashed'));
   }
   if (mechanism === OpeningMechanism.FREE) {
     // 一点鎖線V＋同じapexの破線V（両方向開きを重ねて表現）。
@@ -192,24 +205,25 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
     ];
   }
   if (mechanism === OpeningMechanism.PROJECT_V) {
-    return singleLeafVee(hingeSide, width, top, sillTop, midY, undefined);
+    return singleLeafVee(hingeSide, width, top, sillTop, midY, dashOf(undefined));
   }
   if (mechanism === OpeningMechanism.AWNING) {
     return [line(0, sillTop, width, top)];
   }
   if (mechanism === OpeningMechanism.PROJECT_OUT) {
-    return vee(0, sillTop, width, sillTop, width / 2, top, undefined);
+    return vee(0, sillTop, width, sillTop, width / 2, top, dashOf(undefined));
   }
   if (mechanism === OpeningMechanism.TILT) {
-    return vee(0, top, width, top, width / 2, sillTop, 'dashed');
+    return vee(0, top, width, top, width / 2, sillTop, dashOf('dashed'));
   }
   if (mechanism === OpeningMechanism.TILT_OUT) {
-    return vee(0, top, width, top, width / 2, sillTop, undefined);
+    return vee(0, top, width, top, width / 2, sillTop, dashOf(undefined));
   }
   if (mechanism === OpeningMechanism.DREH_KIPP) {
+    const dash = dashOf('dashed');
     return [
-      ...singleLeafVee(hingeSide, width, top, sillTop, midY, 'dashed'),
-      ...vee(0, top, width, top, width / 2, sillTop, 'dashed'),
+      ...singleLeafVee(hingeSide, width, top, sillTop, midY, dash),
+      ...vee(0, top, width, top, width / 2, sillTop, dash),
     ];
   }
   if (mechanism === OpeningMechanism.PIVOT) {
@@ -240,7 +254,7 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
       line(0, ys[2], width, ys[2]),
     ];
     for (let i = 0; i < 3; i += 1) {
-      prims.push(...vee(0, ys[i], width, ys[i], width / 2, ys[i + 1], undefined));
+      prims.push(...vee(0, ys[i], width, ys[i], width / 2, ys[i + 1], dashOf(undefined)));
     }
     return prims;
   }
@@ -296,15 +310,16 @@ function mechanismPrimitives(opening, entry, width, top, sillTop) {
   if (mechanism === OpeningMechanism.FIRE_DOOR) {
     // 常時開放金物の開放角度は姿図では表現しない（fireLeavesのみ反映）。
     const fireLeaves = entry?.fireLeaves ?? 1;
+    const dash = dashOf('center');
     return fireLeaves === 2
-      ? doubleLeafVees(width, top, sillTop, midY, 'center')
-      : singleLeafVee(hingeSide, width, top, sillTop, midY, 'center');
+      ? doubleLeafVees(width, top, sillTop, midY, dash)
+      : singleLeafVee(hingeSide, width, top, sillTop, midY, dash);
   }
   if (mechanism === OpeningMechanism.FOLD) {
-    return foldPanelPrimitives(2, width, top, sillTop, midY);
+    return foldPanelPrimitives(2, width, top, sillTop, midY, 'dashed');
   }
   if (mechanism === OpeningMechanism.FIRE_FOLD) {
-    return foldPanelPrimitives(4, width, top, sillTop, midY);
+    return foldPanelPrimitives(4, width, top, sillTop, midY, dashOf('dashed'));
   }
   if (mechanism === OpeningMechanism.FRAME_ONLY) {
     // 三方枠: 灰色insetの代わりに三方（左竪・上・右竪）の実線を呼び出し元(buildOpeningElevation)
@@ -375,7 +390,7 @@ function leverHandlePrimitives(opening, width) {
  * 建具1件の姿図プリミティブを生成する。
  * @param {object} opening core.js の Opening（category/subType/width/hingeSide等）
  * @param {{ tag: string|null, entry: object|null, includeDims?: boolean,
- *   includeMotionArrows?: boolean, includeLevelLine?: boolean }} extra
+ *   includeMotionArrows?: boolean, includeLevelLine?: boolean, towardViewer?: boolean|null }} extra
  *   tag=採番結果, entry=findCatalogEntry の結果。
  *   includeDims/includeMotionArrows/includeLevelLine（既定すべてtrue=従来どおり建具モードの
  *   編集用姿図として使う）は展開モードでの再利用のための抑制オプション（項目1）。
@@ -386,10 +401,13 @@ function leverHandlePrimitives(opening, width) {
  *     動作線ではなく吊元表示のため対象外＝残す）。
  *   - includeLevelLine=false: 建具単体の編集用FL基準線(type:'levelLine')を出さない
  *     （展開図側は部屋自体のFL線を別途持つため重複・冗長になる）。
+ *   - towardViewer: 見る側から見て建具が手前に開くか（openings/openingViewSide.js openingOpensTowardViewer）。
+ *     true＝手前に開く表現（実線）、false＝向こうへ開く表現（一点鎖線）。機構・扉／窓の区別なし。開き線（V字）の線種だけが変わる。
+ *     null（既定）＝従来の正準図（扉は開く側から・窓は室外から見た線種）のまま。
  * @returns {object[]} AutoScaledFigure が描くプリミティブ配列
  */
 export function buildOpeningElevation(
-  opening, { tag, entry, includeDims = true, includeMotionArrows = true, includeLevelLine = true, minFaceMm = 0 } = {},
+  opening, { tag, entry, includeDims = true, includeMotionArrows = true, includeLevelLine = true, minFaceMm = 0, towardViewer = null } = {},
 ) {
   // minFaceMm: 実画面の描画限界(mm)＝見付1px保証（展開図側が表示倍率から算出して渡す。
   // 建具モードの姿図・単体テストは0＝モデル寸法のまま）。三方枠の内法（中線）だけが従う。
@@ -448,7 +466,7 @@ export function buildOpeningElevation(
   const primitives = [
     ...(detailPrimitives ?? frameOutline),
     levelLine(0, { label: 'FL' }),
-    ...(detailPrimitives ? [] : mechanismPrimitives(opening, entry, width, top, sillTop)),
+    ...(detailPrimitives ? [] : mechanismPrimitives(opening, entry, width, top, sillTop, towardViewer)),
     dim('h', top - 250, 0, width, {
       foot: top, editable: true, target: 'width', label: String(round(width)),
     }),
