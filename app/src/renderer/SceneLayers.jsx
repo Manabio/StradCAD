@@ -11,6 +11,7 @@ import { StairLayer } from './StairLayer.jsx';
 import { RoomLabelsLayer } from './RoomLabelsLayer.jsx';
 import { StepSectionLayer } from './StepSectionLayer.jsx';
 import { PlanSolidsLayer } from './PlanSolidsLayer.jsx';
+import { PlacedFiguresLayer } from './PlacedFiguresLayer.jsx';
 import { EquipmentSymbolLayer } from './EquipmentSymbolLayer.jsx';
 import { computeEquipmentSymbols } from '../finish/equipment/equipmentFigure.js';
 import { buildingEquipmentCatalog } from '../finish/equipment/buildingEquipment.js';
@@ -27,6 +28,7 @@ import { SiteLinesLayer, SiteDrawPreview } from './SiteLinesLayer.jsx';
 import {
   shouldShowPlanFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers,
   shouldShowColumnOriginMarks, shouldShowEquipmentSymbols, planSectionDirection,
+  shouldShowPlacedFigures,
 } from './planFigureVisibility.js';
 import { ElevationLayer } from './ElevationLayer.jsx';
 import { FacadeLayer } from './FacadeLayer.jsx';
@@ -175,6 +177,7 @@ export const SceneLayers = observer(({
             {/* 平面の断面解決で描く線とラベル（梁・汎用立体〔S4〕・下屋〔S5〕）と、吹抜け・昇降路の注記（×・上部吹抜け〔S6〕。
                 階段吹抜けと同じ peek 由来）——壁・階段と同じ述語で出す。 */}
             {showPlanFigure && <PlanSolidsLayer graph={graph} project={project} viewport={viewport} belowPeek={belowPlanPeek} abovePeek={abovePlanPeek} direction={planSectionDirection(appMode)} materialMap={appMode === 'ceiling' ? mode?.materialMap ?? null : null} />}
+            {shouldShowPlacedFigures(appMode) && <PlacedFiguresLayer graph={graph} viewport={viewport} direction={planSectionDirection(appMode)} />}
             {/* 昇降機器具の図中記号（「EV」「EV1」等）。室名が出るモード（floorplan・finish）に揃える
                 （planFigureVisibility.js shouldShowEquipmentSymbols）。catalogは建物全体（全採用階。
                 buildingEquipmentCatalog。project.equipmentIndex を App.jsx の effect が埋める。

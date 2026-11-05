@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   shouldShowPlanFigure, shouldShowStairFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers, shouldShowColumnOriginMarks,
-  shouldShowEquipmentSymbols, planSectionDirection,
+  shouldShowEquipmentSymbols, shouldShowPlacedFigures, planSectionDirection,
 } from './planFigureVisibility.js';
 
 // 行コメントを落としてから照合する（コメント中の言及を「コード上の参照」と誤検知しないため。
@@ -73,6 +73,11 @@ test('【不変条件】SceneLayers.jsx: ColumnsLayer の originMarks は should
   const src = codeLines(fs.readFileSync(path.resolve(import.meta.dirname, 'SceneLayers.jsx'), 'utf8'));
   assert.ok(/<ColumnsLayer graph=\{graph\} viewport=\{viewport\} finishWrap originMarks=\{shouldShowColumnOriginMarks\(appMode\)\} \/>/.test(src),
     'ColumnsLayer の originMarks が shouldShowColumnOriginMarks(appMode) でゲートされていない');
+});
+
+test('shouldShowPlacedFigures: 姿図の配置は平面図一式と同じモード（天伏も含む）で描き、伏図・展開・立面では描かない', () => {
+  for (const mode of ['floorplan', 'finish', 'ceiling', 'opening', 'site']) assert.equal(shouldShowPlacedFigures(mode), true, mode);
+  for (const mode of ['structure', 'elevation', 'facade']) assert.equal(shouldShowPlacedFigures(mode), false, mode);
 });
 
 test('shouldShowEquipmentSymbols: 昇降機器具の図中記号は室名が出るモード（floorplan・finish）でのみ描く', () => {

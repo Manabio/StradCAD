@@ -102,7 +102,7 @@ test('【配線】PlanSolidsLayer.jsx は <Line を3つ（線・矢印本体・�
   assert.ok(text, '<Text 要素が見つかる');
   for (const re of [/^\s*x=\{p\.x\}\s*$/m, /^\s*y=\{p\.y\}\s*$/m, /^\s*text=\{p\.text\}\s*$/m, /^\s*fontSize=\{p\.fontSizeMm\}\s*$/m,
     /^\s*fill=\{PLAN_SOLIDS_COLOR\}\s*$/m, /^\s*listening=\{false\}\s*$/m]) assert.match(text, re, String(re));
-  assert.match(layer, /^const PLAN_SOLIDS_COLOR = '#1e293b';/m);
+  assert.match(layer, /^export const PLAN_SOLIDS_COLOR = '#1e293b';/m);
   assert.match(layer, /^const CEILING_BOUNDARY_COLOR = '#9ca3af';/m);
   assert.match(layer, /^\s*if \(p\.kind === 'text'\) \{\s*$/m);
   assert.match(layer, /^\s*if \(p\.kind === 'arrow'\) \{\s*$/m);

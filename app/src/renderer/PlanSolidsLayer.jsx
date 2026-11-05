@@ -10,7 +10,7 @@ import { CEILING_BOUNDARY_STYLE } from '../ceiling/ceilingBoundaryStyle.js';
 import { SOFFIT_JOINT_STYLE } from '../ceiling/soffitLineStyle.js';
 import { graphComputed } from './graphDerived.js';
 
-const PLAN_SOLIDS_COLOR = '#1e293b'; // 階段・吹抜け・下屋と同じ線色
+export const PLAN_SOLIDS_COLOR = '#1e293b'; // 階段・吹抜け・下屋と同じ線色
 const CEILING_BOUNDARY_COLOR = '#9ca3af'; // 天伏: 同じ高さで隣り合う天井の境目（style:'ceilingBoundary'。裁定 2026-10-10）・軒裏の910割付線（style:'eaveSoffitJoint'）の細線グレー
 const GRAY_LINE_STYLES = new Set([CEILING_BOUNDARY_STYLE, SOFFIT_JOINT_STYLE]);
 

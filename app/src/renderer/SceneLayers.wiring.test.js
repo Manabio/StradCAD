@@ -67,6 +67,18 @@ test('【配線】SceneLayers は VoidLayer を使わず、<PlanSolidsLayer abov
   assert.ok(/<PlanSolidsLayer [^>]*direction=\{planSectionDirection\(appMode\)\}/.test(codeOnly), '向き（見上げ／見下げ）は planSectionDirection(appMode) で渡す');
 });
 
+// 姿図の配置（S10 P3）: PlanSolidsLayer の直後・EquipmentSymbolLayer の前。表示するモードは shouldShowPlacedFigures、向きは planSectionDirection(appMode)。
+test('【配線】SceneLayers は <PlacedFiguresLayer> を PlanSolidsLayer の後・EquipmentSymbolLayer の前に、述語と向きつきで1行まるごと置く', () => {
+  assert.match(codeOnly,
+    /^\s*\{shouldShowPlacedFigures\(appMode\) && <PlacedFiguresLayer graph=\{graph\} viewport=\{viewport\} direction=\{planSectionDirection\(appMode\)\} \/>\}\s*$/m);
+  assert.equal((codeOnly.match(/<PlacedFiguresLayer\b/g) || []).length, 1);
+  const solidsAt = codeOnly.indexOf('<PlanSolidsLayer');
+  const placedAt = codeOnly.indexOf('<PlacedFiguresLayer');
+  const equipAt = codeOnly.indexOf('<EquipmentSymbolLayer');
+  assert.ok(solidsAt >= 0 && placedAt > solidsAt && equipAt > placedAt, `順序 PlanSolidsLayer(${solidsAt}) < PlacedFiguresLayer(${placedAt}) < EquipmentSymbolLayer(${equipAt})`);
+  assert.match(codeOnly, /^import \{ PlacedFiguresLayer \} from '\.\/PlacedFiguresLayer\.jsx';$/m);
+});
+
 // QA指摘W4（昇降機の仕様追加 ステップ4・S4）: catalogは建物全体（全採用階。project.equipmentIndex経由）
 // のbuildingEquipmentCatalog(project, graph)から作る——floorplan/finish両モードとも同じ供給源にする
 // （selfFloorEquipmentCatalogへの後退・空配列固定を防ぐ）。

@@ -15,6 +15,12 @@ export function shouldShowPlanFigure(appMode) {
   return appMode !== 'structure' && appMode !== 'elevation' && appMode !== 'facade';
 }
 
+// 姿図の配置（renderer/PlacedFiguresLayer.jsx）を描くモードか。平面図一式と同じ述語。天伏も通す
+// ——見上げは空調（hvac）だけという絞りは placedFigureDrawPlan 側で行う。
+export function shouldShowPlacedFigures(appMode) {
+  return shouldShowPlanFigure(appMode);
+}
+
 // 階段の図（StairLayer の自階の階段・下階の階段〔upper〕・2a壁の描画クリップ）を描くモードか。
 // 平面図一式の述語（上）から天伏（'ceiling'）だけを除く。天伏は壁・建具・柱は描くが、階段は上から見た姿ではなく
 // 上階の裏面（planSolids の見上げ。S13a）で表すため、自階の階段の線・外周・矢印も下階の階段の見下げも描かない
