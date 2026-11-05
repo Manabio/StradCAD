@@ -404,6 +404,49 @@ test('【S6b】南面のドア（u＝x・反転なし）: 同じ図が反転せ�
   }
 });
 
+// ---- 部分詳細図 T2-1: 開き勝手線（SWING）の線種と figureBack（立面の呼出し元）----
+// 姿図の dash ストローク（(0,0)→(dashX,0)→(dashX,−H)）の dashRole を swing にした図。
+const swingFigure = (key, dashX) => {
+  const f = elevationFigure(key, { dashX });
+  return { ...f, strokes: f.strokes.map(st => (st.id === 'dash' ? { ...st, line: { weightRole: 'thin', dashRole: 'swing' } } : st)) };
+};
+const detailLines = face => openingPrims(face).filter(p => p.source === 'detail' && p.type === 'line');
+
+test('【T2-1】外壁の片開き戸: 姿図の SWING 線は外へ開く戸＝実線の折れ線（center なし）・内へ開く戸＝一点鎖線 2 本とも。内開きは figureBack の図（dashX の違い）を使う', () => {
+  installElevationFigures([swingFigure('sw-front', 130), swingFigure('sw-back', 250)]);
+  try {
+    const seen = new Set();
+    for (const swingSide of [1, -1]) {
+      for (const withBack of [false, true]) {
+        const { p1, graph, cl } = rectGraph();
+        const detailRefs = withBack ? { figure: 'sw-front', figureBack: 'sw-back' } : { figure: 'sw-front' };
+        const o = addOpening(graph, cl.x1, 1, cl.y0, 1500, 800, DOOR, { height: 2000, hingeSide: 1, swingSide, detailRefs });
+        const outward = planOpensOutward(graph, o);
+        seen.add(outward);
+        const east = faceOf(modelOf(p1, graph), FacadeDirection.EAST);
+        const lines = detailLines(east);
+        const label = `swingSide=${swingSide} outward=${outward} withBack=${withBack}`;
+        if (outward) {
+          assert.equal(lines.filter(p => p.dash === 'center').length, 0, label);
+          const poly = openingPrims(east).filter(p => p.source === 'detail' && p.type === 'polyline' && p.weight === 'thin');
+          assert.equal(poly.length, 1, `${label}: SWING 線は実線の折れ線 1 本`);
+          assert.equal(poly[0].dash, undefined, label);
+          const xs = poly[0].points.map(q => q[0]);
+          assert.equal(Math.abs(xs[1] - xs[0]), 130, `${label}: 手前は figure（figureBack は使わない）`);
+        } else {
+          assert.equal(lines.length, 2, label);
+          assert.ok(lines.every(p => p.dash === 'center'), label);
+          const horizontal = lines.find(p => p.y1 === p.y2);
+          assert.equal(Math.abs(horizontal.x2 - horizontal.x1), withBack ? 250 : 130, `${label}: figureBack があれば向こう側の図`);
+        }
+      }
+    }
+    assert.deepEqual([...seen].sort(), [false, true], '前提: swingSide ±1 で外開きと内開きの両方が出る');
+  } finally {
+    clearOverlays();
+  }
+});
+
 test('【S6b・失敗系】姿図の詳細図が建具に合わせられないと skipped に DETAIL_FIT_FAILED を 1 件（同じ図×寸法は重複排除）積み、姿図は従来の描き方で描く', () => {
   installElevationFigures([elevationFigure('df-bad', { sFixed: 900 })]);
   try {

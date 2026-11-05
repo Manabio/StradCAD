@@ -69,6 +69,14 @@ test('FBS 往復: jamb だけ／jamb と head／全 slot の detailRefs が往�
   assert.equal(JSON.stringify(snap3), JSON.stringify(snap4));
 });
 
+test('FBS 往復: figure と figureBack（向こう側の姿図）が残る', () => {
+  const refs = { [DetailSlot.FIGURE]: 'f-front', [DetailSlot.FIGURE_BACK]: 'f-back' };
+  const { graph } = makeGraphWithFrames([{ detailRefs: refs }, { detailRefs: { [DetailSlot.FIGURE_BACK]: 'f-back-only' } }]);
+  const restored = roundTrip(graph);
+  assert.deepEqual({ ...byId(restored, 'op0').detailRefs }, { figure: 'f-front', figureBack: 'f-back' });
+  assert.deepEqual({ ...byId(restored, 'op1').detailRefs }, { figureBack: 'f-back-only' });
+});
+
 test('FBS 往復: 上書きの無い建具は detailRefs が null。空の写像・空文字だけの値も null に正規化されて書かれない', () => {
   const { graph, openings } = makeGraphWithFrames([{}, {}]);
   assert.equal(openings[0].detailRefs, null, '既定は null');

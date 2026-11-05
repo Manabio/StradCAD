@@ -460,7 +460,7 @@ export function buildOpeningElevation(
   // 詳細図（source:'detail'）で置き換える。寸法・FL 線・タグは従来どおり。図が無い・fit できない（error）ときは従来の描き方
   // （通知は建具モード・展開モードの init と立面の入力組み立て）。三方枠の「アキ」標記は展開図側（elevationFigure.js）が描く別物で、
   // 姿図の置換では変えない。
-  const resolvedDetail = resolveDetailElevation({ opening, entry });
+  const resolvedDetail = resolveDetailElevation({ opening, entry, towardViewer });
   const detailPrimitives = resolvedDetail && !resolvedDetail.error ? resolvedDetail.primitives : null;
 
   const primitives = [

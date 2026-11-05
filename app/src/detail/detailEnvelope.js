@@ -31,7 +31,7 @@ const EMPTY = Object.freeze({ steps: Object.freeze([]), outline: Object.freeze([
 function collectEdges(strokes) {
   const edges = [];
   for (const stroke of Array.isArray(strokes) ? strokes : []) {
-    if (stroke?.line?.dashRole === DetailDash.DASHED) continue;
+    if (stroke?.line?.dashRole === DetailDash.DASHED || stroke?.line?.dashRole === DetailDash.SWING) continue;
     const pts = Array.isArray(stroke?.points) ? stroke.points : [];
     for (let i = 0; i + 1 < pts.length; i++) {
       edges.push({ a: pts[i], b: pts[i + 1], air: stroke.edgeMarks?.[i] === DetailEdgeMark.AIR });

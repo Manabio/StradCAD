@@ -573,7 +573,8 @@ export const DetailSlot = Object.freeze({
   SASH_SECTION: 'sashSection',
   NAGESHI:      'nageshi',
   SHIKII:       'shikii',
-  FIGURE:       'figure', // 建具の姿図（正面図）。枠・機構・ハンドルを置き換える（S6b）
+  FIGURE:       'figure', // 建具の姿図（正面図）。枠・機構・ハンドルを置き換える（S6b）。「開く側から見た図」
+  FIGURE_BACK:  'figureBack', // 建具の姿図のうち、向こう側（開く側の反対）から見た図。任意。無ければ FIGURE を両側に使う（T2）
   FLOOR_WALL:   'floorWall',   // 部屋の床と壁の取り合い（Room.detailRefs。S8a）
   WALL_CEILING: 'wallCeiling', // 部屋の壁と天井の取り合い（Room.detailRefs。S8a）
   KNEE_TOP:     'kneeTop',     // 腰壁の天端（腰壁・垂れ壁の記録の detailRefs。S8b-1）
@@ -623,6 +624,7 @@ export const DETAIL_SLOT_TARGETS = Object.freeze({
   [DetailSlot.NAGESHI]:      Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.NAGESHI }),
   [DetailSlot.SHIKII]:       Object.freeze({ category: DetailCategory.PAIRED, view: DetailView.SECTION, subject: DetailSubject.SHIKII }),
   [DetailSlot.FIGURE]:       Object.freeze({ category: DetailCategory.FIGURE, view: DetailView.ELEVATION, subject: DetailSubject.OPENING }),
+  [DetailSlot.FIGURE_BACK]:  Object.freeze({ category: DetailCategory.FIGURE, view: DetailView.ELEVATION, subject: DetailSubject.OPENING }),
   [DetailSlot.FLOOR_WALL]:   Object.freeze({ category: DetailCategory.JUNCTION, view: DetailView.SECTION, subject: DetailSubject.FLOOR_WALL }),
   [DetailSlot.WALL_CEILING]: Object.freeze({ category: DetailCategory.JUNCTION, view: DetailView.SECTION, subject: DetailSubject.WALL_CEILING }),
   [DetailSlot.KNEE_TOP]:     Object.freeze({ category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.WALL }),
@@ -684,10 +686,14 @@ export const DetailProvenanceSource = Object.freeze({
   DXF:    'dxf',
   PDF:    'pdf',
 });
-/** 詳細図の線種。'dashed' は elevation/elevationStyle.js の ElevationDash.DASHED と同値（detail/ は elevation/ を引けないのでここに置く）。 */
+/**
+ * 詳細図の線種。'dashed' は elevation/elevationStyle.js の ElevationDash.DASHED と同値（detail/ は elevation/ を引けないのでここに置く）。
+ * SWING＝開き勝手線の役割。姿図を向こうへ開く面から見るときは一点鎖線・手前に開く面と見る側が不明のときは実線（T2）。
+ */
 export const DetailDash = Object.freeze({
   SOLID:  'solid',
   DASHED: 'dashed',
+  SWING:  'swing',
 });
 /** DetailFigure.version（前方互換。未知の版は読み飛ばす）。 */
 export const DETAIL_FIGURE_VERSION = 1;

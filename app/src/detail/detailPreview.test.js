@@ -278,6 +278,18 @@ test('preview: 点線のストロークは dash を持つ／origin の Anchor �
   assert.deepEqual(poly.points, [[-10, 0], [0, 0], [0, 20]]);
 });
 
+test('preview: SWING のストロークは dash を持たない（R3）。DASHED は持つ（対照）', () => {
+  const polyOf = dashRole => {
+    const s = strokeOf('a', [move(PenDir.RIGHT, fixedLen(13)), move(PenDir.DOWN, fixedLen(27))], false, { weightRole: 'thin', dashRole });
+    const fig = figureOf([s], { anchors: [anchorOf('ds0', 'a', 1), anchorOf('dt0', 'a', 1)] });
+    return previewPrimitives(fig).find(p => p.type === SvgFigurePrimitiveType.POLYLINE && !p.guide);
+  };
+  const swing = polyOf(DetailDash.SWING);
+  assert.equal(swing.dash, undefined);
+  assert.deepEqual(swing.points, [[-13, 0], [0, 0], [0, 27]]);
+  assert.equal(polyOf(DetailDash.DASHED).dash, DetailDash.DASHED);
+});
+
 test('preview: 歩けないストローク（未知の dir）は飛ばし、例外にしない', () => {
   const fig = figureOf([strokeOf('a', [{ dir: 'Z', len: fixedLen(5) }]), strokeOf('b', [move(PenDir.RIGHT, fixedLen(5))])]);
   const prims = previewPrimitives(fig);

@@ -335,7 +335,7 @@ export function detailFigureRefsFor(symbolKey) {
  * 呼び出し元が解決済みのエントリ）、無ければ findCatalogEntry(category, subType) を読む。1つも無ければnull。
  */
 export function subTypeDetailFigureRefsFor(category, subType, entry = undefined) {
-  return detailFigureRefsOfEntry(entry === undefined ? findCatalogEntry(category, subType) : entry, [DetailSlot.FIGURE]);
+  return detailFigureRefsOfEntry(entry === undefined ? findCatalogEntry(category, subType) : entry, [DetailSlot.FIGURE, DetailSlot.FIGURE_BACK]);
 }
 
 /** 建具記号が参照する詳細図のうちカタログに実在するもの {jamb?: entry, head?: entry}。1つも無ければnull。 */
@@ -409,7 +409,7 @@ export function fitDetailLocalMemo(args) {
     // 取り付け先で基準の割当てが違う: 呼び出し側指定（部屋の取り合い）／姿図（幅・高さ・窓台高さ）／三方枠（壁厚・出幅・見付）。
     const t = typeof targetsOf === 'function'
       ? targetsOf(entry, dims)
-      : slot === DetailSlot.FIGURE ? detailElevationTargets(entry, dims) : detailFrameTargets(entry, dims);
+      : slot === DetailSlot.FIGURE || slot === DetailSlot.FIGURE_BACK ? detailElevationTargets(entry, dims) : detailFrameTargets(entry, dims);
     result = t.error ? t : fitLocal(entry, t.targets);
   }
   if (typeof targetsOf === 'function' && result.error?.code === DetailFitError.UNRESOLVED_MATERIAL) return result;

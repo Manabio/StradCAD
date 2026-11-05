@@ -25,6 +25,7 @@ const SLOT_ORDER = Object.freeze({
   [DetailSlot.HEAD]: [DetailSlot.HEAD, DetailSlot.JAMB],
   [DetailSlot.SILL]: [DetailSlot.SILL],
   [DetailSlot.FIGURE]: [DetailSlot.FIGURE],
+  [DetailSlot.FIGURE_BACK]: [DetailSlot.FIGURE_BACK], // 向こう側から見た姿図。他の slot を流用しない（FIGURE への落ち先は resolveDetailElevation が決める）
 });
 
 const refOf = (refs, slot) => {
@@ -46,7 +47,7 @@ const refOf = (refs, slot) => {
  *   （intended の図が無いとき、後ろの候補の図を流用する）。drawn が null＝参照はあるが図が1つも実在しない。
  */
 export function resolveDetailFigure({ symbolKey, detailRefs = null, slot, subTypeRefs = null }) {
-  const isFigure = slot === DetailSlot.FIGURE;
+  const isFigure = slot === DetailSlot.FIGURE || slot === DetailSlot.FIGURE_BACK;
   const baseSource = isFigure ? 'subType' : 'symbol';
   const baseRefs = isFigure ? subTypeRefs : detailFigureRefsFor(symbolKey);
   const candidates = [];
@@ -194,16 +195,21 @@ const ELEVATION_ROLE_BY_WEIGHT_ROLE = Object.freeze({
  * 写像済みのストローク（placeDetailElevation の結果）を姿図のプリミティブにする。実線＝polyline・破線＝線分ごとの line
  * （展開図の Konva は polyline の dash を描かず、閉じた polyline は塗るため、閉じ辺は始点を末尾に足した開いた折れ線で表す）。
  * 全プリミティブに source:'detail' を付ける（立面が kind を上書きするので kind は使わない）。型は line／polyline だけ。
+ * 開き勝手線（dashRole=SWING）は towardViewer が false（向こうへ開く）のときだけ一点鎖線、true（手前）・null（見る側が不明）は実線。
  */
-function detailStrokesToElevationPrimitives(strokes) {
+function detailStrokesToElevationPrimitives(strokes, { towardViewer = null } = {}) {
   const out = [];
   for (const st of strokes) {
     const pts = st.closed && st.points.length > 1 ? [...st.points, st.points[0]] : st.points;
     if (pts.length < 2) continue;
     const weight = weightForRole(ELEVATION_ROLE_BY_WEIGHT_ROLE[st.line?.weightRole] ?? ElevationLineRole.DETAIL);
-    if (st.line?.dashRole === DetailDash.DASHED) {
+    const dashRole = st.line?.dashRole;
+    const dash = dashRole === DetailDash.DASHED ? ElevationDash.DASHED
+      : dashRole === DetailDash.SWING && towardViewer === false ? ElevationDash.CENTER
+        : undefined;
+    if (dash !== undefined) {
       for (let i = 1; i < pts.length; i += 1) {
-        out.push(line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], { weight, dash: ElevationDash.DASHED, source: DETAIL_PRIM_SOURCE }));
+        out.push(line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], { weight, dash, source: DETAIL_PRIM_SOURCE }));
       }
     } else {
       out.push(polyline(pts, { weight, source: DETAIL_PRIM_SOURCE }));
@@ -216,19 +222,33 @@ function detailStrokesToElevationPrimitives(strokes) {
  * 建具の姿図（正面図）の詳細図を（幅・高さ・窓台高さ）に合わせてプリミティブにする（S6b）。buildOpeningElevation の内部から呼ぶ
  * （展開・立面・建具エディタ・カタログプレビューは buildOpeningElevation を呼ぶだけ）。解決順は
  * 建具個別の opening.detailRefs.figure ＞ 建具種別エントリの detailFigures.figure。
- * @param {{opening:object, entry?:object|null}} p entry＝建具種別エントリ（findCatalogEntry の結果。未保存ドラフトでもよい）
- * @returns {null | {error:{code:string, message:string}} | {primitives: object[]}}
+ * 姿図（slot=figure）は「開く側から見た図」。towardViewer===false（向こうへ開く面から見る）のときだけ向こう側の図
+ * （slot=figureBack。detailRefs ＞ 建具種別）を先に探し、無い・参照切れ・fit できないときは figure へ落ちる（figureBack は任意の上乗せ）。
+ * true／null は figure だけ（figureBack を見ない）。
+ * @param {{opening:object, entry?:object|null, towardViewer?:boolean|null}} p entry＝建具種別エントリ（findCatalogEntry の結果。未保存ドラフトでもよい）
+ * @returns {null | {error:{code:string, message:string}} | {primitives: object[], slot: string}}
  *   null＝参照が無い、または参照先の図が実在しない（従来どおり）。error＝fit できない（従来の姿図へ戻る。通知は init）。
- *   primitives＝壁の座標昇順＝図の x 昇順の正準向き（FL を y=0・上方は負）。
+ *   primitives＝壁の座標昇順＝図の x 昇順の正準向き（FL を y=0・上方は負）。slot＝実際に使った図の slot（figure | figureBack）。
  */
-export function resolveDetailElevation({ opening, entry = null }) {
-  const r = resolveDetailFigure({
-    detailRefs: opening.detailRefs ?? null, slot: DetailSlot.FIGURE,
-    subTypeRefs: subTypeDetailFigureRefsFor(opening.category, opening.subType, entry),
-  });
-  if (!r?.drawn) return null;
+export function resolveDetailElevation({ opening, entry = null, towardViewer = null }) {
+  const subTypeRefs = subTypeDetailFigureRefsFor(opening.category, opening.subType, entry);
+  const detailRefs = opening.detailRefs ?? null;
   const dims = elevationDetailDims(opening);
-  const fitted = fitDetailLocalMemo({ figureKey: r.drawn.key, slot: r.drawn.slot, dims });
-  if (fitted.error) return fitted;
-  return { primitives: detailStrokesToElevationPrimitives(placeDetailElevation(fitted, { sillTop: -dims.sill })) };
+  const placed = (drawn) => {
+    const fitted = fitDetailLocalMemo({ figureKey: drawn.key, slot: drawn.slot, dims });
+    if (fitted.error) return fitted;
+    return {
+      primitives: detailStrokesToElevationPrimitives(placeDetailElevation(fitted, { sillTop: -dims.sill }), { towardViewer }),
+      slot: drawn.slot,
+    };
+  };
+  if (towardViewer === false) {
+    const back = resolveDetailFigure({ detailRefs, slot: DetailSlot.FIGURE_BACK, subTypeRefs });
+    if (back?.drawn) {
+      const result = placed(back.drawn);
+      if (!result.error) return result;
+    }
+  }
+  const r = resolveDetailFigure({ detailRefs, slot: DetailSlot.FIGURE, subTypeRefs });
+  return r?.drawn ? placed(r.drawn) : null;
 }

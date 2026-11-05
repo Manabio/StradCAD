@@ -207,6 +207,16 @@ test('normalizeDetailFigure: 省略可能な項目を欠いた図も検証を通
   assert.equal(validateDetailFigure(f).ok, true);
 });
 
+test('dashRole swing は有効（UNKNOWN_DASH なし・isSupportedDetailFigure true）。未知の swingX は UNKNOWN_DASH で false', () => {
+  const swing = mutated(stretchFigure(), f => { f.strokes[0].line.dashRole = DetailDash.SWING; });
+  assert.equal(DetailDash.SWING, 'swing');
+  assert.deepEqual(validateDetailFigure(swing), { ok: true, errors: [] });
+  assert.equal(isSupportedDetailFigure(swing), true);
+  const bad = mutated(stretchFigure(), f => { f.strokes[0].line.dashRole = 'swingX'; });
+  assertHasCode(bad, E.UNKNOWN_DASH);
+  assert.equal(isSupportedDetailFigure(bad), false);
+});
+
 test('isSupportedDetailFigure: 有効な図は true、非有限・負の mm・未知の role・版違い・型違いは false', () => {
   assert.equal(isSupportedDetailFigure(stretchFigure()), true);
   assert.equal(isSupportedDetailFigure(rectFigure()), true);
@@ -227,7 +237,7 @@ test('列挙: DETAIL_SLOT_TARGETS の全エントリが DETAIL_VIEW_COMBOS に�
   for (const [slot, t] of Object.entries(DETAIL_SLOT_TARGETS)) {
     assert.ok(DETAIL_VIEW_COMBOS.some(c => c.category === t.category && c.view === t.view && c.subject === t.subject), `${slot} が組合せ表に無い`);
   }
-  assert.equal(Object.keys(DETAIL_SLOT_TARGETS).length, 13); // jamb/head/sill/sashSection/nageshi/shikii + figure（S6b）+ floorWall/wallCeiling（S8a）+ kneeTop/dropBottom（S8b-1）+ floorStep（S8b-3）+ ceilingStep（S8b-4a）
+  assert.equal(Object.keys(DETAIL_SLOT_TARGETS).length, 14); // jamb/head/sill/sashSection/nageshi/shikii + figure（S6b）+ figureBack（T2）+ floorWall/wallCeiling（S8a）+ kneeTop/dropBottom（S8b-1）+ floorStep（S8b-3）+ ceilingStep（S8b-4a）
 });
 
 test('列挙: DETAIL_VIEW_COMBOS は 27 組・重複なし・全要素が既知の語彙', () => {
