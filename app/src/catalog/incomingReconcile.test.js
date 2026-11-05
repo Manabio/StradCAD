@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planIncomingReconcile, formatReconcileNotice, applyReconcilePlan } from './incomingReconcile.js';
+import { planIncomingReconcile, formatReconcileNotice, applyReconcilePlan, rewriteDocSymbolDetailFigures } from './incomingReconcile.js';
 import { CatalogKind } from './catalogKinds.js';
 import { setOverlay, clearOverlays, overlayFor, composeCatalog } from './catalogRegistry.js';
 import { applyDocumentCodeNormalization, clearDocumentAliases } from './codeNormalization.js';
@@ -815,4 +815,32 @@ test('旧文書の302000000003（旧名称・旧規格）: name/spec/noteが違�
   assert.deepEqual(plan.adoptDoc[0].diffFields, ['name', 'spec', 'note']);
   assert.equal(plan.adoptDoc[0].notify, false);
   assert.equal(formatReconcileNotice(plan, { kind: CatalogKind.MATERIAL }), null);
+});
+
+// ---- 詳細図エントリ自身の views の読み替え（P2-1）----
+test('rewriteDocSymbolDetailFigures: 同梱(doc)の平面の姿図の views の値が読み替わる。変化の無い図は同一参照・user 層は触らない', () => {
+  const DF = CatalogKind.DETAIL_FIGURE;
+  const base = key => ({ key, label: key, category: 'figure', view: 'plan', strokes: [] });
+  const withViews = { ...base('df-A'), views: { front: 'df-B', right: 'df-C', ceiling: 'df-B' } };
+  const unrelated = { ...base('df-U'), views: { front: 'df-X' } };
+  const noViews = base('df-N');
+  const userEntry = { ...base('df-UU'), views: { front: 'df-B' } };
+  setOverlay(DF, { doc: [withViews, unrelated, noViews], user: [userEntry] });
+  rewriteDocSymbolDetailFigures([{ from: 'df-B', to: 'df-Z' }]);
+  const { doc, user } = overlayFor(DF);
+  assert.deepEqual(doc[0].views, { front: 'df-Z', right: 'df-C', ceiling: 'df-Z' });
+  assert.equal(doc[1], unrelated);
+  assert.equal(doc[2], noViews);
+  assert.equal(user[0], userEntry);
+  assert.deepEqual(withViews.views, { front: 'df-B', right: 'df-C', ceiling: 'df-B' }, '元のエントリは書き換えない');
+});
+
+test('rewriteDocSymbolDetailFigures 失敗系: views が null・配列・非文字列の値でも落ちず、当たらない読み替えは overlay を差し替えない', () => {
+  const DF = CatalogKind.DETAIL_FIGURE;
+  const base = key => ({ key, label: key, category: 'figure', view: 'plan', strokes: [] });
+  const doc = [{ ...base('a'), views: null }, { ...base('b'), views: ['df-B'] }, { ...base('c'), views: { front: 5, back: '' } }];
+  setOverlay(DF, { doc, user: [] });
+  rewriteDocSymbolDetailFigures([{ from: 'df-B', to: 'df-Z' }]);
+  assert.deepEqual(overlayFor(DF).doc, doc);
+  assert.equal(overlayFor(DF).doc[0], doc[0]);
 });

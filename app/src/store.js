@@ -794,6 +794,7 @@ async function saveCatalogDocument(floorRecords) {
     // material 束縛が指す材を、次の reexpandTransitiveMaterials に拾わせるため）。
     const { bundle: figuresReexpanded, unresolvedDetailFigureKeys } = reexpandTransitiveDetailFigures(
       finalBundle, resolvedByKind.get(CatalogKind.DETAIL_FIGURE),
+      { viewOrigins: unresolvedKeys.get(CatalogKind.DETAIL_FIGURE) },
     );
     finalBundle = figuresReexpanded;
     if (unresolvedDetailFigureKeys.size > 0) {

@@ -18,9 +18,10 @@ import {
   DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY, SWING_LEAF_SUBTYPE, OpeningCategory,
   DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
   DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
+  DETAIL_VIEWS_FIELD,
 } from '../core/constants.js';
 import { parseBaseboardHeightMm } from '../core/baseboardHeight.js';
-import { moveParts } from '../detail/detailModel.js';
+import { moveParts, canHaveDetailViews } from '../detail/detailModel.js';
 
 // 読み込んだ外部ファイル（DXF・PDF）由来の出所。文書に同梱しない対象（R10）。
 export const IMPORTED_SOURCES = Object.freeze([DetailProvenanceSource.DXF, DetailProvenanceSource.PDF]);
@@ -156,6 +157,18 @@ function detailFigureKeysOfEntry(entry) {
 }
 
 /**
+ * 平面の姿図（FIGURE・PLAN・PLACED_FIGURE_SUBJECTS）の views の値（空でない文字列）。それ以外の図・views の無い図・壊れた views は空。
+ * @param {object|null|undefined} figure
+ * @returns {string[]}
+ */
+function placedFigureViewKeys(figure) {
+  if (!canHaveDetailViews(figure)) return [];
+  const views = figure[DETAIL_VIEWS_FIELD];
+  if (views === null || typeof views !== 'object' || Array.isArray(views)) return [];
+  return Object.values(views).filter(v => typeof v === 'string' && v.length > 0);
+}
+
+/**
  * 詳細図の全 LenSpec（Move の len／V の dx・dy）のうち mode が material のものが指す材コード
  * （12桁数字として正しいものだけ）。壊れた図（strokes が配列でない・未知の dir）でも例外にしない。
  * @param {object|null|undefined} figure
@@ -247,7 +260,7 @@ export function expandUsedMaterialsTransitively(usedKeysByKind, resolvedByKind) 
  * （詳細図の material 束縛が増やす材を、後段の材の推移展開が取りこぼさないため）。
  * (a) 使用中の建具記号・建具種別（三層合成後）の detailFigures の値 → 詳細図キー
  * (b) 使用中の詳細図の material 束縛 LenSpec の code → 材コード（material が収集対象のときだけ）
- * 詳細図から別の詳細図へは辿らない。usedKeysByKind が DETAIL_FIGURE を含まなければそのまま返す
+ * 詳細図から別の詳細図へは辿らない（例外＝平面の姿図の views の値は 1 段だけ辿る）。usedKeysByKind が DETAIL_FIGURE を含まなければそのまま返す
  * （expandUsedMaterialsTransitively と同じ）。非破壊（新しい Map を返す）。
  * @param {Map<string, Set<string>>} usedKeysByKind
  * @param {Map<string, Map<string, object>>} resolvedByKind
@@ -264,6 +277,14 @@ export function expandUsedDetailFiguresTransitively(usedKeysByKind, resolvedByKi
   for (const subTypeKey of usedKeysByKind.get(CatalogKind.OPENING_SUB_TYPE) ?? []) {
     const subType = resolvedByKind.get(CatalogKind.OPENING_SUB_TYPE)?.get(subTypeKey);
     for (const figureKey of detailFigureKeysOfEntry(subType)) figureKeys.add(figureKey);
+  }
+  // 例外: 平面の姿図の views の値は 1 段だけ辿る（ここまでに集めた図だけが起点。views の先の図はさらに辿らない）。
+  // 実在しないキーは足さない（参照切れは無視）。
+  const figuresResolved = resolvedByKind.get(CatalogKind.DETAIL_FIGURE);
+  for (const figureKey of [...figureKeys]) {
+    for (const viewKey of placedFigureViewKeys(figuresResolved?.get(figureKey))) {
+      if (figuresResolved.has(viewKey)) figureKeys.add(viewKey);
+    }
   }
   // 同梱（excludeImported）のときだけ、外部ファイル（DXF・PDF）由来の図を対象から外す（R10。割当てのキーは文書に残り、
   // 図を持たない環境では既定の描きに戻る。材の推移展開にも載せない）。使用中の判定（削除確認・使用中バッジ）では外さない。
@@ -387,9 +408,11 @@ export function recoverUnresolvedEntries(bundle, unresolvedKeys, existingBundles
  * この関数の後に reexpandTransitiveMaterials を呼ぶこと（追記された詳細図の材を展開させるため）。
  * @param {object} bundle
  * @param {Map<string, object>|undefined} detailFigureMap 詳細図の解決済み Map（省略時は全て未解決扱い）
+ * @param {{ viewOrigins?: Iterable<string> }} [options] viewOrigins＝回収した詳細図キーのうち、PlacedFigure が直接使う姿図
+ *   （建具記号・種別の割当て由来でない起点）。その views の先も 1 段だけ足す。束の全図は起点にしない。
  * @returns {{ bundle: object, unresolvedDetailFigureKeys: Set<string> }}
  */
-export function reexpandTransitiveDetailFigures(bundle, detailFigureMap) {
+export function reexpandTransitiveDetailFigures(bundle, detailFigureMap, { viewOrigins = [] } = {}) {
   const figureDef = kindDef(CatalogKind.DETAIL_FIGURE);
   const existingFigures = bundleEntries(bundle, CatalogKind.DETAIL_FIGURE);
   const existingKeys = new Set(existingFigures.map(e => figureDef.keyOf(e)));
@@ -400,6 +423,17 @@ export function reexpandTransitiveDetailFigures(bundle, detailFigureMap) {
       for (const figureKey of detailFigureKeysOfEntry(entry)) wanted.add(figureKey);
     }
   }
+
+  // 平面の姿図の views の値は 1 段だけ足す（起点は上の割当て由来の図。views の先はさらに辿らない・参照切れは無視）。
+  // 起点の図は束にあればそれ、無ければ detailFigureMap から引く。
+  const lookup = key => existingFigures.find(e => figureDef.keyOf(e) === key) ?? detailFigureMap?.get(key);
+  const viewKeys = new Set();
+  for (const key of [...wanted, ...viewOrigins]) {
+    for (const viewKey of placedFigureViewKeys(lookup(key))) {
+      if (!wanted.has(viewKey) && (existingKeys.has(viewKey) || detailFigureMap?.has(viewKey))) viewKeys.add(viewKey);
+    }
+  }
+  for (const viewKey of viewKeys) wanted.add(viewKey);
 
   const newEntries = [];
   const unresolvedDetailFigureKeys = new Set();

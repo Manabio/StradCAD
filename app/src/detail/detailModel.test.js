@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import {
   PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumRole, DetailDatumKind, DetailAxis, DetailDash,
   DETAIL_VIEW_COMBOS, DETAIL_SLOT_TARGETS, LINE_WEIGHT_MM, DETAIL_DEFAULT_WEIGHT_ROLE,
+  DetailPlacementView, PLACED_FIGURE_SUBJECTS, CEILING_PLACED_FIGURE_SUBJECTS,
 } from '../core/constants.js';
 import {
   validateDetailFigure, normalizeDetailFigure, isSupportedDetailFigure, moveParts, DetailValidationError as E,
 } from './detailModel.js';
+import { fitDetailFigure, DetailFitError } from './detailFit.js';
 import {
   stretchFigure, rectFigure, figureOf, strokeOf, move, fixedLen, stretchLen, paramLen, materialLen, anchorOf, datumOf, DS0, DT0, vmove,
 } from './detailTestFixtures.js';
@@ -256,4 +258,67 @@ test('列挙: 件数と既定の線の太さ', () => {
   assert.equal(Object.keys(DetailDatumRole).length, 16);
   assert.ok(Object.hasOwn(LINE_WEIGHT_MM, DETAIL_DEFAULT_WEIGHT_ROLE));
   assert.equal(Object.keys(DetailLenMode).length, 4);
+  assert.deepEqual(Object.values(DetailPlacementView), ['front', 'back', 'left', 'right', 'ceiling']);
+  assert.deepEqual([...PLACED_FIGURE_SUBJECTS], [DetailSubject.SANITARY, DetailSubject.FURNITURE, DetailSubject.HVAC]);
+  assert.deepEqual([...CEILING_PLACED_FIGURE_SUBJECTS], [DetailSubject.HVAC]);
+  for (const s of PLACED_FIGURE_SUBJECTS) {
+    assert.ok(DETAIL_VIEW_COMBOS.some(c => c.category === DetailCategory.FIGURE && c.view === DetailView.PLAN && c.subject === s), `平面の姿図の組合せ表に ${s} が無い`);
+  }
+});
+
+// ---- views（平面の姿図の束。P2-1）----
+const placedFigure = over => figureOf(
+  [strokeOf('a', [move(PenDir.RIGHT, fixedLen(20)), move(PenDir.DOWN, fixedLen(30))])],
+  { key: 'df-plan', category: DetailCategory.FIGURE, view: DetailView.PLAN, subject: DetailSubject.SANITARY, ...over },
+);
+
+test('views: 5 キー全部・一部・空 {} は有効。views 無しも従来どおり', () => {
+  assert.deepEqual(validateDetailFigure(placedFigure()), { ok: true, errors: [] });
+  assert.deepEqual(validateDetailFigure(placedFigure({ views: undefined })), { ok: true, errors: [] });
+  assert.deepEqual(validateDetailFigure(placedFigure({ views: {} })), { ok: true, errors: [] });
+  assert.deepEqual(validateDetailFigure(placedFigure({ views: { front: 'df-f' } })), { ok: true, errors: [] });
+  const all = { front: 'df-f', back: 'df-b', left: 'df-l', right: 'df-r', ceiling: 'df-c' };
+  assert.deepEqual(validateDetailFigure(placedFigure({ views: all })), { ok: true, errors: [] });
+  for (const subject of [DetailSubject.FURNITURE, DetailSubject.HVAC]) {
+    assert.equal(validateDetailFigure(placedFigure({ subject, views: all })).ok, true);
+  }
+});
+
+test('views 失敗系: 未知キー・空文字/非文字列の値・配列・自己参照は BAD_VIEWS', () => {
+  for (const bad of [{ up: 'df-x' }, { front: '' }, { front: 5 }, { front: null }, { front: ['df-x'] }, ['df-x'], 'df-x', { back: 'df-plan' }]) {
+    assertHasCode(placedFigure({ views: bad }), E.BAD_VIEWS);
+  }
+});
+
+test('views: null は省略と同値（BAD_VIEWS なし・isSupported true）。持てない分類でも null は有効。{} は持てない分類では BAD_VIEWS のまま', () => {
+  assert.deepEqual(validateDetailFigure(placedFigure({ views: null })), { ok: true, errors: [] });
+  assert.equal(isSupportedDetailFigure(placedFigure({ views: null })), true);
+  assert.deepEqual(validateDetailFigure(placedFigure({ views: null, view: DetailView.ELEVATION })), { ok: true, errors: [] });
+  assertHasCode(placedFigure({ views: {}, view: DetailView.ELEVATION }), E.BAD_VIEWS);
+});
+
+test('views: BAD_VIEWS の図（自己参照の views を持つ平面の姿図）は fitDetailFigure が INVALID（壊れた束は描かれない）', () => {
+  const fit = fitDetailFigure(placedFigure({ views: { front: 'df-plan' } }), { datums: {} });
+  assert.equal(fit.error.code, DetailFitError.INVALID);
+});
+
+test('views 失敗系: 持てない分類（立面の姿図・部品・建具の姿図・枠）に views があれば BAD_VIEWS', () => {
+  const v = { views: { front: 'df-f' } };
+  assertHasCode(placedFigure({ ...v, view: DetailView.ELEVATION }), E.BAD_VIEWS);
+  assertHasCode(placedFigure({ ...v, subject: DetailSubject.OPENING }), E.BAD_VIEWS);
+  assertHasCode({ ...rectFigure(), ...v }, E.BAD_VIEWS);
+  assertHasCode({ ...rectFigure(), category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.WALL, ...v }, E.BAD_VIEWS);
+  assert.deepEqual(codes(placedFigure({ ...v, view: DetailView.ELEVATION })), [E.BAD_VIEWS], 'ほかの誤りは出ない');
+});
+
+test('views が壊れていても図自体は読める（R4）。normalize は views のキーを足さず、JSON 往復で残る', () => {
+  assert.equal(isSupportedDetailFigure(placedFigure({ views: { up: '', front: 5 } })), true);
+  assert.equal(isSupportedDetailFigure({ ...rectFigure(), views: { front: 'df-f' } }), true);
+  assert.equal(Object.hasOwn(normalizeDetailFigure(placedFigure()), 'views'), false);
+  assert.equal(Object.hasOwn(normalizeDetailFigure(placedFigure({ views: undefined })), 'views'), true, '明示 undefined は素通し（足すのではなく元のまま）');
+  const f = placedFigure({ views: { front: 'df-f', ceiling: 'df-c' } });
+  assert.deepEqual(normalizeDetailFigure(f).views, f.views);
+  const back = JSON.parse(JSON.stringify(f));
+  assert.deepEqual(back.views, { front: 'df-f', ceiling: 'df-c' });
+  assert.deepEqual(validateDetailFigure(back), { ok: true, errors: [] });
 });

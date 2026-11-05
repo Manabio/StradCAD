@@ -14,7 +14,7 @@ import { CatalogKind, kindDef, KIND_LABELS } from './catalogKinds.js';
 import { classifyIncoming, assertNoDuplicate, displayNameOf } from './catalogMatch.js';
 import { addDocumentAliases, SNAPSHOT_REF_WALKERS } from './codeNormalization.js';
 import { overlayFor, removeDocEntry, setOverlay } from './catalogRegistry.js';
-import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
+import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DETAIL_VIEWS_FIELD } from '../core/constants.js';
 
 /**
  * 文書同梱（docEntries）を appEntries（user+builtin。docは含まない）と照合し、
@@ -136,6 +136,23 @@ export function formatReconcileNotice(plan, { kind, addedCount = 0, skippedCount
 }
 
 /**
+ * { 名前: キー } の値を table（from→to）で読み替える。変化なし・オブジェクトでない場合は同一参照を返す。
+ * @param {object|null|undefined} obj
+ * @param {Map<string,string>} table
+ */
+function rewriteValues(obj, table) {
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+  let changed = false;
+  const next = {};
+  for (const [name, key] of Object.entries(obj)) {
+    const to = typeof key === 'string' ? table.get(key) : undefined;
+    next[name] = to ?? key;
+    if (to !== undefined) changed = true;
+  }
+  return changed ? next : obj;
+}
+
+/**
  * 部分詳細図の読み替え（from→to）を、同梱（overlay の doc 層）の建具記号・建具種別エントリの detailFigures の値へ反映する
  * （カタログ→カタログの参照。スナップショットの openings[].detailRefs は walker の rewrite が受け持つ）。
  * ライブラリ層（user）の記号は触らない。書き換えがあれば doc を差し替える（無ければ overlay に触れない）。
@@ -150,19 +167,25 @@ export function rewriteDocSymbolDetailFigures(pairs) {
     let changedAny = false;
     const nextDoc = doc.map(entry => {
       const refs = entry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD];
-      if (refs === null || typeof refs !== 'object' || Array.isArray(refs)) return entry;
-      let changed = false;
-      const nextRefs = {};
-      for (const [slot, key] of Object.entries(refs)) {
-        const to = typeof key === 'string' ? table.get(key) : undefined;
-        nextRefs[slot] = to ?? key;
-        if (to !== undefined) changed = true;
-      }
-      if (!changed) return entry;
+      const nextRefs = rewriteValues(refs, table);
+      if (nextRefs === refs) return entry;
       changedAny = true;
       return { ...entry, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: nextRefs };
     });
     if (changedAny) setOverlay(kind, { doc: nextDoc, user });
+  }
+  // 詳細図エントリ自身の views の値（平面の姿図が束ねる別の図）も同じ層（doc）で読み替える
+  {
+    const { doc, user } = overlayFor(CatalogKind.DETAIL_FIGURE);
+    let changedAny = false;
+    const nextDoc = doc.map(entry => {
+      const views = entry?.[DETAIL_VIEWS_FIELD];
+      const nextViews = rewriteValues(views, table);
+      if (nextViews === views) return entry;
+      changedAny = true;
+      return { ...entry, [DETAIL_VIEWS_FIELD]: nextViews };
+    });
+    if (changedAny) setOverlay(CatalogKind.DETAIL_FIGURE, { doc: nextDoc, user });
   }
 }
 

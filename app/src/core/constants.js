@@ -599,6 +599,18 @@ export const KneeDropFrontSide = Object.freeze({
   ROOM_POS: 'roomPos',
 });
 export const KNEE_DROP_FRONT_SIDE_DEFAULT = KneeDropFrontSide.ROOM_NEG;
+/** 平面の姿図（配置する図）が束ねる、別の向きの図の呼び名（views のキー）。front〜right は立面側、ceiling は見上げ。 */
+export const DetailPlacementView = Object.freeze({
+  FRONT:   'front',
+  BACK:    'back',
+  LEFT:    'left',
+  RIGHT:   'right',
+  CEILING: 'ceiling',
+});
+/** 平面に配置できる姿図の主題（views を持てる平面の姿図の subject）。 */
+export const PLACED_FIGURE_SUBJECTS = Object.freeze([DetailSubject.SANITARY, DetailSubject.FURNITURE, DetailSubject.HVAC]);
+/** PLACED_FIGURE_SUBJECTS のうち、天井側（見上げ）にも現れる主題。 */
+export const CEILING_PLACED_FIGURE_SUBJECTS = Object.freeze([DetailSubject.HVAC]);
 /** 有効な (category, view, subject) の組合せ表。検証（detail/detailModel.js）と割当て先の絞り込みが引く。 */
 export const DETAIL_VIEW_COMBOS = Object.freeze([
   ...[DetailView.PLAN, DetailView.SECTION].flatMap(view =>
@@ -699,6 +711,8 @@ export const DetailDash = Object.freeze({
 export const DETAIL_FIGURE_VERSION = 1;
 /** 建具記号エントリの任意項目名。{ [DetailSlot.JAMB]?: 詳細図キー, [DetailSlot.HEAD]?: 詳細図キー }（R4）。カタログ登録表と推移展開が使う。 */
 export const FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD = 'detailFigures';
+/** 平面の姿図が別の向きの図を束ねる任意項目名（views）。カタログ層が読み替え・推移展開・照合で引く。 */
+export const DETAIL_VIEWS_FIELD = 'views';
 /** 詳細図キーの接頭辞（S4 の生成が使う。S2 の登録表は書式を検査しない）。 */
 export const DETAIL_FIGURE_KEY_PREFIX = 'df-';
 /** 詳細図由来のプリミティブに付ける出どころの印（source。kind は立面が上書きするので使わない）。 */

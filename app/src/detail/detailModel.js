@@ -11,6 +11,8 @@
 //   Datum  = { id, role, axis, kind, offsetMm }   Anchor = { datumId, strokeId, vertexIndex, offsetMm? }
 //   Anchor.offsetMm は「頂点の位置＝基準の目標＋Datum.offsetMm＋Anchor.offsetMm」の第 3 項（既定 0。位置関係を保って写すため）。
 //   normalize は offsetMm のキーを足さない（持たない図のバイト・比較を変えない）。
+//   views（任意）= { front?, back?, left?, right?, ceiling? }（値＝別の詳細図キー）。平面の姿図（FIGURE・PLAN・PLACED_FIGURE_SUBJECTS）だけが持てる。
+//   ここでは形だけ検証する（実在・分類の一致はカタログ層）。normalize は views のキーを足さない。
 // closed の規約: 閉じ辺は描画側が補う。始点へ戻る手は書かない（mm で歩いた終点が始点に一致する closed は CLOSED_RETURNS_TO_START）。
 // 既知の限界: CLOSED_RETURNS_TO_START は LenSpec.mm（プレビュー値）で判定する。param・material・stretch の closed は
 // fit で解決した値では閉じ辺が 0 になる（またはならない）ことがあり、登録時には検出しない。
@@ -20,6 +22,7 @@
 import {
   PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumKind, DetailAxis,
   DetailDatumRole, DetailParam, DetailMaterialField, DetailDash, DetailEdgeMark, DETAIL_VIEW_COMBOS,
+  DetailPlacementView, PLACED_FIGURE_SUBJECTS, DETAIL_VIEWS_FIELD,
   DETAIL_FIGURE_VERSION, LINE_WEIGHT_MM, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_FIT_EPS_MM,
 } from '../core/constants.js';
 
@@ -62,8 +65,14 @@ export const DetailValidationError = Object.freeze({
   STRETCH_COUNT:           'stretchCount',         // end の Anchor を持つストロークの stretch が軸ごとに 1 本でない
   STRETCH_WITHOUT_END:     'stretchWithoutEnd',    // stretch があるのに end の Anchor が無い
   STRETCH_OUT_OF_SPAN:     'stretchOutOfSpan',     // stretch の手が origin〜end の頂点の間に無い
+  BAD_VIEWS:               'badViews',             // views の形・キー・値が不正、または views を持てない分類（読める図なので SUPPORT_BLOCKING には入れない）
 });
 const E = DetailValidationError;
+
+/** views を持てる分類か（平面の姿図＝FIGURE・PLAN・PLACED_FIGURE_SUBJECTS）。 */
+export function canHaveDetailViews(fig) {
+  return fig?.category === DetailCategory.FIGURE && fig.view === DetailView.PLAN && PLACED_FIGURE_SUBJECTS.includes(fig.subject);
+}
 
 const AXES = Object.freeze([DetailAxis.S, DetailAxis.T]);
 const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -175,6 +184,21 @@ export function validateDetailFigure(input) {
   if (!subOk) push(E.UNKNOWN_SUBJECT, `未知の subject: ${String(fig.subject)}`, 'subject');
   if (catOk && viewOk && subOk && !DETAIL_VIEW_COMBOS.some(c => c.category === fig.category && c.view === fig.view && c.subject === fig.subject)) {
     push(E.BAD_COMBO, `組合せ表に無い (${fig.category}, ${fig.view}, ${fig.subject})`, 'category');
+  }
+
+  // ---- views（平面の姿図だけが持てる。壊れていても図自体は読める＝SUPPORT_BLOCKING に入れない）----
+  const views = fig[DETAIL_VIEWS_FIELD];
+  // null は省略と同値（リポジトリの規約）
+  if (views != null) {
+    if (!canHaveDetailViews(fig)) push(E.BAD_VIEWS, `views を持てない分類 (${String(fig.category)}, ${String(fig.view)}, ${String(fig.subject)})`, DETAIL_VIEWS_FIELD);
+    if (!isObj(views)) push(E.BAD_VIEWS, 'views がオブジェクトでない', DETAIL_VIEWS_FIELD);
+    else {
+      for (const [name, value] of Object.entries(views)) {
+        if (!isEnum(DetailPlacementView, name)) push(E.BAD_VIEWS, `未知の views のキー: ${name}`, `${DETAIL_VIEWS_FIELD}.${name}`);
+        else if (!isNonEmptyString(value)) push(E.BAD_VIEWS, `views の値が非空文字列でない: ${String(value)}`, `${DETAIL_VIEWS_FIELD}.${name}`);
+        else if (value === fig.key) push(E.BAD_VIEWS, `views が自分自身を指している: ${name}`, `${DETAIL_VIEWS_FIELD}.${name}`);
+      }
+    }
   }
 
   // ---- ストローク ----

@@ -89,6 +89,16 @@ test('【失敗系・2026-09-22 QA指摘A】material/section/interiorMaster/boun
   assert.throws(() => kindDef('boundaryMaster').keyOf({}), /keyが不正/);
 });
 
+test('detailFigure: views だけが違う 2 図は取り込み照合（diffEntries）で差分になる。compare だけで dedupe には入れない（建具記号の detailFigures と同じ）', async () => {
+  const { diffEntries } = await import('./catalogMatch.js');
+  const def = kindDef(CatalogKind.DETAIL_FIGURE);
+  const base = { key: 'A', label: 'a', category: 'figure', view: 'plan', strokes: [] };
+  assert.ok(def.compareFields.includes('views'));
+  assert.ok(!def.dedupeFields.includes('views'));
+  assert.deepEqual(diffEntries(CatalogKind.DETAIL_FIGURE, { ...base, views: { front: 'B' } }, { ...base, views: { front: 'C' } }), ['views']);
+  assert.deepEqual(diffEntries(CatalogKind.DETAIL_FIGURE, { ...base, views: { front: 'B' } }, { ...base, views: { front: 'B' } }), []);
+});
+
 // ---- QA指摘M1: openingSubTypeのmatchFields順・B2: boundaryMasterのcompareFields/matchFields ----
 test('openingSubType.matchFields: category,mechanism,機構パラメータ,wallKinds,defaultWidth,defaultHeight,labelの順（末尾から外す）', () => {
   assert.deepEqual(kindDef('openingSubType').matchFields, [

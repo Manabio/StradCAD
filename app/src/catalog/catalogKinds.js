@@ -20,7 +20,7 @@
 // 増えていないかで都度確認すること。
 // ================================================================
 
-import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
+import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DETAIL_VIEWS_FIELD } from '../core/constants.js';
 import { isSupportedDetailFigure } from '../detail/detailModel.js';
 
 function isPlainObject(v) {
@@ -608,11 +608,12 @@ const REGISTRY = Object.assign(Object.create(null), {
       return { key };
     },
     encoding: 'json',
-    knownFields: ['key', 'version', 'label', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note'],
+    knownFields: ['key', 'version', 'label', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', DETAIL_VIEWS_FIELD],
     requiredFields: ['key', 'label', 'category', 'view', 'strokes'],
     keyBoundFields: ['key'],
     overrideLockedFields: [],
-    compareFields: ['version', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note'],
+    // views（平面の姿図が束ねる別の図）は入れ子のため厳密比較。建具記号の detailFigures と同じく compare だけ（dedupe には入れない）。
+    compareFields: ['version', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', DETAIL_VIEWS_FIELD],
     silentDiffFields: ['label'],
     // strokes を先頭に置く: 末尾から外す段階的探索でも strokes は最後まで残る（線が違う図を
     // 呼称・分類だけで「同じもの」と見なさない）。入れ子は厳密比較（規約）。

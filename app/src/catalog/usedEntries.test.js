@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import {
   collectUsedMaterialCodes, collectUsedKeys, collectUsedKeysByKind, expandTransitiveMaterials,
   buildDocumentBundle, recoverUnresolvedEntries, reexpandTransitiveMaterials, stripOverridesBuiltin,
-  expandUsedMaterialsTransitively,
+  expandUsedMaterialsTransitively, expandUsedDetailFiguresTransitively, reexpandTransitiveDetailFigures,
 } from './usedEntries.js';
-import { emptyBundle, withEntries } from './catalogBundle.js';
+import { emptyBundle, withEntries, bundleEntries } from './catalogBundle.js';
 import { CatalogKind } from './catalogKinds.js';
 import { SNAPSHOT_REF_WALKERS } from './codeNormalization.js';
 import {
   DETAIL_BUILTIN_BASEBOARD_KEY, DETAIL_BUILTIN_KNEE_CAP_KEY, DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY, SWING_LEAF_SUBTYPE,
   DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
   DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
+  DetailCategory, DetailView, DetailSubject, DetailProvenanceSource,
 } from '../core/constants.js';
 
 function baseSnapshot(overrides) {
@@ -669,3 +670,95 @@ test('collectUsedKeys: 暗黙の組込みキーは明示の detailRefs と併存
   assert.deepEqual([...collectUsedKeys(snap).detailFigure].sort(), [DETAIL_BUILTIN_BASEBOARD_KEY, 'df-x'].sort());
   assert.deepEqual(SNAPSHOT_REF_WALKERS.detailFigure.enumerate(snap).map(r => r.code), ['df-x']);
 });
+
+// ---- 平面の姿図の views の推移展開（P2-1。1 段だけ）----
+{
+  const DF = CatalogKind.DETAIL_FIGURE;
+  const planFig = (key, subject, views, provenance = null) => ({
+    key, category: DetailCategory.FIGURE, view: DetailView.PLAN, subject, strokes: [], provenance, ...(views ? { views } : {}),
+  });
+  const elevFig = (key, views) => ({
+    key, category: DetailCategory.FIGURE, view: DetailView.ELEVATION, subject: DetailSubject.SANITARY, strokes: [], provenance: null, ...(views ? { views } : {}),
+  });
+  const resolvedOf = figs => new Map([[DF, new Map(figs.map(f => [f.key, f]))]]);
+  const usedOf = keys => new Map([[DF, new Set(keys)]]);
+
+  test('views: 使用中の平面の姿図 A の views(front=B・right=C) の先 B・C が同梱に入り、B がさらに持つ views の先 D は入らない（1 段だけ）', () => {
+    const resolved = resolvedOf([
+      planFig('A', DetailSubject.SANITARY, { front: 'B', right: 'C' }),
+      elevFig('B', { front: 'D' }), elevFig('C'), elevFig('D'),
+    ]);
+    const used = expandUsedDetailFiguresTransitively(usedOf(['A']), resolved);
+    assert.deepEqual([...used.get(DF)].sort(), ['A', 'B', 'C']);
+  });
+
+  test('views: B が平面の姿図で views を持っていても 2 段目は辿らない', () => {
+    const resolved = resolvedOf([
+      planFig('A', DetailSubject.FURNITURE, { left: 'B' }),
+      planFig('B', DetailSubject.FURNITURE, { ceiling: 'D' }), elevFig('D'),
+    ]);
+    assert.deepEqual([...expandUsedDetailFiguresTransitively(usedOf(['A']), resolved).get(DF)].sort(), ['A', 'B']);
+  });
+
+  test('views: views の無い図・配置できない subject(opening)・立面の図が持つ views は従来どおり辿らない', () => {
+    const resolved = resolvedOf([
+      planFig('A', DetailSubject.HVAC), planFig('O', DetailSubject.OPENING, { front: 'B' }), elevFig('E', { front: 'B' }), elevFig('B'),
+    ]);
+    assert.deepEqual([...expandUsedDetailFiguresTransitively(usedOf(['A', 'O', 'E']), resolved).get(DF)].sort(), ['A', 'E', 'O']);
+  });
+
+  test('views 失敗系: 参照切れの値・壊れた views(null・配列・非文字列)は無視して落ちない。使用中でない図の views は辿らない', () => {
+    const resolved = resolvedOf([
+      planFig('A', DetailSubject.SANITARY, { front: 'df-none', back: 'B' }), elevFig('B'),
+      { ...planFig('N', DetailSubject.SANITARY), views: null }, { ...planFig('R', DetailSubject.SANITARY), views: ['B'] },
+      planFig('X', DetailSubject.SANITARY, { front: 5, left: '' }), planFig('Unused', DetailSubject.SANITARY, { front: 'B2' }), elevFig('B2'),
+    ]);
+    const used = expandUsedDetailFiguresTransitively(usedOf(['A', 'N', 'R', 'X']), resolved);
+    assert.deepEqual([...used.get(DF)].sort(), ['A', 'B', 'N', 'R', 'X']);
+  });
+
+  test('views 回収経路: reexpandTransitiveDetailFigures は回収した平面の姿図 A の views の先 B を足すが、B の views の先 D は辿らない。参照切れは無視', () => {
+    const lib = new Map([
+      ['A', planFig('A', DetailSubject.SANITARY, { front: 'B', back: 'df-none' })],
+      ['B', planFig('B', DetailSubject.SANITARY, { front: 'D' })], ['D', elevFig('D')],
+    ]);
+    const recovered = withEntries(emptyBundle(), CatalogKind.FIXTURE_SYMBOL, [
+      { key: 'WF', label: 'w', category: 'fitting', detailFigures: { figure: 'A' } },
+    ]);
+    const r = reexpandTransitiveDetailFigures(recovered, lib);
+    assert.deepEqual(bundleEntries(r.bundle, DF).map(e => e.key).sort(), ['A', 'B']);
+    assert.equal(r.unresolvedDetailFigureKeys.size, 0);
+  });
+
+  test('views 回収経路(viewOrigins): PlacedFigure が直接使う回収済みの姿図 A(割当て由来でない)の views の先 B が入り、B の views の先 D は入らない。viewOrigins 無しでは入らない', () => {
+    const lib = new Map([
+      ['A', planFig('A', DetailSubject.SANITARY, { front: 'B' })],
+      ['B', planFig('B', DetailSubject.SANITARY, { front: 'D' })], ['D', elevFig('D')],
+    ]);
+    const recovered = withEntries(emptyBundle(), DF, [planFig('A', DetailSubject.SANITARY, { front: 'B' })]);
+    const r = reexpandTransitiveDetailFigures(recovered, lib, { viewOrigins: new Set(['A']) });
+    assert.deepEqual(bundleEntries(r.bundle, DF).map(e => e.key).sort(), ['A', 'B']);
+    assert.equal(r.unresolvedDetailFigureKeys.size, 0);
+    const none = reexpandTransitiveDetailFigures(recovered, lib);
+    assert.deepEqual(bundleEntries(none.bundle, DF).map(e => e.key), ['A'], '起点を渡さなければ束の図は起点にならない');
+  });
+
+  test('views 回収経路(viewOrigins): views の先が DXF 由来なら外し、未解決にも数えない。ライブラリに無い先は未解決として返る', () => {
+    const lib = new Map([
+      ['B', { ...elevFig('B'), provenance: { source: DetailProvenanceSource.DXF } }], ['C', elevFig('C')],
+    ]);
+    const recovered = withEntries(emptyBundle(), DF, [planFig('A', DetailSubject.SANITARY, { front: 'B', back: 'C', left: 'ghost' })]);
+    const r = reexpandTransitiveDetailFigures(recovered, lib, { viewOrigins: ['A'] });
+    assert.deepEqual(bundleEntries(r.bundle, DF).map(e => e.key).sort(), ['A', 'C']);
+    assert.equal(r.unresolvedDetailFigureKeys.size, 0, '参照切れ(ghost)は辿らず、DXF 由来は未解決に数えない');
+  });
+
+  test('views: excludeImported のときは views の先の外部由来(DXF)の図も外す。既定では入る', () => {
+    const resolved = resolvedOf([
+      planFig('A', DetailSubject.SANITARY, { front: 'B', back: 'C' }),
+      { ...elevFig('B'), provenance: { source: DetailProvenanceSource.DXF } }, elevFig('C'),
+    ]);
+    assert.deepEqual([...expandUsedDetailFiguresTransitively(usedOf(['A']), resolved, { excludeImported: true }).get(DF)].sort(), ['A', 'C']);
+    assert.deepEqual([...expandUsedDetailFiguresTransitively(usedOf(['A']), resolved).get(DF)].sort(), ['A', 'B', 'C']);
+  });
+}
