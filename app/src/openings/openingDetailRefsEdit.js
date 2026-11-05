@@ -24,7 +24,10 @@ export const FRAME_DETAIL_REF_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot
 const FRAME_ONLY_DETAIL_REF_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot.HEAD]);
 
 /** select を出す slot（表示順）。姿図（S6b）は全機構の建具に出し、枠の slot は frameDetailSlotsFor が建具ごとに絞る。 */
-export const OPENING_DETAIL_REF_SLOTS = Object.freeze([...FRAME_DETAIL_REF_SLOTS, DetailSlot.FIGURE]);
+export const OPENING_DETAIL_REF_SLOTS = Object.freeze([...FRAME_DETAIL_REF_SLOTS, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK]);
+
+/** 姿図の slot（手前から見た図と向こう側から見た図。基準は建具種別の割当て）。 */
+const isFigureSlot = slot => slot === DetailSlot.FIGURE || slot === DetailSlot.FIGURE_BACK;
 
 /**
  * 方立・上枠・下枠の select を出す slot（建具エディタの絞りの唯一の判断）。三方枠＝方立と上枠、
@@ -58,10 +61,10 @@ function detailFigureEntries() {
  *   value＝建具個別の上書きのキー（未上書きは ''）。options の先頭は未上書き（記号〔姿図は建具種別〕の設定を使う）。
  */
 export function openingDetailRefSelects(opening, figureList = detailFigureEntries(), { frameSlots = FRAME_DETAIL_REF_SLOTS } = {}) {
-  return OPENING_DETAIL_REF_SLOTS.filter(slot => slot === DetailSlot.FIGURE || frameSlots.includes(slot)).map(slot => {
+  return OPENING_DETAIL_REF_SLOTS.filter(slot => isFigureSlot(slot) || frameSlots.includes(slot)).map(slot => {
     const key = opening?.detailRefs?.[slot];
     const value = typeof key === 'string' ? key : '';
-    const useBase = slot === DetailSlot.FIGURE ? OPENING_DETAIL_REF_TEXT.useSubType : OPENING_DETAIL_REF_TEXT.useSymbol;
+    const useBase = isFigureSlot(slot) ? OPENING_DETAIL_REF_TEXT.useSubType : OPENING_DETAIL_REF_TEXT.useSymbol;
     return {
       slot,
       label: FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[slot].label,
@@ -79,7 +82,7 @@ export function openingDetailRefSelects(opening, figureList = detailFigureEntrie
  */
 export function detailRefsAfterSelect(opening, slot, value, mechanism) {
   // 畳む先の既定の参照: 方立・上枠は建具記号の割当て、姿図は建具種別の割当て
-  const baseRefs = slot === DetailSlot.FIGURE
+  const baseRefs = isFigureSlot(slot)
     ? subTypeDetailFigureRefsFor(opening?.category, opening?.subType)
     : detailFigureRefsFor(fixtureSymbolOf(opening));
   // 片開き戸・窓の方立は記号に割当てが無いとき組込みの既定が基準（同キーの選択は既定扱い＝上書きとして持たない。S8d・S8f-2）

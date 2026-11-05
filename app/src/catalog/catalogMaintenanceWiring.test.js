@@ -1921,3 +1921,20 @@ test('【不変条件・部分詳細図S6b】OpeningSubTypeTab: 姿図の select
   assert.equal((body.match(/validateOpeningSubTypeForm\([^)]*detailFigureList/g) ?? []).length, 2, '追加・編集の両方の検証へ detailFigureList を渡していない');
   assert.ok(/const previewEntry = form \? buildOpeningSubTypeEntry\(form\) : null;/.test(body), 'プレビューが未保存フォームのエントリ（detailFigures 込み）を使っていない');
 });
+
+test('【不変条件・部分詳細図T2-2】OpeningSubTypeTab: 姿図（向こう側）の select は detailFigureBack に繋がり、初期フォームは detailFigureBack を持つ', () => {
+  const code = stripComments(readSrc('ui/CatalogMaintenancePanel.jsx'));
+  const body = extractBalancedBody(code, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'OpeningSubTypeTab が見つからない');
+  assert.ok(/detailFigureOptionsFor\(DetailSlot\.FIGURE_BACK, detailFigureList, form\.detailFigureBack\)/.test(body), 'select の選択肢が姿図（向こう側）の絞り込みを通っていない');
+  assert.ok(/value=\{form\.detailFigureBack\}/.test(body) && /detailFigureBack: e\.target\.value/.test(body), 'select がフォーム項目 detailFigureBack に繋がっていない');
+  assert.ok(/FIXTURE_SYMBOL_DETAIL_SLOT_TEXT\[DetailSlot\.FIGURE_BACK\]\.unassigned/.test(body), '未割当ての文言が FIGURE_BACK のものではない');
+  const empty = extractBalancedBody(code, 'function emptyOpeningSubTypeForm(category, key) {');
+  assert.ok(empty && /detailFigureBack: ''/.test(empty), 'emptyOpeningSubTypeForm が detailFigureBack を初期化していない');
+});
+
+test('【不変条件・部分詳細図T2-2】検出力: select を detailFigure に繋ぎ直した文字列は姿図（向こう側）の判定を通らない', () => {
+  const rewired = 'value={form.detailFigure} onChange={e => setForm(f => ({ ...f, detailFigure: e.target.value }))}';
+  assert.ok(!(/value=\{form\.detailFigureBack\}/.test(rewired) && /detailFigureBack: e\.target\.value/.test(rewired)));
+  assert.ok(!/detailFigureOptionsFor\(DetailSlot\.FIGURE_BACK, detailFigureList, form\.detailFigureBack\)/.test('detailFigureOptionsFor(DetailSlot.FIGURE, detailFigureList, form.detailFigure)'));
+});

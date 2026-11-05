@@ -142,6 +142,14 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   layers: 'レイヤ', layersAllOn: '全部 on',
   dxfComponentLabel: n => `成分 ${n}`,
   dxfClosedLabel: '閉', dxfOpenLabel: '開', dxfVertexUnit: '頂点',
+  // ストロークの線の役割（T2-2）
+  lineRole: '線の役割', dashSolid: '実線', dashDashed: '破線', dashSwing: '開き勝手',
+});
+/** ストロークの線の役割（Line.dashRole）の表示名。 */
+export const DETAIL_DASH_LABELS = Object.freeze({
+  [DetailDash.SOLID]:  DETAIL_HELPER_TEXT.dashSolid,
+  [DetailDash.DASHED]: DETAIL_HELPER_TEXT.dashDashed,
+  [DetailDash.SWING]:  DETAIL_HELPER_TEXT.dashSwing,
 });
 
 /** 値が空なら「—」を返す表示用（手の長さ・距離・オフセットのボタン文言）。 */
@@ -615,6 +623,13 @@ export function setClosed(form, strokeId, closed) {
   return { ...form, strokes: form.strokes.map(s => (s.id === strokeId ? { ...s, closed: Boolean(closed) } : s)) };
 }
 
+/** ストロークの線の役割を変える。未知の役割・無い strokeId は form を変えずそのまま返す（setMoveMode と同じ）。line の他の項目は残す。 */
+export function setDashRole(form, strokeId, dashRole) {
+  if (!Object.values(DetailDash).includes(dashRole)) return form;
+  if (!form.strokes.some(s => s.id === strokeId)) return form;
+  return { ...form, strokes: form.strokes.map(s => (s.id === strokeId ? { ...s, line: { ...(s.line ?? defaultLine()), dashRole } } : s)) };
+}
+
 // ================================================================
 // 手の編集（editKey = { strokeId, moveIndex }。プレビューの dim と一覧が共通で持つ）
 // ================================================================
@@ -670,7 +685,7 @@ export function setMoveEdge(form, editKey, mark) {
 /** 命令一覧の行（ストロークごとの見出し付き）。表示用の文字列はここで作る。 */
 export function moveRows(form) {
   return form.strokes.map((s, strokeIndex) => ({
-    strokeId: s.id, strokeIndex, closed: s.closed, vertexCount: s.moves.length + 1,
+    strokeId: s.id, strokeIndex, closed: s.closed, dashRole: s.line?.dashRole ?? DetailDash.SOLID, vertexCount: s.moves.length + 1,
     moves: s.moves.map((m, moveIndex) => ({
       editKey: { strokeId: s.id, moveIndex },
       dir: m.dir, dirLabel: PEN_DIR_LABELS[m.dir] ?? String(m.dir),

@@ -225,6 +225,24 @@ test('【検出力】本体を壊すと判定が落ちる（関門の外で呼�
   assert.ok(!confirmsBeforeClose(panel.replaceAll('guardDiscard(onClose)', 'onClose()'), guard), '閉じる経路の確認を外しても通ってしまう');
 });
 
+// T2-2: ストロークの線の役割 select。選択肢は DETAIL_DASH_LABELS 由来・変更は setDashRole を edit 経由で・読み取り専用は disabled。式の末尾（/>）まで照合する。
+const dashRoleSelectWired = src =>
+  /const DASH_OPTIONS = labelOptions\(DETAIL_DASH_LABELS\);/.test(src)
+  && /<Select value=\{r\.dashRole\} options=\{DASH_OPTIONS\} disabled=\{readOnly\} title=\{DETAIL_HELPER_TEXT\.lineRole\} onChange=\{dashRole => edit\(f => setDashRole\(f, r\.strokeId, dashRole\)\)\} \/>/.test(src);
+
+test('【配線】DetailHelperPanel.jsx(T2-2): ストローク見出しの線の役割 select が setDashRole を edit 経由で呼び、読み取り専用で disabled', () => {
+  assert.ok(dashRoleSelectWired(stripComments(readSrc('ui/DetailHelperPanel.jsx'))));
+});
+
+test('【検出力】線の役割 select の配線を壊すと判定が落ちる（setDashRole を外す・disabled を外す・edit を介さない・選択肢の供給元）', () => {
+  const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
+  assert.ok(!dashRoleSelectWired(src.replace('setDashRole(f, r.strokeId, dashRole)', 'setClosed(f, r.strokeId, dashRole)')));
+  assert.ok(!dashRoleSelectWired(src.replace('disabled={readOnly} title={DETAIL_HELPER_TEXT.lineRole}', 'title={DETAIL_HELPER_TEXT.lineRole}')));
+  assert.ok(!dashRoleSelectWired(src.replace('edit(f => setDashRole(f, r.strokeId, dashRole))', 'setDashRole(form, r.strokeId, dashRole)')));
+  assert.ok(!dashRoleSelectWired(src.replace('labelOptions(DETAIL_DASH_LABELS)', 'labelOptions(DETAIL_MODE_LABELS)')));
+  assert.ok(!dashRoleSelectWired(src.replace('value={r.dashRole}', 'value={r.closed}')));
+});
+
 test('【検出力】コメントだけに書いた配線は判定を満たさない', () => {
   const commentOnly = [
     "// runBusy('カタログ適用', () => applyCatalogEditPlan(KIND, plan, {}));",

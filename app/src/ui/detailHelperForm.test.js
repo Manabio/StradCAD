@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumRole, DetailDatumKind, DetailAxis,
-  DetailParam, DetailMaterialField, DETAIL_VIEW_COMBOS, DETAIL_DRAFT_HISTORY_MAX, SvgFigurePrimitiveType,
+  DetailParam, DetailMaterialField, DetailDash, DETAIL_VIEW_COMBOS, DETAIL_DRAFT_HISTORY_MAX, SvgFigurePrimitiveType,
 } from '../core/constants.js';
 import { DetailValidationError } from '../detail/detailModel.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
@@ -11,7 +11,7 @@ import { DETAIL_SUBJECT_LABELS, formatDetailSubjectLabel } from '../catalog/cata
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays, docDiffMap } from '../catalog/catalogRegistry.js';
 import {
-  newDraft, formFromEntry, entryFromForm, duplicateForm, isDraftDirty, pushHistory, undoDraft, applyPen, penUp, setClosed,
+  newDraft, formFromEntry, entryFromForm, duplicateForm, isDraftDirty, pushHistory, undoDraft, applyPen, penUp, setClosed, setDashRole, DETAIL_DASH_LABELS,
   setMoveLen, setMoveMode, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, libraryRows, defaultFitDims, tryFit,
   isElevationFigureForm, fitDimFieldsFor, defaultFitDimsFor,
@@ -145,6 +145,44 @@ test('setClosed: 指定ストロークだけ閉じる／開く', () => {
   f = setClosed(f, 's1', true);
   assert.deepEqual(f.strokes.map(s => s.closed), [true, false]);
   assert.deepEqual(setClosed(f, 's1', false).strokes.map(s => s.closed), [false, false]);
+});
+
+test('T2-2 setDashRole: 指定ストロークの line.dashRole だけ変わり、weightRole・他ストローク・手・closed は不変。moveRows に出て、保存形（entryFromForm）へ届く', () => {
+  let f = penUp(drawAll(newDraft({ idFactory }), [[PenDir.RIGHT, '10'], [PenDir.DOWN, '7']]));
+  f = drawAll(f, [[PenDir.UP, '3']]);
+  const before = f;
+  const g = setDashRole(f, 's2', DetailDash.SWING);
+  assert.deepEqual(g.strokes.map(s => s.line.dashRole), [DetailDash.SOLID, DetailDash.SWING]);
+  assert.equal(g.strokes[1].line.weightRole, before.strokes[1].line.weightRole);
+  assert.equal(g.strokes[0], before.strokes[0], '他のストロークは同一参照');
+  assert.deepEqual(g.strokes[1].moves, before.strokes[1].moves);
+  assert.equal(g.strokes[1].closed, before.strokes[1].closed);
+  assert.equal(before.strokes[1].line.dashRole, DetailDash.SOLID, '元の form は変えない');
+  assert.deepEqual(moveRows(g).map(r => r.dashRole), [DetailDash.SOLID, DetailDash.SWING]);
+  assert.deepEqual(entryFromForm(g).strokes.map(s => s.line.dashRole), [DetailDash.SOLID, DetailDash.SWING]);
+  assert.equal(setDashRole(g, 's2', DetailDash.DASHED).strokes[1].line.dashRole, DetailDash.DASHED);
+  // line を持たない旧形のストロークでも既定の weightRole を補って役割だけ付く
+  const bare = { ...before, strokes: before.strokes.map(s => ({ id: s.id, closed: s.closed, moves: s.moves })) };
+  assert.equal(setDashRole(bare, 's1', DetailDash.DASHED).strokes[0].line.dashRole, DetailDash.DASHED);
+});
+
+test('T2-2 DETAIL_DASH_LABELS: 線の役割は 3 つ（実線・破線・開き勝手）で DetailDash の全値を過不足なく覆う', () => {
+  assert.deepEqual(DETAIL_DASH_LABELS, { [DetailDash.SOLID]: '実線', [DetailDash.DASHED]: '破線', [DetailDash.SWING]: '開き勝手' });
+  assert.deepEqual(Object.keys(DETAIL_DASH_LABELS).sort(), Object.values(DetailDash).sort());
+});
+
+test('【失敗系】T2-2 setDashRole: 未知の役割・無い strokeId は form を変えずそのまま返す（edit が同一参照を履歴に積まない）', () => {
+  const f = drawAll(newDraft({ idFactory }), [[PenDir.RIGHT, '10']]);
+  assert.equal(setDashRole(f, 's1', 'zigzag'), f);
+  assert.equal(setDashRole(f, 's1', undefined), f);
+  assert.equal(setDashRole(f, 'nope', DetailDash.SWING), f);
+});
+
+test('T2-2 previewPrimitivesOf: 開き勝手の役割のストロークはプレビューでは実線（dash なし）。破線の役割は破線のまま（R3）', () => {
+  const f = drawAll(newDraft({ idFactory }), [[PenDir.RIGHT, '100']]);
+  const lineOf = form => previewPrimitivesOf(form).find(p => !p.guide && (p.type === SvgFigurePrimitiveType.POLYLINE || p.type === SvgFigurePrimitiveType.LINE));
+  assert.equal(lineOf(setDashRole(f, 's1', DetailDash.SWING)).dash, undefined);
+  assert.equal(lineOf(setDashRole(f, 's1', DetailDash.DASHED)).dash, DetailDash.DASHED);
 });
 
 test('下書き履歴: pushHistory は上限 DETAIL_DRAFT_HISTORY_MAX で古いものから落ち、undoDraft は直前を返す', () => {

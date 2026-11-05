@@ -348,7 +348,7 @@ export const ERR_ROOF_UPPER_ROOMS = (floorLabels) =>
 // 方立の図を流用または既定の断面（solid/bent）で描いており、図面は止まらない。reason は合わせられない理由
 // （fit の error.message など）。slot は DetailSlot の値（'jamb'＝方立・'head'＝上枠・'sill'＝下枠。core/constants.js）。
 const DETAIL_SLOT_LABELS = Object.freeze({
-  jamb: '方立（縦枠）', head: '上枠', sill: '下枠', figure: '姿図', floorWall: '床と壁', wallCeiling: '壁と天井',
+  jamb: '方立（縦枠）', head: '上枠', sill: '下枠', figure: '姿図', figureBack: '姿図（向こう側）', floorWall: '床と壁', wallCeiling: '壁と天井',
   kneeTop: '腰壁の天端', dropBottom: '垂れ壁の下端', floorStep: '床の段差',
   ceilingStep: '天井の段差',
 });

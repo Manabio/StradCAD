@@ -2818,7 +2818,7 @@ function emptyOpeningSubTypeForm(category, key) {
     wallInterior: false, wallExterior: false, wallKindsExplicitEmpty: false,
     defaultWidth: '', defaultHeight: '',
     childRatio: '', fireLeaves: '', fireAngle: '', slideLayoutText: '',
-    detailFigure: '',
+    detailFigure: '', detailFigureBack: '',
   };
 }
 
@@ -3358,6 +3358,20 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
               >
                 <option value="">{FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FIGURE].unassigned}</option>
                 {detailFigureOptionsFor(DetailSlot.FIGURE, detailFigureList, form.detailFigure).map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+            {/* 向こう側から見た姿図（T2-2。任意。無ければ姿図を両側に使う） */}
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">{FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FIGURE_BACK].label}</span>
+              <select
+                value={form.detailFigureBack}
+                disabled={!!disabledReason}
+                onChange={e => setForm(f => ({ ...f, detailFigureBack: e.target.value }))}
+              >
+                <option value="">{FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FIGURE_BACK].unassigned}</option>
+                {detailFigureOptionsFor(DetailSlot.FIGURE_BACK, detailFigureList, form.detailFigureBack).map(opt => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>

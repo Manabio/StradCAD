@@ -1353,6 +1353,8 @@ export const FIXTURE_SYMBOL_DETAIL_SLOT_TEXT = Object.freeze({
   [DetailSlot.SILL]: Object.freeze({ label: '部分詳細図（下枠）', unassigned: 'なし' }),
   // 建具種別タブの姿図（S6b）と、建具エディタの姿図の上書き欄。建具記号フォームの割当て欄（FIXTURE_SYMBOL_DETAIL_FORM_FIELDS）には載らない。
   [DetailSlot.FIGURE]: Object.freeze({ label: '部分詳細図（姿図）', unassigned: 'なし' }),
+  // 向こう側から見た姿図（T2-2。任意。無ければ姿図を両側に使う）
+  [DetailSlot.FIGURE_BACK]: Object.freeze({ label: '部分詳細図（姿図・向こう側）', unassigned: '姿図の図を使う' }),
 });
 
 /** 建具記号フォームの方立・上枠・下枠の割当て欄に添える説明（どの建具で効くか）。 */
@@ -1926,6 +1928,9 @@ export function openingSubTypeFormFromEntry(entry) {
     // 姿図の詳細図（S6b。detailFigures.figure。'' は未割当て）
     detailFigure: typeof entry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]?.[DetailSlot.FIGURE] === 'string'
       ? entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD][DetailSlot.FIGURE] : '',
+    // 向こう側から見た姿図（T2-2。detailFigures.figureBack。'' は未割当て＝姿図を両側に使う）
+    detailFigureBack: typeof entry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]?.[DetailSlot.FIGURE_BACK] === 'string'
+      ? entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD][DetailSlot.FIGURE_BACK] : '',
   };
 }
 
@@ -2012,8 +2017,13 @@ export function buildOpeningSubTypeEntry(form) {
     }
   }
   // 姿図の詳細図（S6b）。未割当てなら項目ごと持たない（建具記号の detailFigures と同じ）。
+  // 向こう側の姿図（T2-2）も同じ detailFigures に持つ。どちらも空なら項目ごと持たない。
   const detailFigure = (form?.detailFigure ?? '').trim();
-  if (detailFigure !== '') entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD] = { [DetailSlot.FIGURE]: detailFigure };
+  const detailFigureBack = (form?.detailFigureBack ?? '').trim();
+  const detailFigures = {};
+  if (detailFigure !== '') detailFigures[DetailSlot.FIGURE] = detailFigure;
+  if (detailFigureBack !== '') detailFigures[DetailSlot.FIGURE_BACK] = detailFigureBack;
+  if (Object.keys(detailFigures).length > 0) entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD] = detailFigures;
   return entry;
 }
 
@@ -2117,6 +2127,10 @@ export function validateOpeningSubTypeForm(form, { isAdding, allKeys = new Set()
   const detailFigure = (form?.detailFigure ?? '').trim();
   if (detailFigure !== '' && !detailFigureOptionsFor(DetailSlot.FIGURE, detailFigureList).some(o => o.value === detailFigure)) {
     return { ok: false, message: `${FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FIGURE].label}に指定した図が見つかりません: ${detailFigure}` };
+  }
+  const detailFigureBack = (form?.detailFigureBack ?? '').trim();
+  if (detailFigureBack !== '' && !detailFigureOptionsFor(DetailSlot.FIGURE_BACK, detailFigureList).some(o => o.value === detailFigureBack)) {
+    return { ok: false, message: `${FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FIGURE_BACK].label}に指定した図が見つかりません: ${detailFigureBack}` };
   }
 
   if (isAdding) {

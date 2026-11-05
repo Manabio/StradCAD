@@ -371,7 +371,7 @@ const REGISTRY = Object.assign(Object.create(null), {
       return { category: m[1], key: m[2] };
     },
     encoding: 'json',
-    // detailFigures（任意）＝{ figure? } の詳細図キー（S6b。姿図の差し替え。建具記号の detailFigures と同型・旧ビルドでは未知項目として保持される）。
+    // detailFigures（任意）＝{ figure?, figureBack? } の詳細図キー（S6b。姿図の差し替え。建具記号の detailFigures と同型・旧ビルドでは未知項目として保持される）。
     knownFields: ['category', 'key', 'label', 'mechanism', 'wallKinds', 'defaultWidth', 'defaultHeight', 'childRatio', 'fireLeaves', 'fireAngle', 'slideLayout', FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD],
     requiredFields: ['category', 'key', 'label', 'mechanism', 'defaultWidth', 'defaultHeight'],
     // ステップ12a（Q-B確定）: category/keyはkeyOfの複合キーそのもの、mechanismは開閉の仕組み

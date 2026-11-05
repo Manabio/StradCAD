@@ -5,7 +5,7 @@
 // 試す寸法は描画と同じ式: 平面の方立＝(壁厚・出幅・開口半幅で頭打ちの見付)、展開の上枠＝(同・開口高さ半分で頭打ち)。
 // 図の解決は描画と同じ resolveDetailFigure（建具個別の detailRefs ＞ 記号の detailFigures。head は jamb を流用）。
 // 壁厚はホスト壁の両仕上げ面（openingSectionWallRange）。ホスト壁が引けない三方枠は試さない。
-// 建具の姿図（S6b。slot=figure）は全機構の建具が対象で、壁は引かない（collectDetailFigureFailures。立面の入力組み立ても使う）。
+// 建具の姿図（S6b。slot=figure と figureBack）は全機構の建具が対象で、壁は引かない（collectDetailFigureFailures。立面の入力組み立ても使う）。
 // ================================================================
 
 import { DetailSlot, FRAME_OVERHANG_MM } from '../core/constants.js';
@@ -18,6 +18,7 @@ import { findHostWall, wallFaceRange } from './openingGeometry.js';
 import { resolveDetailFigure, elevationDetailDims, frameDefaultKey } from './openingDetailFit.js';
 
 const FRAME_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot.HEAD, DetailSlot.SILL]);
+const FIGURE_SLOTS = Object.freeze([DetailSlot.FIGURE, DetailSlot.FIGURE_BACK]);
 const ALL_SLOTS = Object.freeze([...FRAME_SLOTS, DetailSlot.FIGURE]);
 
 // 1つの解決結果 r（resolveDetailFigure の戻り値）の失敗（参照先の図が無い・fit できない）を failures に積む。
@@ -46,7 +47,7 @@ function pushFailuresOf(r, { failures, seen, ownerKey, slot, dims, extra }) {
 }
 
 /**
- * 建具の姿図（slot=figure）の詳細図が（幅・高さ・窓台高さ）に合わせられないものの集計。全機構の建具が対象（三方枠に限らない）。
+ * 建具の姿図（slot=figure と figureBack）の詳細図が（幅・高さ・窓台高さ）に合わせられないものの集計。全機構の建具が対象（三方枠に限らない）。
  * 立面モード（graph を持たない入力）からも呼べるよう、graph でなく建具の列を受ける。
  * 図の解決は描画と同じ resolveDetailFigure（建具個別の detailRefs.figure ＞ 建具種別エントリの detailFigures.figure）。
  * @param {Iterable<object>|null|undefined} openings Opening の列（graph.openings など）
@@ -58,10 +59,13 @@ export function collectDetailFigureFailures(openings, seen = new Set()) {
   const failures = [];
   for (const o of openings ?? []) {
     const refs = subTypeDetailFigureRefsFor(o.category, o.subType);
-    const r = resolveDetailFigure({ detailRefs: o.detailRefs ?? null, slot: DetailSlot.FIGURE, subTypeRefs: refs });
-    if (!r) continue;
-    const dims = elevationDetailDims(o);
-    pushFailuresOf(r, { failures, seen, ownerKey: o.subType, slot: DetailSlot.FIGURE, dims, extra: { dims } });
+    // 手前から見た姿図に加えて、向こう側から見た姿図（T2-2。任意）も参照があるときだけ試す
+    for (const slot of FIGURE_SLOTS) {
+      const r = resolveDetailFigure({ detailRefs: o.detailRefs ?? null, slot, subTypeRefs: refs });
+      if (!r) continue;
+      const dims = elevationDetailDims(o);
+      pushFailuresOf(r, { failures, seen, ownerKey: o.subType, slot, dims, extra: { dims } });
+    }
   }
   return failures;
 }

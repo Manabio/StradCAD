@@ -243,6 +243,28 @@ test('【失敗系】通知: 参照先の図が無い姿図は「見つかりま
   assert.match(rows[1].message, /user1 の姿図の詳細図がカタログに見つかりません/);
 });
 
+test('T2-2 通知: 向こう側の姿図（figureBack）の fit 不能・参照切れも出る。slot は figureBack・姿図と両方なら 2 件・参照が無ければ 0 件', () => {
+  const BACK = DetailSlot.FIGURE_BACK;
+  installElevationFigures([elevationFigure('df-ok'), elevationFigure('df-bad', { sFixed: 900 })]);
+  const withBack = (o, key) => ({ ...o, detailRefs: { ...o.detailRefs, [BACK]: key } });
+  const fit = collectDetailFigureFailures([withBack(withRef(door(), 'df-ok'), 'df-bad')]);
+  assert.equal(fit.length, 1);
+  assert.equal(fit[0].slot, BACK);
+  assert.match(fit[0].message, /^詳細図 テスト姿図 を singleSwing の姿図（向こう側）に合わせられません: 固定寸法の和が目標を超える/);
+  assert.deepEqual(fit[0].dims, { width: 800, height: 2000, sill: 0 });
+  const gone = collectDetailFigureFailures([withBack(door(), 'df-gone')]);
+  assert.equal(gone.length, 1);
+  assert.equal(gone[0].slot, BACK);
+  assert.match(gone[0].message, /建具個別の指定 の姿図（向こう側）の詳細図がカタログに見つかりません/);
+  const both = collectDetailFigureFailures([withBack(withRef(door(), 'df-bad'), 'df-bad')]);
+  assert.deepEqual(both.map(r => r.slot), [FIGURE, BACK], '同じ図でも slot が違えば別の組');
+  assert.deepEqual(collectDetailFigureFailures([withBack(door(), 'df-ok')]), [], '合わせられる figureBack は 0 件');
+  assert.deepEqual(collectDetailFigureFailures([door()]), [], '参照が無ければ 0 件');
+  const seen = new Set();
+  assert.equal(collectDetailFigureFailures([withBack(door(), 'df-bad')], seen).length, 1);
+  assert.equal(collectDetailFigureFailures([withBack(door(), 'df-bad')], seen).length, 0, 'seen 共有で重複排除');
+});
+
 test('通知: 正常に合わせられる・参照なしの建具は 0 件。collectDetailFitFailures は既定で姿図も数え、slots で絞れる', () => {
   installElevationFigures([elevationFigure('df-ok'), elevationFigure('df-bad', { sFixed: 900 })]);
   assert.deepEqual(collectDetailFigureFailures([withRef(door(), 'df-ok'), door(), null].filter(Boolean)), []);

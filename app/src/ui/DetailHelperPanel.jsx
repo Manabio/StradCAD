@@ -17,7 +17,7 @@ import { useScrollIntoViewWhenActive } from './useScrollIntoViewWhenActive.js';
 import {
   DETAIL_HELPER_TEXT, DETAIL_HELPER_MESSAGES, DETAIL_NUMPAD_LABELS, PEN_BUTTONS, PREVIEW_FRAME_PX,
   DETAIL_ROLE_LABELS, DETAIL_MODE_LABELS, DETAIL_PARAM_LABELS, DETAIL_MATERIAL_FIELD_LABELS, DETAIL_DATUM_KIND_LABELS, DETAIL_AXIS_LABELS,
-  newDraft, entryFromForm, freshDocOf, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, isDraftDirty, undoDraft, penStep, penUp, setClosed,
+  newDraft, entryFromForm, freshDocOf, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, isDraftDirty, undoDraft, penStep, penUp, setClosed, setDashRole, DETAIL_DASH_LABELS,
   setMoveLen, setMoveMode, setMoveEdge, rebaseOrigin, rebaseDelta, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, saveDecision, planSave, afterSaveDoc,
   deleteConfirmMessage, defaultFitDimsFor, fitDimFieldsFor, tryFit, previewPrimitivesOf, labelOptions, pushHistory,
@@ -63,14 +63,15 @@ const freshDoc = () => freshDocOf(newDraft({ idFactory: newKeyPart }));
 
 const MODE_OPTIONS = labelOptions(DETAIL_MODE_LABELS);
 const ROLE_OPTIONS = labelOptions(DETAIL_ROLE_LABELS);
+const DASH_OPTIONS = labelOptions(DETAIL_DASH_LABELS);
 const PARAM_OPTIONS = labelOptions(DETAIL_PARAM_LABELS);
 const FIELD_OPTIONS = labelOptions(DETAIL_MATERIAL_FIELD_LABELS);
 const KIND_OPTIONS = labelOptions(DETAIL_DATUM_KIND_LABELS);
 const AXIS_OPTIONS = labelOptions(DETAIL_AXIS_LABELS);
 
-function Select({ value, options, onChange, disabled, empty }) {
+function Select({ value, options, onChange, disabled, empty, title }) {
   return (
-    <select className="dthlp-select" value={value ?? ''} disabled={disabled} onChange={e => onChange(e.target.value)}>
+    <select className="dthlp-select" value={value ?? ''} disabled={disabled} title={title} onChange={e => onChange(e.target.value)}>
       {empty !== undefined && <option value="">{empty}</option>}
       {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
     </select>
@@ -901,6 +902,7 @@ export function DetailHelperPanel({ onClose }) {
               <div key={r.strokeId} className="dthlp-stroke">
                 <div className="dthlp-stroke-head">
                   <span>{strokeTitle(r.strokeIndex, r.vertexCount)}</span>
+                  <Select value={r.dashRole} options={DASH_OPTIONS} disabled={readOnly} title={DETAIL_HELPER_TEXT.lineRole} onChange={dashRole => edit(f => setDashRole(f, r.strokeId, dashRole))} />
                   <button className="dthlp-btn dthlp-btn--small" onClick={() => edit(f => setClosed(f, r.strokeId, !r.closed))}>
                     {r.closed ? DETAIL_HELPER_TEXT.openShape : DETAIL_HELPER_TEXT.closeShape}
                   </button>
