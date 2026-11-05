@@ -52,3 +52,6 @@ CL→壁→開口→部屋→境界エッジ等の順で解決する。新しい
 
 ## 屋根区画（`GS.ROOF_ZONES=56`→`RZ{ID,CELLS,SPEC}`の vector。SPEC は同じ`RS`）は区画があるときだけ書く
 最上階の階ごと設定（`PlanGraph.roofZones`。2026-10-30）。区画はユーザーがセルを指定した意図そのものなので **spec は既定値でも書く**（主屋根と逆）。vector は0件のとき省くので区画の無い文書のバイト列は変わらない（13・moku4・moku4-3 の全階で A/B 一致を実測済み）。読み側の正規化は`core/roofZone.js restoreRoofZones`の1か所（不正 id・空セルを捨て、同 id・重なりセルは先勝ち。SPEC が無ければ既定の`RoofSpec`）で、FBS・plain・仕上げ undo（`finishUndo`のキー`roofZones`）が共用する。セルキーは生のまま保存し、線 id の振り直し（`lineIdRemap`）は文字列の全置換なので自動で追従する。
+
+## 姿図の配置（`GS.PLACED_FIGURES=57`→`PF{ID,FIGURE_KEY,X,Y,ROT,MIRROR,Z,NOTE}`の vector）は配置があるときだけ書く
+階ごとの実体（`PlanGraph.placedFigures`。2026-11-05。設計は`detail-figure-model.md`「姿図の配置（S10）」）。X・Y・Z・ROT は f64、MIRROR は int8、NOTE は空なら書かない。vector は0件のとき省くので配置の無い文書のバイト列は変わらない。配列順＝FBS 順。読み側の正規化は`core/placedFigure.js restorePlacedFigures`の1か所（不正を捨て同 id 先勝ち）で、FBS・plain・仕上げ undo が共用する。旧ビルドは未知フィールドを無視して読め、保存し直すと配置が消える（`roofZones`と同じ片方向）。

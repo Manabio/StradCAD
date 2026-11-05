@@ -293,6 +293,12 @@ canvasのlineCapはbutt（未指定）のままにし、Konvaへ渡す直前のp
 - **窓（category window で種別が引け機構が実装済み。S8f-3a・2026-11-04）の断面**は描き方`window`（`openingSection.js`。帯幅＝壁厚+24＝片開き戸と同じ）: 上枠・下枠（見付`sectionFrameFaceWidthFor`＝25〔開口高さの半分で頭打ち〕・見込は帯いっぱい。CUT）＋障子（SILHOUETTE・厚30・上下は枠にかかり代10ずつ掛かる。`windowSashLayout`＝開き系は開く側の壁の面・引き違い系はトラック・FIXは障子なしでガラスの線1本・他は中央1本）＋竪枠の見え掛かりの縦線（細線。開き系は障子の無い側の1本・他は両端。上枠の下端〜下枠の上端）。**窓台0（掃き出し窓）は下枠を描かず**、障子・縦線は床まで（`windowHasSill`）。種別の参照切れの窓・建具（引き戸など）は従来の矩形3本・帯120。上枠・下枠は組込みの部分詳細図の既定（`source:'detail'`。S8f-3b。建具個別 ＞ 記号 ＞ 既定。詳細は`detail-figure-model.md`）。障子・竪枠の線は定数のまま。
 - **三方枠（機構 FRAME_ONLY。S10-10・2026-10-25）の断面**は描き方`frameOnly`（`openingSection.js`。判定は記号ではなく機構＝姿図と同じ）: 上枠の断面（見付＝`frameOnlyInnerRect`の fw〔開口幅の半分で頭打ち〕・見込＝**壁全体の面から面`wallFaceRange`＋2×出幅**＝平面の方立・建具モードの見込み欄と同じ式。木製 solid は閉じた矩形・鋼板 bent は開いたコの字を縦にした polyline。CUT）＋竪枠の見え掛かりの縦線2本（上枠の下端〜床。細線）。扉・下枠は描かない。片開き戸の「当該部屋側の壁1枚」は三方枠には適用しない（枠は壁を包む）ので、切断壁の帯には`band.openingWallRange`、隅は`openingSectionWallRange`で壁全体の範囲を渡し、帯の始点は`openingSectionOverhangMm`（三方枠＝実効の出幅・他は12のまま）。隅の床線の延長は rect だけでなく polyline の x 範囲も見る。実データに切られる三方枠は無く（14.stq の WF 1件は隅にも掛からない）、基準は合成文書`golden-elev-opening/frame-only-section-test`（`makeFrameOnlySectionTestDoc.mjs`。隅の経路だけ。切断壁の経路は`sectionProbe.test.js`の合成テスト）。見付に1px保証は付けない（LODで分岐しない方針）。
 
+### 姿図の配置（S10 P5。2026-11-05）
+- 衛生・家具・空調の姿図の配置（`PlacedFigure`）は`elevation/elevationPlacedFigures.js appendPlacedFigures`が`elevationFigure.js`の`appendOpenings`の直後・`appendCornerSections`の前に重ねる。対象＝配置点を含む部屋（`room.cells`）の帯の面のうち、図の s 範囲が面の [0, run] に掛かるもの（遠近・遮蔽なし）。`elevation/`は`detail/`を直接引かず`finish/placedFigure/placedFigureViews.js`経由（`importGraph.test.js`の不変条件 (4) に注記）。
+- 向き: 平面の姿図は正面を図の下（局所 +t）へ向けて描く＝正面の世界方向 f＝(−sinθ, cosθ)。見る向き d＝部屋側から壁へ（−`face.inward`）。f＝−d→正面図・f＝d→背面図・見る人が図の右手側（右手 ρ＝(−f_y, f_x)。y 下向き正で南向きの右手は西）→右側面図・左手→左側面図。鏡像は f を変えず LEFT↔RIGHT を入れ替え全 view で s 反転。
+- 置き方: x0＝`localXOf`(面, 走行方向の配置座標)（dirSign を含む。これ以外の反転はしない＝世界座標順が正準なのは建具だけ）・y0＝`floorDyAt`(x0)−zMm。線は建具の詳細図と同じ`detailStrokesToElevationPrimitives`（line／polyline だけ）。
+- 限界: 遮蔽なし・左右対称前提・部分指定の子の部屋のセルにある配置は親の帯に出ない・床の段差は原点 1 点・面ごとに fit をやり直す。屋外部屋の帯と立面（facade-model.md）には同じ配置が出うる（意図どおり）。
+
 ## 腰壁の天端・端部の見えがかり
 - 天端は壁の上端から下への帯（`.claude/data-model.md`参照）なので、面自身が腰壁のときは**上端＝天端を中線・下端を細線**の水平2本で描く。**見付は実厚ではなく`kneeCapDrawnFaceMm(分母)`（＝max(天板厚20, 0.5×分母)・分母未指定は50。最小描画幅の節参照）**（実厚のままだと2本線が縮尺で潰れるため作図上だけ広げる。モデルの寸法は実厚のまま）。端部（端部抑え）も端に縦の中線＋内側`kneeCapDrawnFaceMm`の縦細線（天端の出`CAP_OVERHANG`は厚み方向だけなので端部の中線は壁端に立つ）。**描かない端**: 面端でクランプされた端（縦線は`hasWallAtLocal0/Run`が描く）／同じ軸上に壁が続く端（連続する壁は同面）。直交する腰壁が断面枠（`partitionCutAtLocal0/Run`）として出る側は枠の上辺が天端なので帯の下端の細線だけ足す。天井まで届く袖壁（`topHeightMm=null`）には天端が無い。
 - **断面エンジン側にも同じ天端が要る**（`sectionEmit.js`の`kneeCapUnderline`。下階の帯へ多層書きされた上階の腰壁は`buildFaceFigure`のグラフに無い）。天端の水平線を描く3経路（`cut`の`cutWallTopEdges`／`cutAlong`の上端／`wall`の上端）それぞれに帯の下端の細線を足す。条件は「その上端を実際に描いたとき」かつ「上端が天井より下＝天端が露出」（垂れ壁は下端側が露出するので自然に外れる）。
@@ -623,6 +629,7 @@ canvasのlineCapはbutt（未指定）のままにし、Konvaへ渡す直前のp
 - 2026-10-25（判断のみ・コミット無し。続く実装は 9540626〜4335d85）U3（階段を探査の選択に入れる案）は見送り（行数が差し引きで増え clip も消えきらない。回転部の細線は別の層の問題）／S8の棚卸し結果は「階段由来の clip・隠れ線慣行・`stairOver`機構は現状維持、梁・柱の描く側クリップは探査側へ移って解消」。
 - 2026-10-23〜25（S3a=1f5ed12・S2=5f7a0ee・U1b B1〜B6・S5〜S7。下行のコミット）解消した既知の限界: 「梁が探査に参加しない」（U1b B1〜B3）・「規則Aの全高仮定」（帯の候補は腰壁・垂れ壁の実高さで隠す）・「roomFaceCutの2規則が部屋帯専用」（`facePlane`と`fromRoomSide`へ分割）・「`SectionCut`の残骸キー」（S2）・「viewSignの二重定義」（`faceSectionCut`の符号を`-faceViewSign`へ寄せ定義1箇所。柱型判定の規約の反転だけが意図的に残る）。
 - 展開図リファクタの実施コミット（2026-10-23〜25。出力不変は83文書のバイト一致で確認）: S0=6617e17（ゲート）・S1=a127863（逆向きimport13本と循環2本の解消）・S2=5f7a0ee（`SectionCut`の残骸キー`hiddenWallIds`・`openSpans`の撤去と opts の4群 typedef 化）・U2-lite=e888bfe・S3a=1f5ed12・S3b-1=badc2f9・S4=60c1841・S3b-2=724f370・U1b B1=1108142・B2=4ed2189・B3-1=8b84eae・B3-2=1326299・B3-3=691d93c・B4=bdc81e0・B6=312a423・S5=9540626〜80ee447・S6=cf49ca4〜17a5719・S7=4335d85。
+- 2026-11-05（5f97bca5）姿図の配置（S10 P5）: 向きの約束・正面／背面／左右の決め方・左右の代用・x0 は dirSign のみ（「開口（建具）の展開図表現」直後の小節）。
 
 
 

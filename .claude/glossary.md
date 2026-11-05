@@ -576,3 +576,12 @@ S造スラブ（`SteelSlab`）のセルキー。梁で囲まれた区画（ベ�
 
 ## 姿図（向こう側）（DetailSlot.FIGURE_BACK）
 向こう側から見た建具の姿図の割当て枠。任意で、無ければ通常の姿図（figure）を両側に使う。
+
+## 姿図の配置（PlacedFigure）
+衛生・家具・空調の姿図を、仕上げモードの階ごとの実体として平面（見下げ）・天伏（見上げ）・展開・立面に置いたもの（`core/placedFigure.js`）。建具（fixture）・昇降機の器具（EquipmentRow）とは別。設計意図は`.claude/detail-figure-model.md`「姿図の配置（S10）」。
+
+## 図の束（views）
+平面の配置図が持つ任意項目。正面・背面・左・右・天井（`DetailPlacementView`）ごとに、別の詳細図（立面の姿図）のキーを指す。展開・立面は見る向きに応じて束から図を選ぶ。
+
+## 配置原点（DetailDatumRole.PLACEMENT_ORIGIN）
+配置図の基準の役割。この基準が姿図の配置点（x, y）そのものに当たる（`finish/placedFigure/placedFigureTargets.js`）。
