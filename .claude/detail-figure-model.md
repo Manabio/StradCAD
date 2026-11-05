@@ -18,6 +18,7 @@
 ## 分類と取り付け先
 - 分類は category × view × subject の組合せ表（`core/constants.js DETAIL_VIEW_COMBOS`）。取り付け先の枠名 `DetailSlot` と許す組合せの対応 `DETAIL_SLOT_TARGETS` も同じ葉に置く（検証と割当ての選択肢が同じ表を引く）。
 - 解決順は **`opening.detailRefs` ＞ 記号の `detailFigures` ＞ 既定 profile**。slot が先で、上枠は head ＞ jamb の順で方立の図を流用できる（detailRefs.head ＞ 記号.head ＞ detailRefs.jamb ＞ 記号.jamb。R9。現行の上枠＝方立と同じ形に揃えるため）。`detailRefs` がその slot を null で持つときは「なし」で、記号側の同じ slot を候補にしない（プレビューの明示 null。キー無し・undefined は記号へ進む）。
+- 姿図は見る側 `towardViewer===false`（向こうへ開く側から見る）のときだけ `figureBack` ＞ `figure` の順（`resolveDetailElevation`）。`figureBack` が無い・参照切れ・fit 不能なら `figure` へ落ちる（任意の上乗せなので error にしない）。true／null は `figure` だけ。
 - 保守パネルのプレビューは未保存の選択を `opening.detailRefs` に載せる（最優先経路は `frameProfile` の上書きと同じ理屈。記号に保存する前の選択はここでしか届かない）。未割当ては null で渡すので、保存済みの割当てを未保存で外した状態も描ける。永続化（S6）は「空なら書かない」ので null は保存されない。
 
 ## 反映の口
@@ -122,7 +123,7 @@
 - 三方枠以外へ種別を変えても `opening.detailRefs` は残す（`frameFaceWidth` と同じ規約。UI からは見えず、使用中として同梱され続ける。リード裁定）。
 - 同梱の図が propose・pick（部分一致）になり、その図を指す同梱の記号が先にライブラリへ写されると、承認後もライブラリ側の記号は旧キーを指したまま（読み替えは同梱の記号だけ＝「ライブラリ層は触らない」規約の帰結。その記号を使う別文書では not-found 行になる）。
 - 線種（dash／weightRole）は無視（平面は枠の太さ・展開は断面の太線）／斜め寸法線なし／寸法は 1 手単位（複数手にまたがる寸法は表せない）／mm 判定の closed は param・material・stretch で閉じ辺 0 になるケースを登録時に検出しない／同じ図を参照する別記号の失敗は 1 行にまとまる／使用中の印は開いたとき 1 回。
-- 姿図の差替えの限界（S6b）: 線種は weightRole（極太は切断線へ寄せる）と dash だけ読み、破線は線分ごとの line・実線は polyline（Konva は polyline の dash を描かず、閉じた polyline を塗るため閉じ辺は始点を足した開いた折れ線にする）。レバーハンドルの取付高さの寸法（編集用）は図を置換しても残る。FL を origin にした図は窓台の分だけ伸縮する（SILL と別の挙動）。建具モード init の通知は kind が fixtureSymbol の行に載る（主語は建具種別キーで、区分 fitting/window は付かない）。ヘルパーの試し込みは分類が姿図なら幅・高さ・窓台（既定は代表の建具種別 singleSwing の既定幅・高さと窓台 0）、既定の基準は t の origin＝SILL・end＝HEAD。
+- 姿図の差替えの限界（S6b）: 線種は weightRole（極太は切断線へ寄せる）と dash だけ読み（SWING の扱いは「姿図の内外（T2）」）、破線は線分ごとの line・実線は polyline（Konva は polyline の dash を描かず、閉じた polyline を塗るため閉じ辺は始点を足した開いた折れ線にする）。レバーハンドルの取付高さの寸法（編集用）は図を置換しても残る。FL を origin にした図は窓台の分だけ伸縮する（SILL と別の挙動）。建具モード init の通知は kind が fixtureSymbol の行に載る（主語は建具種別キーで、区分 fitting/window は付かない）。ヘルパーの試し込みは分類が姿図なら幅・高さ・窓台（既定は代表の建具種別 singleSwing の既定幅・高さと窓台 0）、既定の基準は t の origin＝SILL・end＝HEAD。
 - 先送り: 8b-2b 袖壁の分割端（手動壁の実装後に再開。現行の壁生成は全部 isRoomWall なので `perpendicularWallsOnFace('near')` が拾う袖壁が生まれず、実機で現れる場面が無い。再開時の要点: 置き場は断面エンジンへの注入点（8b-1 の `kneeDropPartStepsOf` と同型の輪郭版）・記録の探索点は切断線の軸値・切断壁の天端 CUT／天端下細線／側縁の上部を輪郭に置き換える・帯の端（8b-2）とは描く場所が重ならない）・屋根の軒先けらば（S9）・器具の配置（S10）・図を部品に組み合わせる作図・整理課題＝`dxfToStrokes`／`dxfToComponents`（PDF も共用）と `describeDxfWarning`・`DxfWarning.LICENSE_UNKNOWN`／`NO_DIGEST`・`DXF_PROVENANCE_FIELDS`・`draftFromDxf` の名前の一般化・`useCatalogEditActions` の共有化・`rewriteDocSymbolDetailFigures` の改名（建具種別も読み替えるため。整理課題）。
 
 ## 暗黙の既定（S8c）
@@ -178,7 +179,16 @@
 - 上書き行の削除は「組込みに戻す」（`planRevert`→`planRevertToBuiltin`。使用中でも戻せる）に置き換え、組込み行は削除不可。
 - 暗黙の既定で使う組込みキー（巾木・腰壁天板）も使用キーに数えて同梱する（`usedEntries.implicitDetailFigureKeys`）＝上書きが文書で持ち出せる。alias の書換え対象にはしない。同梱に組込みと同キーの別内容がある行は一覧に「文書」の印（`doc-diff`。保存は止める）。
 
+## 姿図の内外（T2。2026-11-05）
+- 意図: 組込みの姿図に入れた「奥に開く＝一点鎖線・手前＝実線」（opening-model.md の towardViewer。ユーザー裁定 2026-11-05）を、部分詳細図に置き換わった姿図（`detailPrimitives` 経路）にも効かせる。開く向きは図の中の線では決まらず見る側で変わるため、線に役割の印を持たせる。
+- 規則: 線の役割 `DetailDash.SWING`（開き勝手線）は `detailStrokesToElevationPrimitives` が towardViewer===false なら `ElevationDash.CENTER`、true／null は実線にする。DASHED・SOLID は従来。ヘルパーのプレビューと建具モード（見る側が不明）は実線。`detailEnvelope` は DASHED と同じく SWING を外形から除く（本体の輪郭でない）。
+- 解決順: 向こう側から見るときだけ `DetailSlot.FIGURE_BACK`（`DETAIL_SLOT_TARGETS` は FIGURE と同じ組）を先に引く（上の「分類と取り付け先」）。
+- UI: ヘルパーのストローク見出しの「線の役割」select（`setDashRole`・`DETAIL_DASH_LABELS`）／建具エディタ（`OPENING_DETAIL_REF_SLOTS`）と保守パネル（`detailFigureBack`）の「姿図（向こう側）」欄／起動時通知 `collectDetailFigureFailures` は figure と figureBack の両方（同じ図を両方に割り当てると 2 件＝方立・上枠と同じ）。建具エディタの「建具種別の設定を使う」は種別に figureBack が無いと「姿図を両側に使う」の意味。schema 変更なし（detailRefs は slot 名の文字列・カタログ束は slot 非依存）。
+- 裁定: R1 既存の `figure` は「開く側から見た図」と定義し読み替えない／R2 `figureBack` は任意。無ければ同じ図を両側に使い開き勝手線の線種だけ変わる／R3 プレビュー・建具モードは実線／R4 `figureBack` の組込み既定は作らない。
+- 限界: 役割の印が無い既存の詳細図は内外とも同じ見え方／旧ビルドで 'swing' を持つ図は UNKNOWN_DASH で読めない図／`figureBack` の fit 失敗は通知に出るが描画は `figure` に落ちる／FREE・PIVOT の両方向の開き線は未裁定（opening-model.md）。
+
 ## 履歴
+- 2026-11-05 T2-1 `4839a7f3`（SWING・FIGURE_BACK の解決）／T2-2 `f62b3295`（線の役割 select・姿図（向こう側）の割当て欄・通知）／本節＝T2-3 文書。
 - 2026-10-31 S1 `5f396eb2` 純モジュール／S2 `0f256ee1` カタログ種別と同梱往復／S3 `8047121a` 三方枠への反映（裁定 R1〜R21 は推奨案で確定）。
 - 2026-11-04 S7c〜S7d `3d274438`〜`bbd2a719`: 矩形絞り・レイヤ on/off・プレビューのズーム／パン（長押し後の矩形）・`Anchor.offsetMm`・［基準点を指す］（裁定 R1〜R13・L1〜L5 は推奨案で確定）。
 - 2026-11-04 P1 `84fe3937` 描画域＝中央ペイン全域／P2＋P3 `331f4ebb` 寸法線の足・gap 80・外側配置（R5）・縦の寸法値（R3〜R5。ユーザー指示は同日）／P5 `52a83737` 寸法の配置（gap の比例・ストロークごとの行・足 gap/2・重複を畳む＝R6〜R9。ユーザー目視指示は同日）。
