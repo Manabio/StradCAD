@@ -18,7 +18,8 @@ import { parseBaseboardHeightMm } from '../core/room.js';
 import { localXOf, openingsOnFace, openingBelongsToFaceRoom, faceBoundaryLocalX, drawnSpanRanges, wallCoverageGapsOnFace, wallContinuationBeyondFaceEnd, wallLessEndAt, openingsReachingCorner, cornerOpeningZRanges } from './elevationFaces.js';
 import { openingSectionPrimitives, openingSectionWallRange, openingSectionOverhangMm } from '../openings/openingSection.js';
 import { openingTagPartsOf, effectiveHeight, effectiveSillHeight } from '../openings/openingNumbering.js';
-import { findCatalogEntry, isDoorlessMechanism } from '../openings/openingCatalog.js';
+import { findCatalogEntry, isDoorlessMechanism, detailFigureEntry } from '../openings/openingCatalog.js';
+import { appendPlacedFigures } from './elevationPlacedFigures.js';
 import { buildOpeningElevation, frameOnlyInnerRect } from '../openings/openingElevationFigure.js';
 import { openingOpensTowardViewer, openingExteriorPerp } from '../openings/openingViewSide.js';
 import {
@@ -768,6 +769,7 @@ export function buildFaceFigure(face, ctx) {
   appendOpenings(prims, {
     openings, face, graph, project, scale, lineWeightsPx, openingTagRowY, floorDyAt, detailWeight,
   });
+  appendPlacedFigures(prims, { face, room, graph, figureOf: detailFigureEntry, floorDyAt });
 
   appendCornerSections(prims, {
     face, graph, run, prevFace, nextFace, hasWallAtLocal0, hasWallAtLocalRun, cornerSecs, floorDyAt,

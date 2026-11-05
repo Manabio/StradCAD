@@ -82,6 +82,15 @@ test('【不変条件】placedFigureFitCheck.js は直接 import が許可表の
   assert.deepEqual(transitiveOffenders(fitCheck).offenders, []);
 });
 
+test('【不変条件】placedFigureViews.js は直接 import が許可表の内側で、推移的にも store.js・snap.js・appViewport.js・storage/・.jsx・react 系を静的に引かない', () => {
+  const views = path.join(srcDir, 'finish', 'placedFigure', 'placedFigureViews.js');
+  const allowed = new Set(['core/constants.js', 'detail/detailPlacement.js', 'finish/placedFigure/placedFigureTargets.js']);
+  const direct = specifiersOf(views).map(spec => norm(path.relative(srcDir, path.resolve(path.dirname(views), spec))));
+  assert.ok(direct.length > 0);
+  assert.deepEqual(direct.filter(t => !allowed.has(t)), []);
+  assert.deepEqual(transitiveOffenders(views).offenders, []);
+});
+
 test('【不変条件】検出力: 禁止先・許可表の外を引くソース文字列は offenders に出る', () => {
   const bad = [
     "import { x } from '../../store.js';",

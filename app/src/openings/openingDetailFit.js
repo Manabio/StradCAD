@@ -197,7 +197,7 @@ const ELEVATION_ROLE_BY_WEIGHT_ROLE = Object.freeze({
  * 全プリミティブに source:'detail' を付ける（立面が kind を上書きするので kind は使わない）。型は line／polyline だけ。
  * 開き勝手線（dashRole=SWING）は towardViewer が false（向こうへ開く）のときだけ一点鎖線、true（手前）・null（見る側が不明）は実線。
  */
-function detailStrokesToElevationPrimitives(strokes, { towardViewer = null } = {}) {
+export function detailStrokesToElevationPrimitives(strokes, { towardViewer = null } = {}) {
   const out = [];
   for (const st of strokes) {
     const pts = st.closed && st.points.length > 1 ? [...st.points, st.points[0]] : st.points;

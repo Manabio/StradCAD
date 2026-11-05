@@ -7,7 +7,7 @@
  * 仕上げモード undo・テストの突合はここを共通の入口にする。
  *
  * 座標は mm（y 軸下向き正）。回転は PLACED_FIGURE_ROTATION_STEP_DEG の整数倍だけ許し、[0, FULL_TURN_DEG) に正規化する。
- * mirror は図の s 軸方向の左右反転。zMm は置く高さ（階の FL からの mm。0＝FL）。
+ * mirror は図の s 軸方向の左右反転。zMm は置く高さ（配置した部屋の床面＝展開の床線からの mm。建具と同じ floorDyAt 基準。0＝床面）。
  */
 import { PLACED_FIGURE_ROTATION_STEP_DEG, FULL_TURN_DEG } from './constants.js';
 

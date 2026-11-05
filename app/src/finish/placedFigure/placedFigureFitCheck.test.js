@@ -99,6 +99,34 @@ test('【失敗系】views が null・配列・数値・空文字の空調の図
   }
 });
 
+test('【失敗系】views.front: 参照切れ・分類違い（平面の図）・fit 不能が行になる（鍵は front。衛生の図でも出る）。正常な立面の姿図は行なし', () => {
+  const FRONT = DetailPlacementView.FRONT;
+  const main = key => square('sa', { subject: DetailSubject.SANITARY, views: { [FRONT]: key } });
+  const elev = (key, over = {}) => square(key, { view: DetailView.ELEVATION, ...over });
+  assert.deepEqual(run([pf('p1', 'sa')], [main('fok'), elev('fok')]), []);
+
+  const gone = run([pf('p1', 'sa')], [main('fgone')]);
+  assert.equal(gone.length, 1);
+  assert.equal(gone[0].key, `placedFigure|${FRONT}|fgone`);
+  assert.equal(gone[0].reason, ERR_DETAIL_FIGURE_NOT_FOUND(DETAIL_TARGET_PLACED_FIGURE, DetailSlot.FIGURE));
+
+  const wrongClass = run([pf('p1', 'sa')], [main('fplan'), square('fplan')]);
+  assert.equal(wrongClass.length, 1);
+  assert.equal(wrongClass[0].key, `placedFigure|${FRONT}|fplan`);
+  assert.match(wrongClass[0].reason, /対象ではありません/);
+
+  const bad = run([pf('p1', 'sa')], [main('fbad'), elev('fbad', { datums: wallFaceDatums(), label: '正面不良' })]);
+  assert.equal(bad.length, 1);
+  assert.equal(bad[0].label, '正面不良');
+  assert.match(bad[0].reason, /姿図の配置では使えません/);
+
+  // ceiling と同じ鍵の形で view だけが違う
+  const both = run([pf('p1', 'hv')], [
+    square('hv', { subject: DetailSubject.HVAC, views: { [FRONT]: 'x', [DetailPlacementView.CEILING]: 'x' } }),
+  ]);
+  assert.deepEqual(both.map(r => r.key), [`placedFigure|${FRONT}|x`, `placedFigure|${DetailPlacementView.CEILING}|x`]);
+});
+
 test('【失敗系】配列でない入力・空は行なし（例外にしない）', () => {
   for (const input of [null, undefined, [], {}]) assert.deepEqual(run(input, [square('ok')]), []);
 });

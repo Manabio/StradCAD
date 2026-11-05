@@ -5,6 +5,7 @@
 //   (2) elevation/ 内（テスト除く）に import の循環が無い。
 //   (3) plan/planSolids.js が elevation/section/ を引かない（平面の立体モデルが展開図エンジンの内部に依存しない）。
 //   (4) elevation/ から detail/ を引くのは elevationJunction.js だけ・引き先は detailPlacement.js だけ（部分詳細図 S8a-2）。
+//       間接の口は finish/placedFigure/placedFigureViews.js（S10 P5。elevation/elevationPlacedFigures.js が引く）。
 // catalog/catalogImports.test.js と同じ書き方（ソーステキストを正規表現で検査する不変条件テスト）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

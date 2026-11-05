@@ -3,7 +3,10 @@
 //   配置: 衛生 1（便所の中・回転 90・鏡像なし）／空調 1（売場の中・回転 270・鏡像あり）。座標は非ゼロ・非対称の点。
 //   同梱の詳細図: df-pf-sanitary（平面の姿図 sanitary。L 字・局所の頂点 (200,100) が配置原点・PLACEMENT_ORIGIN の基準だけ）／
 //     df-pf-hvac（平面の姿図 hvac。矩形 600×400・views.ceiling で df-pf-hvac-ceiling を引く）／
-//     df-pf-hvac-ceiling（平面の姿図 hvac。矩形＋縦横の中線＝線数 3。見上げ用）。
+//     df-pf-hvac-ceiling（平面の姿図 hvac。矩形＋縦横の中線＝線数 3。見上げ用）／
+//     df-pf-sanitary-front（立面の姿図 sanitary。400×800 矩形＋中線＝線数 2。衛生の views.front）／
+//     df-pf-sanitary-right（同 300×800 矩形＋線 2 本＝線数 3。衛生の views.right。左側面は無く右の鏡像で代用される）。
+//   展開（S10 P5）: 読み戻し後、1 階の便所の帯の 4 面について appendPlacedFigures の出力（線数・x の範囲）を assert して出力する。
 // 往復を先に確かめる: 書いた直後に読み戻し、1 階 placedFigures 2 件・見下げは 2 件とも線あり・見上げは空調だけで ceiling 図の線数、を assert する。
 // 使い方: cd app && MSYS_NO_PATHCONV=1 node --import ./scripts/testSetup.mjs scripts/probe/makePlacedFigureTestDoc.mjs [--src D:/tatsuya/Download/moku4.stq] [--out D:/tatsuya/Download/placed-figure-test.stq]
 // 既存ファイルは上書きしない（再生成は先に削除する）。.mjs は eslint の対象外。
@@ -20,6 +23,8 @@ import detailBuiltins from '../../src/detail/detailBuiltins.js';
 import { validateDetailFigure } from '../../src/detail/detailModel.js';
 import { fixedLen, move } from '../../src/finish/roomDetailTestFixtures.js';
 import { placedFigureDrawPlan } from '../../src/renderer/placedFigureDrawPlan.js';
+import { buildRoomFaces } from '../../src/elevation/elevationFaces.js';
+import { appendPlacedFigures } from '../../src/elevation/elevationPlacedFigures.js';
 import {
   PenDir, DetailCategory, DetailView, DetailSubject, DetailDatumRole, DetailDatumKind, DetailAxis, DetailDash,
   DetailPlacementView, DETAIL_VIEWS_FIELD, DETAIL_FIGURE_VERSION,
@@ -39,6 +44,8 @@ const check = (ok, msg) => { if (ok) console.log(`OK: ${msg}`); else { console.e
 const KEY_SANITARY = 'df-pf-sanitary';
 const KEY_HVAC = 'df-pf-hvac';
 const KEY_HVAC_CEILING = 'df-pf-hvac-ceiling';
+const KEY_SANITARY_FRONT = 'df-pf-sanitary-front';
+const KEY_SANITARY_RIGHT = 'df-pf-sanitary-right';
 const LINE = { weightRole: 'medium', dashRole: DetailDash.SOLID };
 const placementDatums = [
   { id: 'ds0', role: DetailDatumRole.PLACEMENT_ORIGIN, axis: DetailAxis.S, kind: DetailDatumKind.ORIGIN, offsetMm: 0 },
@@ -57,7 +64,23 @@ const sanitary = base(KEY_SANITARY, '衛生器具 L字（配置確認用）', De
 ], [
   { datumId: 'ds0', strokeId: 'a', vertexIndex: 2 },
   { datumId: 'dt0', strokeId: 'a', vertexIndex: 2 },
-]);
+], { [DETAIL_VIEWS_FIELD]: { [DetailPlacementView.FRONT]: KEY_SANITARY_FRONT, [DetailPlacementView.RIGHT]: KEY_SANITARY_RIGHT } });
+// (1b) 衛生の正面図（立面の姿図 sanitary）: 幅 400×高 800 の矩形＋縦の中線＝線数 2。配置原点＝矩形の左下の頂点 3（s 0..400・t −800..0）。
+// (1c) 衛生の右側面図: 幅 300×高 800 の矩形＋縦線 2 本＝線数 3。配置原点は同じく左下。左側面の図は無い（右の鏡像で代用される）。
+const elevBase = (key, label, strokes, anchors) => ({ ...base(key, label, DetailSubject.SANITARY, strokes, anchors), view: DetailView.ELEVATION });
+const bottomLeft = strokeId => [
+  { datumId: 'ds0', strokeId, vertexIndex: 3 },
+  { datumId: 'dt0', strokeId, vertexIndex: 3 },
+];
+const rectOf = (w, h) => ({ id: 'a', closed: true, line: LINE, moves: [move(PenDir.RIGHT, fixedLen(w)), move(PenDir.DOWN, fixedLen(h)), move(PenDir.LEFT, fixedLen(w))] });
+const vLine = id => ({ id, closed: false, line: LINE, moves: [move(PenDir.DOWN, fixedLen(800))] });
+const vLineAnchors = (id, sMm) => [
+  { datumId: 'ds0', strokeId: id, vertexIndex: 0, offsetMm: sMm }, { datumId: 'dt0', strokeId: id, vertexIndex: 0, offsetMm: -800 },
+];
+const sanitaryFront = elevBase(KEY_SANITARY_FRONT, '衛生 正面 矩形＋中線（配置確認用）', [rectOf(400, 800), vLine('b')],
+  [...bottomLeft('a'), ...vLineAnchors('b', 200)]);
+const sanitaryRight = elevBase(KEY_SANITARY_RIGHT, '衛生 右側面 矩形＋線2本（配置確認用）', [rectOf(300, 800), vLine('b'), vLine('c')],
+  [...bottomLeft('a'), ...vLineAnchors('b', 100), ...vLineAnchors('c', 200)]);
 // (2) 空調（平面）: 矩形 600×400（頂点 0 から右 600・下 400・左 600 で閉）。配置原点＝頂点 1（右上の角）。views.ceiling で見上げ図を引く。
 const rectMoves = [move(PenDir.RIGHT, fixedLen(600)), move(PenDir.DOWN, fixedLen(400)), move(PenDir.LEFT, fixedLen(600))];
 const rectStroke = { id: 'a', closed: true, line: LINE, moves: rectMoves };
@@ -77,7 +100,7 @@ const hvacCeiling = base(KEY_HVAC_CEILING, '空調 見上げ 矩形＋中線（�
   { datumId: 'ds0', strokeId: 'b', vertexIndex: 0, offsetMm: -300 }, { datumId: 'dt0', strokeId: 'b', vertexIndex: 0 },
   { datumId: 'ds0', strokeId: 'c', vertexIndex: 0, offsetMm: -600 }, { datumId: 'dt0', strokeId: 'c', vertexIndex: 0, offsetMm: 200 },
 ]);
-const newFigures = [sanitary, hvac, hvacCeiling];
+const newFigures = [sanitary, sanitaryFront, sanitaryRight, hvac, hvacCeiling];
 for (const f of newFigures) {
   const v = validateDetailFigure(f);
   check(v.ok, `${f.key} が validateDetailFigure を通る${v.ok ? '' : `: ${v.errors.map(e => e.message).join(' / ')}`}`);
@@ -132,13 +155,29 @@ for (const other of P.planes.filter(p => p.id !== plane.id)) {
   check(P.graphMap.get(other.id).placedFigures.length === 0, `${other.name} の placedFigures は 0 件のまま`);
 }
 const figs = D.catalogs?.catalogs?.[CatalogKind.DETAIL_FIGURE] ?? [];
-check([KEY_SANITARY, KEY_HVAC, KEY_HVAC_CEILING].every(k => figs.some(f => f.key === k)), `同梱の詳細図に 3 図が入っている（${figs.map(f => f.key).join(',')}）`);
+check(newFigures.every(n => figs.some(f => f.key === n.key)), `同梱の詳細図に ${newFigures.length} 図が入っている（${figs.map(f => f.key).join(',')}）`);
 
 clearOverlays();
 setOverlay(CatalogKind.DETAIL_FIGURE, { doc: figs, user: detailBuiltins });
 const down = placedFigureDrawPlan(G.placedFigures, detailFigureEntry, { direction: 'down' });
 const up = placedFigureDrawPlan(G.placedFigures, detailFigureEntry, { direction: 'up' });
+// 展開（S10 P5）: 1 階の便所の帯の各面について appendPlacedFigures の出力を取る。衛生は回転 90（正面＝西向き）。
+//   手計算（R3）: 北壁 d=(0,−1)→左側面（図が無い→右の鏡像 3 本）・東壁 d=(1,0)→正面 2 本・南壁 d=(0,1)→右側面 3 本・西壁 d=(−1,0)→背面（図が無い→0 本）
+const toiletRoom = G.rooms.find(r => r.name === '便所');
+const faceRows = buildRoomFaces(toiletRoom, G).map(face => {
+  const prims = [];
+  appendPlacedFigures(prims, { face, room: toiletRoom, graph: G, figureOf: detailFigureEntry, floorDyAt: () => 0 });
+  const xs = prims.flatMap(p => (p.type === 'polyline' ? p.points.map(q => q[0]) : [p.x1, p.x2]));
+  return { letter: face.letter, d: face.isVertical ? [-face.inward, 0] : [0, -face.inward], run: face.run, n: prims.length, xMin: Math.min(...xs), xMax: Math.max(...xs), types: [...new Set(prims.map(p => p.type))] };
+});
 clearOverlays();
+for (const r of faceRows) console.log(`便所の面 ${r.letter} d=${JSON.stringify(r.d)} run=${r.run} 線数=${r.n} x=${r.n ? `${r.xMin}..${r.xMax}` : '-'} 型=${r.types.join(',')}`);
+const rowOf = letter => faceRows.find(r => r.letter === letter);
+check(faceRows.length === 4, `便所の面が 4 面（${faceRows.length}）`);
+check(rowOf('A')?.n === 3 && rowOf('B')?.n === 2 && rowOf('C')?.n === 3 && rowOf('D')?.n === 0,
+  '便所: 北＝右側面の鏡像 3 本・東＝正面 2 本・南＝右側面 3 本・西＝0 本（R3 の手計算どおり）');
+check(faceRows.every(r => r.n === 0 || r.xMin < r.run && r.xMax > 0), '出た図は面の [0, run] に掛かる');
+check(faceRows.every(r => r.types.every(t => t === 'line' || t === 'polyline')), '足されるプリミティブの型は line／polyline だけ');
 const countBy = plan => Object.fromEntries(['pf-sanitary-1', 'pf-hvac-1'].map(id => [id, plan.lines.filter(l => l.figureId === id).length]));
 console.log(`見下げ: lines=${down.lines.length} marks=${down.marks.length} boxes=${down.boxes.length}`, JSON.stringify(countBy(down)));
 console.log(`見上げ: lines=${up.lines.length} marks=${up.marks.length} boxes=${up.boxes.length}`, JSON.stringify(countBy(up)));

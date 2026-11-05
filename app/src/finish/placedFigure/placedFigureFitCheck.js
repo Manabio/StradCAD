@@ -4,7 +4,7 @@
 // 通知は init が自分で fit を試して集める（finish/roomDetailJunction.js collectRoomJunctionFailures と同型）。
 //   対象: 配置の figureKey の図（平面の配置図でなければ分類違い）と、見上げ（views.ceiling。天伏に描かれる主題の図だけ）の図
 //   参照切れ（配置の figureKey がカタログに無い）は unresolved-code 側（FinishModeState._missingUsageForKind）で出すのでここでは出さない。
-//   views.ceiling の参照切れは walker の対象外なのでここで出す
+//   views.ceiling の参照切れは walker の対象外なのでここで出す。展開の views.front／back／left／right も同様（主題を問わない。P5）
 // 行は buildResolveRows の detailFitFailures と同形: {key, symbolKey, slot, label, reason, message, placedFigureId}。
 //   symbolKey＝DETAIL_TARGET_PLACED_FIGURE（通知文の主語）・slot＝DetailSlot.FIGURE（「…の姿図に合わせられません」）
 // fit は位置・回転・鏡像に依らないので、鍵は図のキー（同じ図を何か所に置いても 1 行。placedFigureId は最初の配置）。
@@ -17,6 +17,8 @@ import { canHaveDetailViews } from '../../detail/detailModel.js';
 import { fitLocal } from '../../detail/detailPlacement.js';
 import { detailFigureEntry } from '../../openings/openingCatalog.js';
 import { placedFigureTargets, isPlaceableViewFigure } from './placedFigureTargets.js';
+
+const CHECKED_VIEWS = Object.freeze(Object.values(DetailPlacementView));
 
 const classificationOf = fig => `${String(fig?.category)}・${String(fig?.view)}・${String(fig?.subject)}`;
 
@@ -51,18 +53,21 @@ export function collectPlacedFigureFailures(placedFigures, seen = new Set(), { e
     const label = fig.label || pf.figureKey;
     const reason = failureOf(fig, canHaveDetailViews(fig));
     if (reason !== null) push(`placedFigure|${pf.figureKey}`, pf, label, reason);
-    // 見上げ図は天伏に描かれる主題の図だけ。描画は失敗すると平面図へ落ちるが、利用者には知らせる
-    if (!CEILING_PLACED_FIGURE_SUBJECTS.includes(fig.subject)) continue;
-    const ceilKey = fig[DETAIL_VIEWS_FIELD]?.[DetailPlacementView.CEILING];
-    if (typeof ceilKey !== 'string' || ceilKey === '') continue;
-    const ceilKeyOfRow = `placedFigure|${DetailPlacementView.CEILING}|${ceilKey}`;
-    const ceilFig = entryOf(ceilKey);
-    if (!ceilFig) {
-      push(ceilKeyOfRow, pf, ceilKey, ERR_DETAIL_FIGURE_NOT_FOUND(DETAIL_TARGET_PLACED_FIGURE, DetailSlot.FIGURE));
-      continue;
+    // views の図（見上げ・展開の正面〜側面）。描画は失敗すると描かない／平面図へ落ちるが、利用者には知らせる。
+    // 見上げ図は天伏に描かれる主題の図だけ。展開の 4 面は主題を問わない
+    for (const view of CHECKED_VIEWS) {
+      if (view === DetailPlacementView.CEILING && !CEILING_PLACED_FIGURE_SUBJECTS.includes(fig.subject)) continue;
+      const viewKey = fig[DETAIL_VIEWS_FIELD]?.[view];
+      if (typeof viewKey !== 'string' || viewKey === '') continue;
+      const rowKey = `placedFigure|${view}|${viewKey}`;
+      const viewFig = entryOf(viewKey);
+      if (!viewFig) {
+        push(rowKey, pf, viewKey, ERR_DETAIL_FIGURE_NOT_FOUND(DETAIL_TARGET_PLACED_FIGURE, DetailSlot.FIGURE));
+        continue;
+      }
+      const viewReason = failureOf(viewFig, isPlaceableViewFigure(viewFig, view));
+      if (viewReason !== null) push(rowKey, pf, viewFig.label || viewKey, viewReason);
     }
-    const ceilReason = failureOf(ceilFig, isPlaceableViewFigure(ceilFig, DetailPlacementView.CEILING));
-    if (ceilReason !== null) push(ceilKeyOfRow, pf, ceilFig.label || ceilKey, ceilReason);
   }
   return failures;
 }
