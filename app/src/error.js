@@ -370,6 +370,11 @@ export const ROOM_DETAIL_REF_TEXT = Object.freeze({ section: '部分詳細', non
 // 姿図の「図の束」（views）の文言。ヘルパー（ui/detailHelperForm.js）・保守パネルの閲覧・差分表示（catalog/catalogDiffView.js）が共有する。
 // キーは DetailPlacementView の値（core/constants.js。ここは葉なので literal で持ち、対応はテストで固定する）。
 export const DETAIL_VIEWS_GROUP_LABEL = '図の束';
+// 仕上げモードのタブ「衛生・家具・空調」（姿図の配置。finish/placedFigure/PlacedFigureTab.jsx）の文言。
+export const PLACED_FIGURE_TAB_TEXT = Object.freeze({
+  place: '配置', tapPoint: '配置点をタップ', cancel: '取消', rotate: '90° 回転', mirror: '鏡像', remove: '削除',
+  note: '備考', x: 'X', y: 'Y', height: '高さ', registerHint: '部分詳細図ヘルパーで登録',
+});
 export const DETAIL_PLACEMENT_VIEW_LABEL_TEXT = Object.freeze({
   front: '正面図', back: '背面図', left: '左側面図', right: '右側面図', ceiling: '見上げ図',
 });

@@ -226,14 +226,14 @@ test('【不変条件・W4b】ExteriorTable は GroupedExteriorTable へ onApply
 
 // ---- 昇降機の仕様追加ステップ2: 機械器具・附帯タブは空タブ専用コンポーネントへ分岐し、
 // ExteriorTable（構造/外部建具/外部と同じ else 分岐）へ落ちないこと ----
-test('【不変条件】TABS の id の並びが interior/stair/exterior/fittings/structure/equipment/accessory/common のとおり', () => {
+test('【不変条件】TABS の id の並びが interior/stair/exterior/fittings/structure/equipment/placedFigure/accessory/common のとおり', () => {
   const startIdx = codeOnly.indexOf('const TABS = [');
   assert.ok(startIdx >= 0, 'const TABS = [ が見つからない');
   const endIdx = codeOnly.indexOf('];', startIdx);
   const block = codeOnly.slice(startIdx, endIdx + 2);
-  const ids = [...block.matchAll(/id: '([a-z]+)'/g)].map(m => m[1]);
+  const ids = [...block.matchAll(/id: '([a-zA-Z]+)'/g)].map(m => m[1]);
   assert.deepEqual(ids,
-    ['interior', 'stair', 'exterior', 'fittings', 'structure', 'equipment', 'accessory', 'common']);
+    ['interior', 'stair', 'exterior', 'fittings', 'structure', 'equipment', 'placedFigure', 'accessory', 'common']);
 });
 
 // 昇降機の仕様追加ステップ3（S4）: 機械器具タブは EmptyTabPlaceholder から EquipmentTab

@@ -6,6 +6,7 @@ import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs } from '../catalog/cat
 import { buildCatalogRows } from '../catalog/catalogMaintenance.js';
 import { defaultResolveDecision, openingCategoryOf } from '../catalog/resolveQueue.js';
 import { ROOF_ZONE_SPEC_LOCATION, ROOF_ZONE_LABEL } from '../core/constants.js';
+import { DETAIL_TARGET_PLACED_FIGURE } from '../error.js';
 
 const SCENARIO_LABELS = Object.freeze({
   'library-conflict': '(a) ライブラリ内の衝突',
@@ -43,6 +44,7 @@ const LOCATION_LABELS = Object.freeze({
   shaftWallMaterial: '昇降路壁材',
   ceilingZone: '天井区画',
   kneeDrop: '腰壁・垂れ壁',
+  placedFigure: DETAIL_TARGET_PLACED_FIGURE,
   opening: '建具',
   columns: '柱',
   beams: '梁',

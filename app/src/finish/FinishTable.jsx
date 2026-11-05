@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useScrollIntoViewWhenActive } from '../ui/useScrollIntoViewWhenActive.js';
 import { StairTab } from './stair/StairTab.jsx';
 import { EquipmentTab } from './equipment/EquipmentTab.jsx';
+import { PlacedFigureTab } from './placedFigure/PlacedFigureTab.jsx';
 import { RoomDeleteConfirm } from './RoomDeleteConfirm.jsx';
 import { RoofGroup, MainRoofGroup, RoofZoneGroup } from './roof/RoofGroup.jsx';
 import { roofZoneGroupInputs } from './roof/roofZones.js';
@@ -203,6 +204,7 @@ const TABS = [
   { id: 'fittings',  label: '外部建具' },
   { id: 'structure', label: '構造' },
   { id: 'equipment', label: '機械器具' },
+  { id: 'placedFigure', label: '衛生・家具・空調' },
   { id: 'accessory', label: '附帯' },
   { id: 'common',    label: '共通仕様' },
 ];
@@ -391,6 +393,8 @@ export const FinishTable = observer(({
   useEffect(() => { if (mode.selectedStairId) setActiveTab('stair'); }, [mode.selectedStairId]);
   // 昇降機器具が選択されたら「機械器具」タブへ自動切替
   useEffect(() => { if (mode.selectedEquipmentId) setActiveTab('equipment'); }, [mode.selectedEquipmentId]);
+  // 姿図の配置が選択されたら「衛生・家具・空調」タブへ自動切替
+  useEffect(() => { if (mode.selectedPlacedFigureId) setActiveTab('placedFigure'); }, [mode.selectedPlacedFigureId]);
   // 部屋が選択されたら「内部」タブへ自動切替（階段選択時は階段タブが勝つ。宣言順で下の effect が
   // 後に評価されるため、両方セットされた場合はここで内部タブに切り替わらないよう明示的にガードする）
   // 屋外部屋（階段以外）は外部タブが担当するため、選択時はそちらへ切り替える。
@@ -466,6 +470,8 @@ export const FinishTable = observer(({
             onDeleteEquipment={onDeleteEquipment}
             onChangeEquipmentUsage={onChangeEquipmentUsage}
           />
+        : activeTab === 'placedFigure'
+        ? <PlacedFigureTab graph={graph} mode={mode} />
         : activeTab === 'accessory'
         ? <EmptyTabPlaceholder message="附帯は未対応です" />
         : <ExteriorTable

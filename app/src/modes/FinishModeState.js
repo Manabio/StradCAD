@@ -42,6 +42,12 @@ import { ceilingStepHeightsByOwner } from '../ceiling/ceilingSurfaces.js';
 import { floorStepHeightsByOwner } from '../elevation/elevationStepFace.js';
 import { detailFigureCatalog } from '../openings/openingCatalog.js';
 import { REMOVED_MATERIALS } from '../catalog/legacyMaterialCodes.js';
+import { PlacedFigure } from '../core/placedFigure.js';
+import { PLACED_FIGURE_POSITION_STEP_MM, PLACED_FIGURE_ROTATION_STEP_DEG, FULL_TURN_DEG } from '../core/constants.js';
+import {
+  addPlacedFigure as addPlacedFigureTo, updatePlacedFigure as updatePlacedFigureIn, removePlacedFigure as removePlacedFigureFrom,
+} from '../finish/placedFigure/placedFigureOps.js';
+import { collectPlacedFigureFailures } from '../finish/placedFigure/placedFigureFitCheck.js';
 
 function setsEqual(a, b) {
   if (a.size !== b.size) return false;
@@ -90,6 +96,8 @@ export class FinishModeState {
   // 「屋根区画を指定」中か（外部タブの主屋根の見出しのトグル）。真の間は平面のなぞりが区画の作成・選択になり、
   // 部屋・階段・器具の選択はしない。最上階（とその検討案）でだけ真にできる。モード・階の切替で作り直されるので持ち越さない。
   roofZonePickActive = false;
+  placingFigureKey = null;      // 配置待ちの姿図のキー（タブの［配置］で立つ。次の平面タップで置いて解く。屋根区画の指定とは排他）
+  selectedPlacedFigureId = null; // 選択中の姿図の配置（graph.placedFigures の id）。部屋・階段・器具・屋根区画の選択とは排他
 
   // ---- 直下階の階段（見下げ表示のヒット判定用。init() で peek しロード） ----
   lowerStairs = []; // Array<{ stair, cellBounds }>（cellBounds は下階graphで解決したワールド矩形配列）
@@ -163,6 +171,16 @@ export class FinishModeState {
       selectedEquipmentId: observable,
       selectedRoofZoneId: observable,
       roofZonePickActive: observable,
+      placingFigureKey: observable,
+      selectedPlacedFigureId: observable,
+      beginFigurePlacement: action,
+      cancelFigurePlacement: action,
+      selectPlacedFigure: action,
+      updatePlacedFigure: action,
+      rotatePlacedFigure: action,
+      togglePlacedFigureMirror: action,
+      removePlacedFigure: action,
+      setPlacedFigureNote: action,
       roofZoneOutlines: computed,
       roofZonePicking: computed,
       setRoofZonePick: action,
@@ -278,7 +296,7 @@ export class FinishModeState {
       ...this._buildUnresolvedCodeRows(CatalogKind.INTERIOR_MASTER, interiorMasters, [...interiorMasters.values()], interiorMissingUsage),
       ...this._buildUnresolvedCodeRows(CatalogKind.BOUNDARY_MASTER, boundaryMasters, [...boundaryMasters.values()], boundaryMissingUsage),
       ...this._buildUnresolvedCodeRows(CatalogKind.DETAIL_FIGURE, detailFigureMap, [...detailFigureMap.values()], detailMissingUsage,
-        { detailFitFailures: this._roomDetailFitFailures(materialMap) }),
+        { detailFitFailures: [...this._roomDetailFitFailures(materialMap), ...this._placedFigureFitFailures()] }),
     ];
 
     runInAction(() => {
@@ -338,6 +356,20 @@ export class FinishModeState {
       ].filter(f => f.wallThickness !== undefined || f.stepHeightMm !== undefined);
     } catch (err) {
       console.error('[finish] 部屋の取り合いの詳細図の合わせ込み検査に失敗:', err);
+      return [];
+    }
+  }
+
+  /**
+   * 自階の姿図の配置（graph.placedFigures）の図を配置先に合わせられない通知（detail-fit-failed の行）の元。
+   * 参照切れは unresolved-code 側で出すので、ここでは分類違い・基準の供給失敗・fit 失敗だけを返す。
+   * _roomDetailFitFailures の絞り（壁厚・段差高さを持つ行だけ）は通さない。集計の失敗は仕上げモードに入れなくする理由にしない（空を返す）。
+   */
+  _placedFigureFitFailures() {
+    try {
+      return collectPlacedFigureFailures(this.graph.placedFigures);
+    } catch (err) {
+      console.error('[finish] 姿図の配置の合わせ込み検査に失敗:', err);
       return [];
     }
   }
@@ -751,6 +783,8 @@ export class FinishModeState {
     // namingIsNew（新規部屋）なら現行どおり削除、既存部屋なら選択維持のまま閉じるだけ（cancelNaming参照）。
     if (this.namingRoomId) this.cancelNaming(this.namingRoomId);
 
+    // 配置待ち中はタップ点に置くだけ（dragState を作らない）。屋根区画より先
+    if (this.placingFigureKey) { this._placeFigureAt(wx, wy); return; }
     // 屋根区画の指定中は優先順位の判定（昇降機・屋根・階段・部屋）に入らず、建物範囲のセルのなぞりだけを始める。
     if (this.roofZonePicking) { this._startRoofZonePick(wx, wy); return; }
 
@@ -1006,6 +1040,7 @@ export class FinishModeState {
     this.selectedRoomId  = roomId;
     this.selectedEquipmentId = null;
     this.selectedRoofZoneId = null;
+    this.selectedPlacedFigureId = null;
   }
 
   /**
@@ -1024,12 +1059,14 @@ export class FinishModeState {
     this.selectedStairId = null;
     this.selectedEquipmentId = null;
     this.selectedRoofZoneId = null;
+    this.selectedPlacedFigureId = null;
   }
 
   // ---- 屋根区画（平面で指定する。最上階の外部タブの主屋根の見出しのトグルが入口） ----
 
   /** 区画の指定モードを切り替える。最上階（とその検討案）以外では真にならない。偽にするときは途中のなぞりも捨てる。 */
   setRoofZonePick(on) {
+    if (on) this.placingFigureKey = null; // 配置待ちとは排他（片方を始めると他方を解く）
     this.roofZonePickActive = !!on && isTopFloorPlane(this.project, this.graph.plane);
     if (!this.roofZonePickActive && this.dragState?.roofZoneFootprint) this.dragState = null;
   }
@@ -1052,6 +1089,73 @@ export class FinishModeState {
     this.selectedRoomId = null;
     this.selectedStairId = null;
     this.selectedEquipmentId = null;
+    this.selectedPlacedFigureId = null;
+  }
+
+  // ---- 姿図の配置（タブ「衛生・家具・空調」が入口。graph.placedFigures） ----
+
+  /** 配置待ちを始める（次の平面タップで key の図を置く）。空でない文字列以外は無視。屋根区画の指定は解く。 */
+  beginFigurePlacement(key) {
+    if (typeof key !== 'string' || key === '') return;
+    this.setRoofZonePick(false);
+    this.placingFigureKey = key;
+  }
+
+  cancelFigurePlacement() { this.placingFigureKey = null; }
+
+  /** 配置待ちの図を (wx, wy) を PLACED_FIGURE_POSITION_STEP_MM で丸めた点に置き、配置待ちを解いて置いた図を選択する。1回で undo 1エントリ。 */
+  _placeFigureAt(wx, wy) {
+    const figureKey = this.placingFigureKey;
+    const x = Math.round(wx / PLACED_FIGURE_POSITION_STEP_MM) * PLACED_FIGURE_POSITION_STEP_MM;
+    const y = Math.round(wy / PLACED_FIGURE_POSITION_STEP_MM) * PLACED_FIGURE_POSITION_STEP_MM;
+    const id = crypto.randomUUID();
+    withFinishUndo(this.graph, () => this.graph.setPlacedFigures(
+      addPlacedFigureTo(this.graph.placedFigures, new PlacedFigure({ id, figureKey, x, y })),
+    ));
+    this.placingFigureKey = null;
+    this.selectPlacedFigure(id);
+  }
+
+  /** 配置を選択する（部屋・階段・器具・屋根区画の選択は外す）。null で選択解除。 */
+  selectPlacedFigure(id) {
+    this.selectedPlacedFigureId = id;
+    if (id === null) return;
+    this.selectedRoomId = null;
+    this.selectedStairId = null;
+    this.selectedEquipmentId = null;
+    this.selectedRoofZoneId = null;
+  }
+
+  /** 配置の項目（x・y・zMm・rotationDeg・mirror・note など）を直す。無い id は何もしない（undo も積まない）。1回で undo 1エントリ。 */
+  updatePlacedFigure(id, changes) {
+    if (updatePlacedFigureIn(this.graph.placedFigures, id, changes) === null) return;
+    withFinishUndo(this.graph, () => this.graph.setPlacedFigures(updatePlacedFigureIn(this.graph.placedFigures, id, changes)));
+  }
+
+  /** 配置を PLACED_FIGURE_ROTATION_STEP_DEG だけ（画面時計回りに）回す。 */
+  rotatePlacedFigure(id) {
+    const pf = this.graph.placedFigures.find(p => p.id === id);
+    if (!pf) return;
+    this.updatePlacedFigure(id, { rotationDeg: (pf.rotationDeg + PLACED_FIGURE_ROTATION_STEP_DEG) % FULL_TURN_DEG });
+  }
+
+  togglePlacedFigureMirror(id) {
+    const pf = this.graph.placedFigures.find(p => p.id === id);
+    if (!pf) return;
+    this.updatePlacedFigure(id, { mirror: !pf.mirror });
+  }
+
+  /** 配置を消す（確認なし。undo で戻る）。選択中なら選択も外す。無い id は何もしない。 */
+  removePlacedFigure(id) {
+    if (removePlacedFigureFrom(this.graph.placedFigures, id) === null) return;
+    withFinishUndo(this.graph, () => this.graph.setPlacedFigures(removePlacedFigureFrom(this.graph.placedFigures, id)));
+    if (this.selectedPlacedFigureId === id) this.selectedPlacedFigureId = null;
+  }
+
+  /** 備考の入力中の更新。undo は呼び出し側のフォーカス〜ブラーの field undo（beginFieldUndo／endFieldUndo）に任せる。 */
+  setPlacedFigureNote(id, note) {
+    const next = updatePlacedFigureIn(this.graph.placedFigures, id, { note });
+    if (next !== null) this.graph.setPlacedFigures(next);
   }
 
   /**
@@ -1280,6 +1384,7 @@ export class FinishModeState {
       this.selectedRoomId     = null;
       this.selectedStairId    = null;
       this.selectedEquipmentId = equipmentId;
+      this.selectedPlacedFigureId = null;
       this.lastNamingUndoEntry = pushFinishUndo(this.graph, undoBefore);
       return null;
     }
@@ -1324,6 +1429,7 @@ export class FinishModeState {
       this._syncExteriorRows(room);
       this.selectedRoomId = room.id;
       this.selectedEquipmentId = null;
+      this.selectedPlacedFigureId = null;
     } else {
       if (isLeavingStair(room, feature)) this._removeLinkedStair(roomId); // STAIR → null/void: 連動Stairを削除
       room.setFeature(feature ?? null); // ROOF 以外へ変えれば roofSpec は捨てられる（I1）
@@ -1334,6 +1440,7 @@ export class FinishModeState {
       this.selectedRoomId  = roomId;
       this.selectedStairId = null;
       this.selectedEquipmentId = null;
+      this.selectedPlacedFigureId = null;
       // 屋外部屋（階段・非階段共通）→ 外部タブに部位の行を自動追加／更新。屋内へ切替 → 連動行を削除。
       this._syncExteriorRows(room);
     }
@@ -1606,6 +1713,7 @@ export class FinishModeState {
     this.selectedRoomId = roomId && this.graph.roomMap.has(roomId) ? roomId : null;
     this.selectedEquipmentId = null;
     this.selectedRoofZoneId = null;
+    this.selectedPlacedFigureId = null;
   }
 
   // ---- 昇降機器具 ----
@@ -1616,6 +1724,7 @@ export class FinishModeState {
     this.selectedRoomId  = null;
     this.selectedStairId = null;
     this.selectedRoofZoneId = null;
+    this.selectedPlacedFigureId = null;
   }
 
   /**
@@ -1739,6 +1848,7 @@ export class FinishModeState {
     });
     this.selectedStairId = null;
     this.selectedRoomId  = room.id;
+    this.selectedPlacedFigureId = null;
   }
 
   get isDragging()   { return this.dragState !== null; }
@@ -1763,7 +1873,9 @@ export class FinishModeState {
     this._pendingDialogUndo = null;
     this.selectedEquipmentId = null;
     this.selectedRoofZoneId = null;
+    this.selectedPlacedFigureId = null;
     this.roofZonePickActive = false;
+    this.placingFigureKey = null;
     // 材データを破棄（仕上げモード離脱時）
     this.materials       = null;
     this.materialMap     = null;

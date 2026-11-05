@@ -822,6 +822,8 @@ export const FULL_TURN_DEG = 360;
 export const PLACED_FIGURE_ROTATION_STEP_DEG = 90;
 /** 姿図の配置で図が解決できないとき配置点に出す印（×）の半幅（画面 px。拡大縮小に依らず画面で一定）。 */
 export const PLACED_FIGURE_MISSING_MARK_PX = 6;
+/** 姿図の配置点（平面のタップ位置）を丸める刻み（mm）。 */
+export const PLACED_FIGURE_POSITION_STEP_MM = 1;
 /** 字句分解のエラーに載せる不正な行の先頭の長さ（巨大な行を持ち回らない）。 */
 export const DXF_ERROR_TEXT_MAX = 32;
 /** 出所欄（メーカー・シリーズ・ライセンス注記）の項目名。 */

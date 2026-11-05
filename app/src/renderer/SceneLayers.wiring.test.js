@@ -70,7 +70,7 @@ test('【配線】SceneLayers は VoidLayer を使わず、<PlanSolidsLayer abov
 // 姿図の配置（S10 P3）: PlanSolidsLayer の直後・EquipmentSymbolLayer の前。表示するモードは shouldShowPlacedFigures、向きは planSectionDirection(appMode)。
 test('【配線】SceneLayers は <PlacedFiguresLayer> を PlanSolidsLayer の後・EquipmentSymbolLayer の前に、述語と向きつきで1行まるごと置く', () => {
   assert.match(codeOnly,
-    /^\s*\{shouldShowPlacedFigures\(appMode\) && <PlacedFiguresLayer graph=\{graph\} viewport=\{viewport\} direction=\{planSectionDirection\(appMode\)\} \/>\}\s*$/m);
+    /^\s*\{shouldShowPlacedFigures\(appMode\) && <PlacedFiguresLayer graph=\{graph\} viewport=\{viewport\} direction=\{planSectionDirection\(appMode\)\} selectedId=\{appMode === 'finish' \? \(mode\?\.selectedPlacedFigureId \?\? null\) : null\} \/>\}\s*$/m);
   assert.equal((codeOnly.match(/<PlacedFiguresLayer\b/g) || []).length, 1);
   const solidsAt = codeOnly.indexOf('<PlanSolidsLayer');
   const placedAt = codeOnly.indexOf('<PlacedFiguresLayer');
