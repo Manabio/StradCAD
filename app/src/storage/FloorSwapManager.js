@@ -281,6 +281,8 @@ export class FloorSwapManager {
       void graph.footingMap.size;
       // 屋根区画の作成・削除（配列の差替え）で dirty。spec の中身は見ない（項目の確定側が markDirty を明示する）。
       void graph.roofZones;
+      // 姿図の配置の追加・削除・移動（配列の差替え）で dirty
+      void graph.placedFigures;
       void graph.sleeveMap.size;
       void graph.columnAxisOffsets.size;
       void graph.clEccentricities.size;

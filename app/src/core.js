@@ -75,6 +75,7 @@ export {
 
 export { RoofSpec, ROOF_SPEC_KEYS, isDefaultRoofSpec } from './core/roofSpec.js';
 export { RoofZone, ROOF_ZONE_KEYS, restoreRoofZones } from './core/roofZone.js';
+export { PlacedFigure, PLACED_FIGURE_KEYS, normalizePlacedFigureRotation, restorePlacedFigures } from './core/placedFigure.js';
 
 // ================================================================
 // CEILING ZONE (天井区画) — core/ceilingZone.js。Room.ceilingZones が持つ。

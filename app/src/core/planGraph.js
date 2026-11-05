@@ -143,6 +143,9 @@ export class PlanGraph {
     // 屋根区画（最上階の主屋根を区画ごとに指定する。区画に入らないセルは mainRoofSpec に従う）。
     // 凍結配列を差し替える方式（observable.ref）。無いときは空で、保存データへ何も書かない。
     this.roofZones = Object.freeze([]);
+    // 姿図の配置（PlacedFigure。部分詳細図の姿図を平面上に置いた実体）。凍結配列を差し替える方式（observable.ref）。
+    // 無いときは空で、保存データへ何も書かない。
+    this.placedFigures = Object.freeze([]);
 
     // 部屋の既定値（共通仕様タブ per-floor 設定）。部屋側が null のとき参照される。
     this.defaultFloorLevel    = DEFAULT_ROOM_FLOOR_LEVEL;    // FL初期値: 階FLからの相対高さmm
@@ -276,6 +279,8 @@ export class PlanGraph {
       setMainRoofSpec:          action,
       roofZones:                observable.ref,
       setRoofZones:             action,
+      placedFigures:            observable.ref,
+      setPlacedFigures:         action,
       setExteriorWallBacking:   action,
       setInteriorWallBacking:   action,
       setCeilingBacking:        action,
@@ -489,6 +494,8 @@ export class PlanGraph {
   setMainRoofSpec(spec)      { this.mainRoofSpec      = spec; }
   /** 屋根区画の一覧（RoofZone[]）を差し替える。常に凍結配列にする。 */
   setRoofZones(zones)        { this.roofZones         = Object.freeze([...zones]); }
+  /** 姿図の配置の一覧（PlacedFigure[]）を差し替える。常に凍結配列にする。 */
+  setPlacedFigures(list)     { this.placedFigures     = Object.freeze([...list]); }
   setDefaultFloorLevel(mm)     { this.defaultFloorLevel    = mm; }
   setDefaultCeilingHeight(mm)  { this.defaultCeilingHeight = mm; }
   setFloorDatum(mm) { this.floorDatum = mm; }
@@ -1110,6 +1117,7 @@ export class PlanGraph {
     this.shaftSoundproof     = DEFAULT_SHAFT_SOUNDPROOF;
     this.mainRoofSpec        = new RoofSpec();
     this.roofZones           = Object.freeze([]);
+    this.placedFigures       = Object.freeze([]);
     this.defaultFloorLevel   = DEFAULT_ROOM_FLOOR_LEVEL;
     this.defaultCeilingHeight = DEFAULT_ROOM_CEILING_HEIGHT;
     this.floorDatum          = 0;

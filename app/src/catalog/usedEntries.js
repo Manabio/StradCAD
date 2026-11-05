@@ -84,7 +84,7 @@ function implicitDetailFigureKeys(snapshot) {
  * - section: columns/beams/structuralWalls/slabs/footings の sectionDefId
  * - openingSubType: openings[] の `${category}:${subType}`（catalogKinds.js の keyOf と同型）
  * - fixtureSymbol: openings[].fixtureType（空でない文字列のみ）
- * - detailFigure: openings[].detailRefs の値（建具個別の上書き。S6a）と rooms[].detailRefs の値（部屋の取り合い。S8a）と kneeDropWalls[].detailRefs の値（腰壁の天端・垂れ壁の下端。S8b-1）。
+ * - detailFigure: openings[].detailRefs の値（建具個別の上書き。S6a）と rooms[].detailRefs の値（部屋の取り合い。S8a）と kneeDropWalls[].detailRefs の値（腰壁の天端・垂れ壁の下端。S8b-1）と placedFigures[].figureKey（姿図の配置）。
  *   建具記号経由の使用は expandUsedDetailFiguresTransitively が推移展開する。
  *   加えて暗黙の既定で使う組込みキー（巾木高さのある部屋→巾木／腰壁の記録→天板。S8d／片開き戸→方立・上枠。S8e）も数える（implicitDetailFigureKeys）
  * @returns {{ interiorMaster: Set<string>, boundaryMaster: Set<string>, section: Set<string>,

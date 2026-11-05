@@ -12,7 +12,7 @@ import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 import { snapshotRoomsState, restoreRoomsState } from './roomReinterpret.js';
 import { snapshotUnderSplitCLs, restoreUnderSplitCLs } from './stair/stairUnderSplit.js';
-import { ExteriorFinishRow, EquipmentRow, RoofSpec, restoreRoofZones } from '@core';
+import { ExteriorFinishRow, EquipmentRow, RoofSpec, restoreRoofZones, restorePlacedFigures } from '@core';
 
 const EXTERIOR_CATEGORIES = ['exteriorRows', 'exteriorFittingRows', 'structureRows'];
 // roomId（階段連動リンク）も対象に含める。含めないと undo → redo で行は残っても
@@ -87,6 +87,8 @@ export function snapshotFinishState(graph) {
     mainRoof: graph.mainRoofSpec.toData(),
     // 屋根区画（別キー。値は RoofZone.toData() の plain。区画なしは []）
     roofZones: graph.roofZones.map(z => z.toData()),
+    // 姿図の配置（別キー。値は PlacedFigure.toData() の plain。配置なしは []）
+    placedFigures: graph.placedFigures.map(p => p.toData()),
     perFloor: Object.fromEntries(Object.keys(PER_FLOOR_SETTERS).map(f => [f, graph[f]])),
   };
 }
@@ -106,6 +108,8 @@ export function restoreFinishState(graph, snap) {
   graph.setMainRoofSpec(RoofSpec.fromData(snap.mainRoof));
   // 屋根区画（旧スナップショット＝キー欠落は []）。fromData 経由で RoofSpec を作り直す
   graph.setRoofZones(restoreRoofZones(snap.roofZones ?? []));
+  // 姿図の配置（旧スナップショット＝キー欠落は []）
+  graph.setPlacedFigures(restorePlacedFigures(snap.placedFigures ?? []));
   restoreStairs(graph, snap.stairs);
   restoreUnderSplitCLs(graph, currentSplitCLs, snap.splitCLs);
   for (const cat of EXTERIOR_CATEGORIES) {

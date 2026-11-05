@@ -587,7 +587,8 @@ function rewriteFixtureSymbolRefs(snapshot, table) {
 // ----------------------------------------------------------------
 // detailFigure: openings[].detailRefs（建具 1 件の部分詳細図の上書き。{[slot]: 詳細図キー}）の値（S6a）と、
 // rooms[].detailRefs（部屋の取り合いの割当て。S8a。location 'room'・roomId・slot）と
-// kneeDropWalls[].detailRefs（腰壁の天端・垂れ壁の下端。S8b-1。location 'kneeDrop'・key・slot）。
+// kneeDropWalls[].detailRefs（腰壁の天端・垂れ壁の下端。S8b-1。location 'kneeDrop'・key・slot）と
+// placedFigures[].figureKey（姿図の配置。location 'placedFigure'・placedFigureId・slot は null）。
 // slot は問わない（全 slot をデータとして通す）。対象は空でない文字列の値だけ。
 // カタログ→カタログの参照（建具記号エントリの detailFigures）はスナップショットに無いので、
 // ここでは扱わず incomingReconcile.js applyReconcilePlan が読み替える。
@@ -627,7 +628,27 @@ function enumerateDetailFigureRefs(snapshot) {
       if (typeof key === 'string' && key !== '') refs.push({ code: key, location: 'kneeDrop', key: kd.key, slot });
     }
   }
+  // 姿図の配置（placedFigures[].figureKey。location 'placedFigure'・placedFigureId。slot は持たない＝null）
+  for (const pf of snapshot.placedFigures ?? []) {
+    if (typeof pf?.figureKey === 'string' && pf.figureKey !== '') {
+      refs.push({ code: pf.figureKey, location: 'placedFigure', placedFigureId: pf.id, slot: null });
+    }
+  }
   return refs;
+}
+
+function normalizePlacedFigureRefs(list, table, unresolved) {
+  if (!Array.isArray(list)) return list;
+  let changedAny = false;
+  const next = list.map(pf => {
+    const key = pf?.figureKey;
+    if (typeof key !== 'string' || key === '') return pf;
+    const mapped = normalizeCode(key, table, unresolved, { location: 'placedFigure', placedFigureId: pf.id, slot: null });
+    if (mapped === key) return pf;
+    changedAny = true;
+    return { ...pf, figureKey: mapped };
+  });
+  return changedAny ? next : list;
 }
 
 function normalizeKneeDropDetailRefs(walls, table, unresolved) {
@@ -710,8 +731,11 @@ function rewriteDetailFigureRefs(snapshot, table) {
   const openings = normalizeDetailRefsOf(snapshot.openings, table, unresolved);
   const rooms = normalizeRoomDetailRefs(snapshot.rooms, table, unresolved);
   const kneeDropWalls = normalizeKneeDropDetailRefs(snapshot.kneeDropWalls, table, unresolved);
-  if (openings === snapshot.openings && rooms === snapshot.rooms && kneeDropWalls === snapshot.kneeDropWalls) return { snapshot, unresolved };
+  const placedFigures = normalizePlacedFigureRefs(snapshot.placedFigures, table, unresolved);
+  if (openings === snapshot.openings && rooms === snapshot.rooms && kneeDropWalls === snapshot.kneeDropWalls
+    && placedFigures === snapshot.placedFigures) return { snapshot, unresolved };
   const next = { ...snapshot };
+  if (placedFigures !== snapshot.placedFigures) next.placedFigures = placedFigures;
   if (openings !== snapshot.openings) next.openings = openings;
   if (rooms !== snapshot.rooms) next.rooms = rooms;
   if (kneeDropWalls !== snapshot.kneeDropWalls) next.kneeDropWalls = kneeDropWalls;

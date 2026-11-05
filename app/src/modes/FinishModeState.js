@@ -385,6 +385,10 @@ export class FinishModeState {
           if (!appMap.has(key)) usage.push({ code: key, location: 'kneeDrop', key: recKey, slot });
         }
       }
+      // 姿図の配置（placedFigures の figureKey。slot は持たない）
+      for (const pf of this.graph.placedFigures ?? []) {
+        if (!appMap.has(pf.figureKey)) usage.push({ code: pf.figureKey, location: 'placedFigure', placedFigureId: pf.id, slot: null });
+      }
       return usage;
     }
     return [];

@@ -42,7 +42,7 @@ const SHAFT_SOUNDPROOF_ENC = { none: 0, insulation: 1 };
 // フィールドインデックス定数
 // ================================================================
 
-// GraphSnapshot (root): 57 フィールド
+// GraphSnapshot (root): 58 フィールド
 const GS = {
   CLS: 0, PTS: 1, WALLS: 2, DIAGS: 3, VLINES: 4, HLINES: 5, ARCS: 6, CIRCS: 7, DIMS: 8, ROOMS: 9, ROOM_ORDER: 10,
   // 11 は旧 INTERIOR_WALL_PANEL（内壁面材の per-floor 設定。部屋の壁材へ移行し廃止。slot 予約）
@@ -98,6 +98,8 @@ const GS = {
   EXCLUDED_SLAB_BEAM_SLOTS: 55,
   // 屋根区画（RZ テーブルの vector。per-floor。末尾追加）。区画が無いときは vector 自体を書かない（既存文書のバイト列は不変）。
   ROOF_ZONES: 56,
+  // 姿図の配置（PF テーブルの vector。per-floor。末尾追加）。配置が無いときは vector 自体を書かない（既存文書のバイト列は不変）。
+  PLACED_FIGURES: 57,
 };
 
 // Stair: 20 フィールド
@@ -155,6 +157,10 @@ const RS = {
 // RoofZone（屋根区画。PlanGraph.roofZones）: 3 フィールド。項目集合は core/roofZone.js の ROOF_ZONE_KEYS が唯一の定義。
 // SPEC は RS テーブルの入れ子（下屋・主屋根と共用の writeRoofSpec/readRoofSpec）。正規化は復元側の restoreRoofZones。
 const RZ = { ID: 0, CELLS: 1, SPEC: 2 };
+
+// PlacedFigure（姿図の配置。PlanGraph.placedFigures）: 8 フィールド。項目集合は core/placedFigure.js の PLACED_FIGURE_KEYS が唯一の定義。
+// NOTE は空なら書かない（読みは ''）。正規化は復元側の restorePlacedFigures。
+const PF = { ID: 0, FIGURE_KEY: 1, X: 2, Y: 3, ROT: 4, MIRROR: 5, Z: 6, NOTE: 7 };
 
 // CeilingZone（天井区画。Room.ceilingZones）: 8 フィールド。項目集合は core/ceilingZone.js の CEILING_ZONE_KEYS が唯一の定義。
 // HAS_HEIGHT/HEIGHT は floorLevel と同じ HAS 方式（heightMm null＝部屋の CH）。SHAPE は 'flat' 以外のときだけ書く（無ければ読みは 'flat'）。
@@ -782,6 +788,22 @@ function writeRoofZone(b, z) {
   b.addFieldOffset(RZ.ID,    sId,      0);
   b.addFieldOffset(RZ.CELLS, cellsVec, 0);
   b.addFieldOffset(RZ.SPEC,  specOff,  0);
+  return b.endObject();
+}
+
+function writePlacedFigure(b, p) {
+  const sId   = b.createString(p.id);
+  const sKey  = b.createString(p.figureKey);
+  const sNote = p.note ? b.createString(p.note) : 0; // 空は書かない
+  b.startObject(8);
+  b.addFieldOffset(PF.ID,         sId,   0);
+  b.addFieldOffset(PF.FIGURE_KEY, sKey,  0);
+  b.addFieldFloat64(PF.X,         p.x,   0.0);
+  b.addFieldFloat64(PF.Y,         p.y,   0.0);
+  b.addFieldFloat64(PF.ROT,       p.rotationDeg, 0.0);
+  b.addFieldInt8(PF.MIRROR,       p.mirror ? 1 : 0, 0);
+  b.addFieldFloat64(PF.Z,         p.zMm, 0.0);
+  b.addFieldOffset(PF.NOTE,       sNote, 0);
   return b.endObject();
 }
 
@@ -1617,6 +1639,21 @@ function readRoofZone(bb, tablePos) {
   };
 }
 
+// 姿図の配置の plain 表現（PlacedFigure.toData と同じキー集合）。値の正規化は復元側の restorePlacedFigures。
+function readPlacedFigure(bb, tablePos) {
+  const r = makeReader(bb, tablePos);
+  return {
+    id:          r.str(PF.ID),
+    figureKey:   r.str(PF.FIGURE_KEY),
+    x:           r.f64(PF.X),
+    y:           r.f64(PF.Y),
+    rotationDeg: r.f64(PF.ROT),
+    mirror:      r.i8(PF.MIRROR) !== 0,
+    zMm:         r.f64(PF.Z),
+    note:        r.str(PF.NOTE),
+  };
+}
+
 // 天井区画の plain 表現（CeilingZone.toData と同じキー集合）。値の正規化は復元側の restoreCeilingZones。
 function readCeilingZone(bb, tablePos) {
   const r = makeReader(bb, tablePos);
@@ -2060,7 +2097,11 @@ export function encode(snapshot) {
   const roofZones = snapshot.roofZones ?? [];
   const roofZonesVec = roofZones.length ? writeVec(b, roofZones, writeRoofZone) : 0;
 
-  b.startObject(57);
+  // 配置が無いときも vector を作らない（姿図を置かない文書のバイト列は不変）
+  const placedFigures = snapshot.placedFigures ?? [];
+  const placedFiguresVec = placedFigures.length ? writeVec(b, placedFigures, writePlacedFigure) : 0;
+
+  b.startObject(58);
   b.addFieldOffset(GS.CLS,        clVec,        0);
   b.addFieldOffset(GS.PTS,        ptVec,        0);
   b.addFieldOffset(GS.WALLS,      wallVec,      0);
@@ -2117,6 +2158,7 @@ export function encode(snapshot) {
   b.addFieldFloat64(GS.GL_BELOW_1FL_MM, snapshot.glBelow1FlMm ?? 0, 0.0);
   b.addFieldOffset(GS.EXCLUDED_SLAB_BEAM_SLOTS, excludedSlabBeamSlotsVec, 0);
   b.addFieldOffset(GS.ROOF_ZONES, roofZonesVec, 0);
+  b.addFieldOffset(GS.PLACED_FIGURES, placedFiguresVec, 0);
   const root = b.endObject();
 
   b.finish(root);
@@ -2203,5 +2245,6 @@ export function decode(bytes) {
     mainRoofSpec:        readRoofSpec(bb, r.nested(GS.MAIN_ROOF_SPEC)),
     glBelow1FlMm:        r.f64(GS.GL_BELOW_1FL_MM),
     roofZones:           r.vec(GS.ROOF_ZONES, readRoofZone),
+    placedFigures:       r.vec(GS.PLACED_FIGURES, readPlacedFigure),
   };
 }

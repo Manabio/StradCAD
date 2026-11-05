@@ -1,5 +1,5 @@
 import { runInAction } from 'mobx';
-import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, isDefaultRoofSpec, restoreCeilingZones, restoreRoofZones } from '@core';
+import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, isDefaultRoofSpec, restoreCeilingZones, restoreRoofZones, restorePlacedFigures } from '@core';
 import { encode, decode, countClEccentricities } from './schema/graphFbs.js';
 import { normalizeDetailRefs } from './core/detailRefs.js';
 import { kneeDropFrontSideOf } from './core/kneeDropRecord.js';
@@ -183,6 +183,8 @@ function buildSnapshot(graph) {
     mainRoofSpec:        isDefaultRoofSpec(graph.mainRoofSpec) ? null : graph.mainRoofSpec.toData(),
     // 屋根区画。区画なしは []（FBS は vector 自体を書かない）。キー集合は RoofZone.toData が唯一の定義
     roofZones:           graph.roofZones.map(z => z.toData()),
+    // 姿図の配置。配置なしは []（FBS は vector 自体を書かない）。キー集合は PlacedFigure.toData が唯一の定義
+    placedFigures:       graph.placedFigures.map(p => p.toData()),
     defaultFloorLevel:    graph.defaultFloorLevel,
     defaultCeilingHeight: graph.defaultCeilingHeight,
     floorDatum:          graph.floorDatum,
@@ -1007,6 +1009,7 @@ function applySnapshot(graph, snapshot) {
     if (snapshot.shaftSoundproof)     graph.setShaftSoundproof(snapshot.shaftSoundproof);
     if (snapshot.mainRoofSpec)        graph.setMainRoofSpec(RoofSpec.fromData(snapshot.mainRoofSpec)); // 無ければ clear() の既定値
     graph.setRoofZones(restoreRoofZones(snapshot.roofZones)); // 旧データ（キー欠落）は []。正規化は restoreRoofZones
+    graph.setPlacedFigures(restorePlacedFigures(snapshot.placedFigures)); // 旧データ（キー欠落）は []。正規化は restorePlacedFigures
     if (snapshot.defaultFloorLevel != null) graph.setDefaultFloorLevel(snapshot.defaultFloorLevel);
     // CH初期値は 0/null を「未保存（旧データ）」とみなし clear() の既定(2400)を維持する
     if (snapshot.defaultCeilingHeight)      graph.setDefaultCeilingHeight(snapshot.defaultCeilingHeight);
