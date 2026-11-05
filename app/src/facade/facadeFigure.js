@@ -11,19 +11,27 @@ import { ElevationLineRole, FACE_LABEL_FONT_PX, CANVAS_BG_COLOR } from '../eleva
 import { facadeViews, facadeFloorProfiles, buildFacadeLines, projectedRoofSegments } from './facadeGeometry.js';
 import { FACADE_GL_MARK_APEX_DEG, FACADE_LEVEL_FONT_PX } from './facadeStyle.js';
 import { buildFacadeOpenings } from './facadeOpenings.js';
+import { buildFacadePlacedFigures, facadePlacedFiguresExtent } from './facadePlacedFigures.js';
 
 const DEG_TO_RAD = Math.PI / 180;
 
 const hasAnySegment = inputs => (inputs?.floors ?? []).some(f => (f.segments ?? []).length > 0);
 
 // 1面の建物の範囲（u の最小・最大、GL からの高さ）。屋根の線（見え隠れによらず全部。軒の出・棟を含む）も含める。何も無ければ null。
-function faceExtent(inputs, normal) {
+function faceExtent(inputs, normal, figureOf) {
   const profiles = facadeFloorProfiles(inputs, normal);
   if (profiles.length === 0) return null;
   let uMin = Infinity, uMax = -Infinity, zTop = -Infinity;
   for (const f of profiles) {
     for (const p of f.pieces) { uMin = Math.min(uMin, p.lo); uMax = Math.max(uMax, p.hi); }
     zTop = Math.max(zTop, f.zHiMm);
+  }
+  // 姿図の配置（S10 P6）の外接。建物の端から離れた配置が枠の外へ切れないよう範囲へ含める（GL より下は含めない）。
+  const placed = facadePlacedFiguresExtent(inputs, { normal }, { profiles, figureOf });
+  if (placed) {
+    uMin = Math.min(uMin, placed.uMin);
+    uMax = Math.max(uMax, placed.uMax);
+    zTop = Math.max(zTop, placed.zTop);
   }
   for (const s of projectedRoofSegments(inputs.roofs, normal)) {
     uMin = Math.min(uMin, s.u1, s.u2);
@@ -34,12 +42,14 @@ function faceExtent(inputs, normal) {
 }
 
 /**
- * 倍率決定用の建物の寸法（注記を含まない）。
+ * 倍率決定用の建物の寸法（注記を含まない。屋外の姿図の配置の外接を含む）。
+ * @param {object} inputs
+ * @param {{northAngleDeg?:number|null, figureOf?:Function}} [opts] figureOf＝姿図の配置の詳細図の解決（省略時は既定）。
  * @returns {{maxWidthMm:number, maxHeightMm:number, faces:Array<{direction:string, widthMm:number, heightMm:number}>}}
  */
-export function facadeExtentsMm(inputs, { northAngleDeg = null } = {}) {
+export function facadeExtentsMm(inputs, { northAngleDeg = null, figureOf } = {}) {
   const faces = facadeViews(northAngleDeg).map(view => {
-    const ext = hasAnySegment(inputs) ? faceExtent(inputs, view.normal) : null;
+    const ext = hasAnySegment(inputs) ? faceExtent(inputs, view.normal, figureOf) : null;
     return { direction: view.direction, widthMm: ext?.widthMm ?? 0, heightMm: ext?.heightMm ?? 0 };
   });
   return {
@@ -66,28 +76,29 @@ function glPrimitives(widthMm, { glExtendMm, glMarkMm }, bgColor) {
  * 4面（東・南・西・北の順）の図。外壁の線分が1本も無ければ []。
  * @param {object} inputs - buildFacadeInputs の返り値
  * @param {{northAngleDeg?:number|null, annotationMm?:{glExtendMm?:number, glMarkMm?:number, titleGapMm?:number},
- *   bgColor?:string, minFaceMm?:number, entryOf?:Function|null}} [opts]
+ *   bgColor?:string, minFaceMm?:number, entryOf?:Function|null, figureOf?:Function}} [opts]
  *   minFaceMm＝建具の姿図の見付1px保証（展開図と同じ elevationStyle.js faceGapLimitMm の値を呼び出し側が倍率から求めて渡す）。
  *   entryOf＝建具のカタログの解決（省略時は facadeOpenings.js の既定 findCatalogEntry）。
+ *   figureOf＝姿図の配置の詳細図の解決（省略時は facadePlacedFigures.js の既定 detailFigureEntry）。
  * @returns {Array<{direction:string, widthMm:number, heightMm:number,
  *   bounds:{minX:number,minY:number,maxX:number,maxY:number}, primitives:object[],
  *   openingCounts:{drawn:number, hidden:number, noEntry:number}}>}
  */
 export function buildFacadeModel(inputs, {
-  northAngleDeg = null, annotationMm, bgColor = CANVAS_BG_COLOR, minFaceMm = 0, entryOf = null,
+  northAngleDeg = null, annotationMm, bgColor = CANVAS_BG_COLOR, minFaceMm = 0, entryOf = null, figureOf,
 } = {}) {
   if (!hasAnySegment(inputs)) return [];
   const { glExtendMm = 0, glMarkMm = 0, titleGapMm = 0 } = annotationMm ?? {};
   const glZ = inputs.glZMm;
   return facadeViews(northAngleDeg).map(view => {
-    const ext = faceExtent(inputs, view.normal) ?? { uMin: 0, widthMm: 0, heightMm: 0 };
+    const ext = faceExtent(inputs, view.normal, figureOf) ?? { uMin: 0, widthMm: 0, heightMm: 0 };
     const { uMin, widthMm, heightMm } = ext;
     const primitives = buildFacadeLines(inputs, view)
       .map(l => line(l.x1 - uMin, glZ - l.z1, l.x2 - uMin, glZ - l.z2, l.role));
-    const openings = buildFacadeOpenings(inputs, view, {
-      uMin, profiles: facadeFloorProfiles(inputs, view.normal), minFaceMm, entryOf,
-    });
+    const profiles = facadeFloorProfiles(inputs, view.normal);
+    const openings = buildFacadeOpenings(inputs, view, { uMin, profiles, minFaceMm, entryOf });
     primitives.push(...openings.primitives);
+    primitives.push(...buildFacadePlacedFigures(inputs, view, { uMin, profiles, figureOf }));
     primitives.push(...glPrimitives(widthMm, { glExtendMm, glMarkMm }, bgColor));
     const titleY = -heightMm - titleGapMm;
     primitives.push(text(widthMm / 2, titleY, FACADE_TITLE_BY_DIRECTION[view.direction],

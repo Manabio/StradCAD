@@ -14,7 +14,9 @@
  * 建具（S3）: 各階の graph.openings のうち外壁の線分に乗るもの（facadeOpenings.js exteriorOpeningsOn）を、壁の座標（coord1/coord2）
  * とその階の FL を読み取りスコープ内で確定して floors[].openings に持たせる（姿図の組み立ては倍率が決まった後＝facadeFigure.js）。
  */
-import { FacadeSkipReason } from '../core/constants.js';
+import { FacadeSkipReason, RoomKind } from '../core/constants.js';
+import { buildCellToRoom, isEnclosureOutside } from '../finish/edgeClassify.js';
+import { worldToCell } from '../finish/gridCells.js';
 import { isBasementPlane } from '../structural/structureRules.js';
 import { exteriorGuideSegments } from '../finish/finishGuideGeometry.js';
 import { eaveTopZMm, resolveTopStoryHeightMm, STORY_HEIGHT_FALLBACK_MM } from '../floorHeights.js';
@@ -46,9 +48,10 @@ function exteriorSegmentsOf(graph) {
  * @param {{glBelow1FlMm?:number, planes?:Array}} project
  * @param {{roofRegionsOf?: (graph:object)=>{leanTo?:Array<object>, top?:Array<object>}}} [opts]
  * @returns {{ glZMm:number,
- *   floors: Array<{planeId:string, zLoMm:number, zHiMm:number,
+ *   floors: Array<{planeId:string, zLoMm:number, zHiMm:number, flMm:number,
  *     segments: Array<{isVertical:boolean, value:number, lo:number, hi:number, outwardSign:number, axisCLId:string, loopType:string}>,
- *     openings: Array<{opening:object, coord1:number, coord2:number, flMm:number, segment:object}>}>,
+ *     openings: Array<{opening:object, coord1:number, coord2:number, flMm:number, segment:object}>,
+ *     placedFigures: object[]}>,
  *   roofs: Array<{planeId:string} & object>,
  *   skipped: Array<{planeId:string, reason:string, message?:string, roofKey?:string}> }}
  */
@@ -81,10 +84,45 @@ export function buildFacadeInputs(floors, project, { roofRegionsOf = null } = {}
       return;
     }
     if (segments.length === 0) { skipped.push({ planeId: plane.id, reason: FacadeSkipReason.NO_EXTERIOR_WALL }); return; }
-    out.push({ planeId: plane.id, zLoMm, zHiMm, segments, openings: exteriorOpeningsOf(skipped, plane, graph, segments, detailSeen) });
+    out.push({
+      planeId: plane.id, zLoMm, zHiMm, flMm: plane.elevation, segments,
+      openings: exteriorOpeningsOf(skipped, plane, graph, segments, detailSeen),
+      placedFigures: exteriorPlacedFiguresSafe(skipped, plane, graph),
+    });
     if (roofRegionsOf) collectRoofs(roofs, skipped, plane, graph, roofRegionsOf, i === targets.length - 1 ? zHiMm : null);
   });
   return { glZMm, floors: out, roofs, skipped };
+}
+
+/**
+ * 1階分の屋外の姿図の配置（部分詳細図 S10 P6）。屋外＝配置点のセルがどの部屋にも属さない（セルなし＝建物の外を含む）か、
+ * 属する部屋が屋外部屋（RoomKind.EXTERIOR）か屋根の部屋（feature ROOF。isEnclosureOutside）＝edgeClassify.js regionOf が
+ * 屋内以外とする区分と同じ判定。屋内の配置は立面に出さない。
+ * graph.placedFigures が配列でなければ []。読み取りスコープ内で部屋の逆引きを作る。
+ * @returns {object[]} PlacedFigure の配列
+ */
+export function exteriorPlacedFiguresOf(graph) {
+  const placed = graph?.placedFigures;
+  if (!Array.isArray(placed) || placed.length === 0) return [];
+  return withGraphReadScope(graph, () => {
+    const cellToRoom = buildCellToRoom(graph);
+    return placed.filter(pf => {
+      if (pf === null || typeof pf !== 'object') return false;
+      const key = worldToCell(pf.x, pf.y, graph)?.key;
+      const room = key === undefined ? null : cellToRoom.get(key);
+      return !room || isEnclosureOutside(room) || room.kind === RoomKind.EXTERIOR;
+    });
+  });
+}
+
+// 例外は skipped（ERROR）に載せて配置なしで続ける（壁・建具は描く。exteriorOpeningsOf と同じ扱い）。
+function exteriorPlacedFiguresSafe(skipped, plane, graph) {
+  try {
+    return exteriorPlacedFiguresOf(graph);
+  } catch (err) {
+    skipped.push({ planeId: plane.id, reason: FacadeSkipReason.ERROR, message: String(err?.message ?? err) });
+    return [];
+  }
 }
 
 // 1階分の外壁の建具（S3。facadeOpenings.js exteriorOpeningsOn）。例外は skipped（ERROR）に載せて建具なしで続ける（壁は描く）。

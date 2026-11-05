@@ -1,11 +1,12 @@
 // facade/facadeInputs.js の単体テスト（最小の graph。壁は finishGuideGeometry.test.js と同じく本番の generateExteriorWalls で作る）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature } from '@core';
+import { PlacedFigure } from '../core/placedFigure.js';
 import { FacadeSkipReason, FacadeDirection } from '../core/constants.js';
 import { generateExteriorWalls } from '../finish/wallGeneration.js';
 import { STORY_HEIGHT_FALLBACK_MM } from '../floorHeights.js';
-import { buildFacadeInputs } from './facadeInputs.js';
+import { buildFacadeInputs, exteriorPlacedFiguresOf } from './facadeInputs.js';
 import { buildFacadeModel } from './facadeFigure.js';
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
@@ -125,6 +126,65 @@ test('【失敗系】GL が 2FL より上なら 1階は skipped（reason=belowGl
   assert.deepEqual(inputs.floors.map(f => [f.planeId, f.zLoMm, f.zHiMm]), [['p2', 3000, 3000 + TOP_STORY_MM]]);
   const south = buildFacadeModel(inputs).find(f => f.direction === FacadeDirection.SOUTH);
   assert.equal(south.heightMm, 3000 + TOP_STORY_MM - 3500, '高さは GL〜軒桁上端（2階の GL より下は切る）');
+});
+
+// 姿図の配置（S10 P6）: 屋外の判定。部屋 A（x 0..2000・屋内）と部屋 B（x 2000..4000・屋外部屋）の 2 室（壁なし）。
+function twoRoomsAndPlaced(...points) {
+  const p1 = plane('p1', 3000, 2);
+  const graph = new PlanGraph(p1);
+  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, ARCH);
+  const xm = graph.addCenterLine(CenterLineType.VERTICAL, 2000, ARCH);
+  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, 4000, ARCH);
+  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, 0, ARCH);
+  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, 3000, ARCH);
+  graph.addRoom(new Set([`${x0.id}:${y0.id}:${xm.id}:${y1.id}`]), 'A');
+  graph.addRoom(new Set([`${xm.id}:${y0.id}:${x1.id}:${y1.id}`]), 'B').setKind(RoomKind.EXTERIOR);
+  graph.setPlacedFigures(points.map(([id, x, y]) => new PlacedFigure({ id, figureKey: 'k', x, y, zMm: 850 })));
+  return { p1, graph };
+}
+
+test('姿図の配置の屋外判定: 屋内の部屋のセルは出ない・屋外部屋のセル・部屋のないセル・格子の外は出る', () => {
+  const { graph } = twoRoomsAndPlaced(['in', 1000, 1500], ['exterior', 3000, 1500], ['outside', 6000, 1500], ['north', 1300, -800]);
+  assert.deepEqual(exteriorPlacedFiguresOf(graph).map(p => p.id), ['exterior', 'outside', 'north']);
+});
+
+test('階レコードは flMm（その階の FL）と placedFigures（屋外の配置だけ）を持つ', () => {
+  const p1 = plane('p1', 3000, 2);
+  const { graph } = rectGraph(p1, 0, 0, 4000, 3000); // 部屋 A が 0..4000 × 0..3000 を占める（屋内）
+  const pf = (id, x, y) => new PlacedFigure({ id, figureKey: 'k', x, y });
+  graph.setPlacedFigures([pf('in', 1000, 1500), pf('far', 9000, 9000)]);
+  const rec = buildFacadeInputs([{ plane: p1, graph }], project([p1])).floors[0];
+  assert.equal(rec.flMm, 3000);
+  assert.deepEqual(rec.placedFigures.map(p => p.id), ['far']);
+});
+
+test('屋根の部屋（feature ROOF・屋内区分のまま）のセルの配置は屋外として出る', () => {
+  const { graph } = twoRoomsAndPlaced(['inA', 1000, 1500], ['roof', 3000, 1500]);
+  const roomB = [...graph.rooms].find(r => r.name === 'B');
+  roomB.setKind(RoomKind.INTERIOR);
+  assert.deepEqual(exteriorPlacedFiguresOf(graph).map(p => p.id), [], '屋内の B のセルは出ない');
+  roomB.setFeature(RoomFeature.ROOF);
+  assert.deepEqual(exteriorPlacedFiguresOf(graph).map(p => p.id), ['roof']);
+});
+
+test('【失敗系】配置の読み取りで例外が出る階は skipped（reason=error・message）に載せ、配置なしで壁は返す', () => {
+  const p1 = plane('p1', 0, 1);
+  const { graph } = rectGraph(p1, 0, 0, 4000, 3000);
+  const bad = {};
+  Object.defineProperty(bad, 'x', { get() { throw new Error('壊れた配置'); } });
+  graph.setPlacedFigures([bad]);
+  const inputs = buildFacadeInputs([{ plane: p1, graph }], project([p1]));
+  assert.equal(inputs.floors.length, 1);
+  assert.deepEqual(inputs.floors[0].placedFigures, []);
+  assert.deepEqual(inputs.skipped, [{ planeId: 'p1', reason: FacadeSkipReason.ERROR, message: '壊れた配置' }]);
+});
+
+test('【失敗系】placedFigures が配列でない・空の graph は []（例外にならない）', () => {
+  assert.deepEqual(exteriorPlacedFiguresOf({}), []);
+  assert.deepEqual(exteriorPlacedFiguresOf(null), []);
+  assert.deepEqual(exteriorPlacedFiguresOf({ placedFigures: null }), []);
+  const { graph } = twoRoomsAndPlaced();
+  assert.deepEqual(exteriorPlacedFiguresOf(graph), []);
 });
 
 test('【失敗系】floors・project が無くても例外にならない', () => {
