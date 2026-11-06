@@ -2,7 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { Layer, Group } from 'react-konva';
 import { LodLevel } from '../viewport.js';
 import { makeFloorLevelPrefix } from '../floorNumber.js';
-import { INSET } from '../layout.js';
+import { INSET, elevationViewRect } from '../layout.js';
 import { OpeningsLayer } from './OpeningsLayer.jsx';
 import { ShapesLayer } from './ShapesLayer.jsx';
 import { FinishModeLayer } from '../finish/FinishModeLayer.jsx';
@@ -49,10 +49,15 @@ export const SceneLayers = observer(({
 }) => {
   // 展開モードは平面・通り芯・寸法を一切出さない専用画面（描画エリア＋ガター全域）。
   // 既存レイヤ群（INSETクリップ・viewport Group等）は一切通らない。
+  // 横長のときは上部ツールバー・左帯（階ドラム）を描画域から除く（elevationViewRect。App.jsx が
+  // ElevationModeState.viewSize に渡す矩形と同じ）: Group の原点をその左上へ置き、はみ出しはクリップする。
   if (appMode === 'elevation') {
+    const rect = elevationViewRect(size);
     return (
       <Layer name="elevation">
-        <ElevationLayer mode={mode} size={size} onOpeningClick={onElevationOpeningClick} />
+        <Group x={rect.x} y={rect.y} clipX={0} clipY={0} clipWidth={rect.width} clipHeight={rect.height}>
+          <ElevationLayer mode={mode} size={rect} onOpeningClick={onElevationOpeningClick} />
+        </Group>
       </Layer>
     );
   }

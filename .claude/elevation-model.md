@@ -1,6 +1,6 @@
 # 展開モード（室内展開図）設計意図
 
-`appMode==='elevation'`。アクティブ階の各部屋を「1段＝1帯」の固定倍率図として全画面に描く専用モード。平面・通り芯・寸法は出さず、
+`appMode==='elevation'`。アクティブ階の各部屋を「1段＝1帯」の固定倍率図として全画面に描く専用モード（横長は上部ツールバーと左帯〔階ドラム〕を除いた描画域＝`elevationViewRect`。倍率・クランプ・タップ命中の `viewSize` と描画 Group の原点を同じ矩形にする。2026-11-06）。平面・通り芯・寸法は出さず、
 `viewport.scaleX/offsetX`（ズーム）には触れない——独自の固定倍率（`chooseElevationScale`）とスクロール量（`ElevationModeState`）だけで完結し、平面へ戻ると元のビューが保たれる（不変条件）。
 純モジュールは`app/src/elevation/`に置き、`store.js`/`snap.js`/`*.jsx`/`react-konva`/`appViewport.js`を静的importしない（node:test単体実行のため。校正値は`viewport.js`から取るか呼び出し側=`App.jsx`が渡す）。
 

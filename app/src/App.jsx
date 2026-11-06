@@ -115,7 +115,7 @@ import { BusyOverlay }         from './ui/BusyOverlay.jsx';
 import { ScaleIndicator }      from './ui/ScaleIndicator.jsx';
 import { FloorplanPalette }    from './renderer/FloorplanPalette.jsx';
 import { SceneLayers }         from './renderer/SceneLayers.jsx';
-import { TOP_BAR } from './layout.js';
+import { TOP_BAR, elevationViewRect } from './layout.js';
 import { evalNumpadExpr } from './ui/numpadUtils.js';
 import { EccentricityDialog } from './ui/EccentricityDialog.jsx';
 import { KneeDropWallDialog } from './ui/KneeDropWallDialog.jsx';
@@ -767,7 +767,7 @@ const App = observer(() => {
                   // 自体はDOM依存のviewport/appViewport.jsを静的importしない（node:test単体実行のため。
                   // ElevationModeState.test.js参照）ため、呼び出し側のここで解決して渡す。
                   const screenPxPerMm = (viewport.pxPerMmX + viewport.pxPerMmY) / 2;
-                  const s = new m.ElevationModeState(graph, project, size, screenPxPerMm);
+                  const s = new m.ElevationModeState(graph, project, elevationViewRect(size), screenPxPerMm);
                   await s.init(); // 材データの動的ロード・直上階のpeek・帯の一括構築
                   return s;
                 })
@@ -993,8 +993,9 @@ const App = observer(() => {
   }, []);
 
   // 展開モード: 画面サイズ変化を伝える（固定倍率の再計算に使う。viewport.scaleX等は一切変更しない）。
+  // 展開図は横長のとき上帯・左帯を除いた描画域（elevationViewRect）を渡す（SceneLayers の Group と同じ矩形）。
   useEffect(() => {
-    modeRef.current?.setViewSize?.(size);
+    modeRef.current?.setViewSize?.(appMode === 'elevation' ? elevationViewRect(size) : size);
   }, [size, appMode]);
 
   // ---- モード・フロアまたぎ undo/redo ----

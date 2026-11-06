@@ -646,3 +646,18 @@ test('【S8-4-2・配線・失敗系】ElevationModeState.init: 鉄骨（あら�
   assert.equal(slopedThickLines(band).length, 0);
   assert.ok(polylinesOf(band).length > 0, 'stairOver の折れ線がある');
 });
+
+// ---- 横長の描画域（elevationViewRect）: viewSize.y（上帯の高さ）ぶん画面 y を引いて帯を当てる ----
+// 合成バンド（init を通さず bands を直接置く）で、描画側（SceneLayers の Group 原点 y）と同じ原点で
+// 命中が決まることを確かめる。viewSize に y が無い旧形（{width,height}）は 0 扱い。
+test('ElevationModeState.bandAtScreenY: viewSize.y（上帯）を引いた描画域ローカルで帯を当てる。y 無しは従来どおり', () => {
+  const fakeBand = { roomId: 'r', heightMm: 3000, unitHeightMm: 3000, bounds: { minX: 0, maxX: 1000, minY: 0, maxY: 3000 }, widthMm: 1000 };
+  const withTop = new ElevationModeState(makeGraph(), null, { x: 88, y: 40, width: 1000, height: 800 });
+  runInAction(() => { withTop.bands = [fakeBand]; });
+  assert.equal(withTop.bandAtScreenY(39), null, '上帯の中（描画域より上）は帯に当たらない');
+  assert.equal(withTop.bandAtScreenY(41), 'r', '上帯の直下は最初の帯');
+
+  const noTop = new ElevationModeState(makeGraph(), null, { width: 1000, height: 800 });
+  runInAction(() => { noTop.bands = [fakeBand]; });
+  assert.equal(noTop.bandAtScreenY(1), 'r', 'viewSize.y が無いときは画面 y をそのまま使う');
+});

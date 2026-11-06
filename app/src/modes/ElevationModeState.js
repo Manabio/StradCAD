@@ -526,9 +526,13 @@ export class ElevationModeState {
     }
   }
 
-  /** 画面y座標(px)に対応する帯のroomId（無ければnull）。usePointerInteraction.jsのpointerDown判定用。 */
+  /**
+   * 画面y座標(px)に対応する帯のroomId（無ければnull）。usePointerInteraction.jsのpointerDown判定用。
+   * viewSize.y（描画域の画面上の原点。横長で上帯を除くとき App.jsx が elevationViewRect で渡す。
+   * 無ければ 0）を引いて描画域ローカルへ直す——描画側（SceneLayers の Group 原点）と同じ矩形。
+   */
   bandAtScreenY(py) {
-    const mmY = py / this.scale;
+    const mmY = (py - (this.viewSize?.y ?? 0)) / this.scale;
     return bandIdAtY(this.layout, this.clampedScrollY, mmY);
   }
 

@@ -8,6 +8,24 @@
 export const RULER   = 48; // ルーラ帯の厚み（=通り芯ラベル円の半径基準）。左右ガター幅でもある。
 export const TOP_BAR = 40; // 上部ツールバーの帯高。
 export const BOTTOM  = 56; // 下ガター高さ（寸法数字を線の上に収めるため拡大）。
+// 横長のときの左帯（階ドラム。ui/FloorDrum.jsx の縦ドラム＝left 8 ＋ 階名「地下1階」4 文字 14px ≒ 56 ＋ 左右 padding 24）の幅。
+// 階名 4 文字までを想定した固定幅（ドラムの実幅は階名の長さで変わる。5 文字「地下10階」等は約 10px 帯にかかる＝受容）。
+// 展開図の描画域を左帯に重ねないために使う（elevationViewRect）。縦長のときドラムは下部に移るので使わない。
+export const LEFT_BAR = 88;
+
+/**
+ * 展開図の描画域（画面 px。x/y は画面左上からの原点、width/height は描画域の大きさ）。
+ * 横長（width > height）は上部ツールバー（モードバー・Undo/Redo・☰）と左帯（階ドラム）を除外する。
+ * 縦長はボタン類が下部に集まるので全画面のまま。
+ * ElevationModeState.viewSize（倍率・クランプ・タップ命中）・SceneLayers の Group（原点＋クリップ）の
+ * 両方がこれを使う——どちらか片方だけ別の矩形にすると、見える位置と押した位置の帯がずれる。
+ */
+export function elevationViewRect({ width, height }) {
+  if (width > height) {
+    return { x: LEFT_BAR, y: TOP_BAR, width: Math.max(0, width - LEFT_BAR), height: Math.max(0, height - TOP_BAR) };
+  }
+  return { x: 0, y: 0, width, height };
+}
 
 // 描画エリアの4辺内端オフセット（画面端からの距離）。
 export const INSET = {
