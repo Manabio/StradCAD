@@ -49,3 +49,15 @@ export const OUTWARD = 6;
 export function labelCircleRadius(viewport) {
   return Math.round(RULER * 0.25) / viewport.scaleX;
 }
+
+/**
+ * 平面系の描画エリア（画面 px。INSET の内側）。読込み後の初期表示（initialView.js）が
+ * 「全体が入る倍率」を決めるときの収め先。ガター帯（寸法線・丸ラベル）は含まない。
+ */
+export function drawingAreaRect({ width, height }) {
+  return {
+    x: INSET.left, y: INSET.top,
+    width:  Math.max(0, width  - INSET.left - INSET.right),
+    height: Math.max(0, height - INSET.top  - INSET.bottom),
+  };
+}

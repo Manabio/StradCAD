@@ -116,6 +116,7 @@ import { ScaleIndicator }      from './ui/ScaleIndicator.jsx';
 import { FloorplanPalette }    from './renderer/FloorplanPalette.jsx';
 import { SceneLayers }         from './renderer/SceneLayers.jsx';
 import { TOP_BAR, elevationViewRect } from './layout.js';
+import { fitViewportToInitialView } from './initialView.js';
 import { evalNumpadExpr } from './ui/numpadUtils.js';
 import { EccentricityDialog } from './ui/EccentricityDialog.jsx';
 import { KneeDropWallDialog } from './ui/KneeDropWallDialog.jsx';
@@ -664,6 +665,9 @@ const App = observer(() => {
       if (cancelled) return;
       setActiveFloorId(project.activePlaneId);
       setLockedOut(!isSessionOwner());
+      // 読込み後の初期表示（2026-11-06）: 1階の通り芯の範囲を描画エリアの中心に、全体が入るキリの良い
+      // 倍率で描く。通り芯の無い空の文書は Viewport の既定（原点を左下・1/100）のまま。
+      fitViewportToInitialView(viewport, project, { width: window.innerWidth, height: window.innerHeight });
     }).catch(console.error);
     // カタログ関連の通知（読込み時sweepのR17重複登録禁止例外・overlay読込み失敗・保存時の
     // 未解決材コード等）をトースト表示する（2026-09-22 QA指摘B残存→再QA指摘Major-D）。

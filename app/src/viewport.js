@@ -79,6 +79,27 @@ function loadCalibration() {
   return [DEFAULT_PX_PER_MM, DEFAULT_PX_PER_MM];
 }
 
+/**
+ * 範囲（mm）が描画エリア（px）に余白込みで収まる最小の縮尺分母を候補から選ぶ。
+ * どの候補でも収まらなければ最大の分母（最も縮小）を返す。範囲が点でも最小の分母で収まる。
+ * @param {{ minX: number, maxX: number, minY: number, maxY: number }} boundsMm
+ * @param {{ width: number, height: number }} areaPx
+ * @param {number} pxPerMmX
+ * @param {number} pxPerMmY
+ * @param {readonly number[]} denoms 縮尺分母の候補（昇順）
+ * @param {number} marginPx 範囲と描画エリア内端の間の余白（px。各辺）
+ */
+export function fitScaleDenominator(boundsMm, areaPx, pxPerMmX, pxPerMmY, denoms, marginPx = 0) {
+  const availW = areaPx.width  - marginPx * 2;
+  const availH = areaPx.height - marginPx * 2;
+  const wMm = boundsMm.maxX - boundsMm.minX;
+  const hMm = boundsMm.maxY - boundsMm.minY;
+  for (const d of denoms) {
+    if (wMm * pxPerMmX / d <= availW && hMm * pxPerMmY / d <= availH) return d;
+  }
+  return denoms[denoms.length - 1];
+}
+
 export class Viewport {
   pxPerMmX = DEFAULT_PX_PER_MM;
   pxPerMmY = DEFAULT_PX_PER_MM;
@@ -108,8 +129,27 @@ export class Viewport {
       pan:              action,
       zoomAt:           action,
       reset:            action,
+      fitToBounds:      action,
       calibrate:        action,
     });
+  }
+
+  /**
+   * 範囲（mm）の中心を描画エリア（画面 px の矩形）の中心へ置き、範囲が余白込みで収まる
+   * 最小の縮尺分母（候補から選ぶ）にする。縦横比（校正比率）は維持。読込み後の初期表示（initialView.js）用。
+   * @param {{ minX: number, maxX: number, minY: number, maxY: number }} boundsMm
+   * @param {{ x: number, y: number, width: number, height: number }} areaPx
+   * @param {readonly number[]} denoms 縮尺分母の候補（昇順）
+   * @param {number} marginPx
+   */
+  fitToBounds(boundsMm, areaPx, denoms, marginPx = 0) {
+    const d = fitScaleDenominator(boundsMm, areaPx, this.pxPerMmX, this.pxPerMmY, denoms, marginPx);
+    this.scaleX = this.pxPerMmX / d;
+    this.scaleY = this.pxPerMmY / d;
+    const cxMm = (boundsMm.minX + boundsMm.maxX) / 2;
+    const cyMm = (boundsMm.minY + boundsMm.maxY) / 2;
+    this.offsetX = areaPx.x + areaPx.width  / 2 - cxMm * this.scaleX;
+    this.offsetY = areaPx.y + areaPx.height / 2 - cyMm * this.scaleY;
   }
 
   worldToScreen(wx, wy) {
