@@ -4,5 +4,6 @@ dist/
 *.local
 問題.md
 問題[0-9]*.md
+部分詳細*.md
 debug.log
 .claude/settings.local.json
