@@ -31,3 +31,16 @@ export function computeLineTriNums(site) {
   }
   return map;
 }
+
+// 最外周（境界線）の線分ID集合。幾何で自動判定する: 三角形1つにしか属さない辺、
+// および三角形が無い線分が外周（computeLineTriNums の配列長 ≤ 1）。
+// 三斜の線（isSanshaKind）だけが対象——その他タブの線（OTHER/ROAD_WIDTH）は外周の概念の外。
+export function computeOuterLineIds(site) {
+  const triNums = computeLineTriNums(site);
+  const ids = new Set();
+  for (const line of site.lines) {
+    if (!isSanshaKind(line.lineKind)) continue;
+    if ((triNums.get(line.id)?.length ?? 0) <= 1) ids.add(line.id);
+  }
+  return ids;
+}

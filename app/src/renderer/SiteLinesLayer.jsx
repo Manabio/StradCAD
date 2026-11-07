@@ -1,8 +1,11 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Circle, Group, Text } from 'react-konva';
-import { SiteLineKind } from '@core';
 import { getSiteLineRedBlue } from '../site/siteGeometry.js';
 import { resolveSiteLinePointsMm } from '../site/siteLineJoinPrimitives.js';
+import { computeOuterLineIds } from '../site/lineClassification.js';
+import {
+  SITE_LINE_COLOR, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT,
+} from '../site/siteLineStyle.js';
 
 // ---- 描画中プレビュー ----
 export const SiteDrawPreview = observer(({ mode }) => {
@@ -22,17 +25,6 @@ export const SiteDrawPreview = observer(({ mode }) => {
   );
 });
 
-// 選択中の線・辺の色（三斜の線分・長方形の共有辺で共有）
-export const SITE_SELECTED_COLOR = '#1e293b';
-
-export const KIND_COLOR = {
-  [SiteLineKind.BOUNDARY]:   '#f97316', // 隣地境界線 — オレンジ
-  [SiteLineKind.ROAD]:       '#ef4444', // 道路境界   — 赤
-  [SiteLineKind.SURVEY]:     '#3b82f6', // 測量       — 青
-  [SiteLineKind.ROAD_WIDTH]: '#22c55e', // 道路幅員   — 緑
-  [SiteLineKind.OTHER]:      '#94a3b8', // その他     — グレー
-};
-
 // 線分の当たり判定幅（スクリーンpx）の上限・下限・線分長に対する比率
 export const HIT_PX_MAX   = 12;
 export const HIT_PX_MIN   = 2;
@@ -51,7 +43,7 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
   const badgeR  = 10 / viewport.scaleX; // 丸番号バッジ半径（スクリーン 10px 相当）
   const sw      = viewport.lineWeightsPx.medium / viewport.scaleX; // バッジ枠 strokeWidth
   const badgeFs = 9  / viewport.scaleX; // バッジ文字 fontSize（スクリーン 9px 相当）
-  const markR   = 6  / viewport.scaleX; // 境界/道路境界 交点○の半径（スクリーン 6px 相当）
+  const markR   = SITE_CORNER_MARK_RADIUS_PX / viewport.scaleX; // 境界線の交点○の半径
 
   // site.lines の順番に三角形へ連番を付ける（三斜タブと同じ順序）
   const triByLine = new Map([...site.triangleMap.values()].map(t => [t.baseLine.id, t]));
@@ -61,11 +53,11 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
     return tri ? [{ line, tri, num: ++triNum }] : [];
   });
 
-  // 境界・道路境界 線分が2本以上集まる端点に小さな○を表示
-  const boundaryRoadKinds = new Set([SiteLineKind.BOUNDARY, SiteLineKind.ROAD]);
-  const pointHitCount = new Map(); // pointId -> 境界/道路境界線分の本数
+  // 外周（境界線）が2本以上集まる端点に小さな○を表示
+  const outerIds = computeOuterLineIds(site);
+  const pointHitCount = new Map(); // pointId -> 外周線分の本数
   for (const line of site.lines) {
-    if (!boundaryRoadKinds.has(line.lineKind)) continue;
+    if (!outerIds.has(line.id)) continue;
     pointHitCount.set(line.startPoint.id, (pointHitCount.get(line.startPoint.id) ?? 0) + 1);
     pointHitCount.set(line.endPoint.id,   (pointHitCount.get(line.endPoint.id)   ?? 0) + 1);
   }
@@ -73,15 +65,14 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
 
   // L字の角の外角を閉じる延長（site/siteLineJoinPrimitives.js。展開図と同じ規則を境界線へ適用。
   // 詳細は同モジュール冒頭コメント・.claude/elevation-model.md「L字の角の外角を閉じる」節）。
-  // 幅（thick/ultraThick）の判断もこの関数が唯一の供給源——.jsx側でisSelectedから幅を再導出しない。
-  const resolvedLines = resolveSiteLinePointsMm(site.lines, selectedLineId, viewport.lineWeightsPx, viewport);
+  // 幅・dash（外周=中線の一点鎖線／内側=細線）の判断もこの関数が唯一の供給源——.jsx側でisSelectedから再導出しない。
+  const resolvedLines = resolveSiteLinePointsMm(site.lines, selectedLineId, viewport.lineWeightsPx, outerIds, viewport);
 
   return (
     <>
       {/* 線分・端点マーカー */}
       {site.lines.map(line => {
         const isSelected = line.id === selectedLineId;
-        const color = KIND_COLOR[line.lineKind] ?? KIND_COLOR[SiteLineKind.OTHER];
         const { red, blue } = getSiteLineRedBlue(line);
         const resolved = resolvedLines.get(line.id);
 
@@ -90,8 +81,9 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
           <Line
             key={`l-${line.id}`}
             points={resolved.points}
-            stroke={isSelected ? SITE_SELECTED_COLOR : color}
+            stroke={SITE_LINE_COLOR}
             strokeWidth={resolved.width}
+            dash={resolved.dash ? [...resolved.dash] : undefined}
             strokeScaleEnabled={false}
             hitStrokeWidth={lineHitWidth(line, viewport)}
             onClick={() => onSelectLine?.(line.id)}
@@ -147,14 +139,14 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
         );
       })}
 
-      {/* 境界・道路境界同士の交点に小さな○ */}
+      {/* 境界線（外周）同士の交点に小さな○ */}
       {intersectionPoints.map(p => (
         <Circle
           key={`ix-${p.id}`}
           x={p.x} y={p.y}
           radius={markR}
-          stroke="#334155"
-          strokeWidth={viewport.lineWeightsPx.thick}
+          stroke={SITE_LINE_COLOR}
+          strokeWidth={viewport.lineWeightsPx[SITE_CORNER_MARK_WEIGHT]}
           strokeScaleEnabled={false}
           listening={false}
         />

@@ -12,23 +12,45 @@ const evalExpr = (s) => Number(s);
 
 // ---- cycleSiteLineKind ----
 
-test('cycleSiteLineKind: 境界→道路境界→測量→境界の順で循環し、undoで直前の線種に戻る', () => {
+test('cycleSiteLineKind: 外周の線は無指定(SURVEY)⇄道路(ROAD)の2値トグルで、undoで直前の線種に戻る', () => {
   const site = new Site();
   const sp   = site.addPoint(0, 0);
   const ep   = site.addPoint(1000, 0);
-  const line = site.addLine(sp, ep, SiteLineKind.BOUNDARY);
+  const line = site.addLine(sp, ep, SiteLineKind.SURVEY);
 
-  cycleSiteLineKind(site, line.id);
+  assert.deepEqual(cycleSiteLineKind(site, line.id), { ok: true });
   assert.equal(line.lineKind, SiteLineKind.ROAD);
 
   cycleSiteLineKind(site, line.id);
   assert.equal(line.lineKind, SiteLineKind.SURVEY);
 
-  cycleSiteLineKind(site, line.id);
-  assert.equal(line.lineKind, SiteLineKind.BOUNDARY);
-
   undoManager.undo();
-  assert.equal(line.lineKind, SiteLineKind.SURVEY, '直前の切替（測量）に戻る');
+  assert.equal(line.lineKind, SiteLineKind.ROAD, '直前の切替（道路）に戻る');
+});
+
+test('cycleSiteLineKind: 旧BOUNDARYは無指定扱いで次はROAD', () => {
+  const site = new Site();
+  const line = site.addLine(site.addPoint(0, 0), site.addPoint(1000, 0), SiteLineKind.BOUNDARY);
+  cycleSiteLineKind(site, line.id);
+  assert.equal(line.lineKind, SiteLineKind.ROAD);
+});
+
+test('cycleSiteLineKind【失敗系】: 内側の線（三角形2つの共有辺）・存在しないidは何も変えず{ok:false}でundoも積まない', () => {
+  const site = new Site();
+  const sp = site.addPoint(0, 0), ep = site.addPoint(1000, 0), ap = site.addPoint(640, 480), ap2 = site.addPoint(-200, 600);
+  const base = site.addLine(sp, ep, SiteLineKind.SURVEY);
+  site.addTriangle(base, ap, SiteLineKind.SURVEY);
+  const red  = site.addLine(sp, ap, SiteLineKind.SURVEY);
+  site.addLine(ep, ap, SiteLineKind.SURVEY);
+  site.addTriangle(red, ap2, SiteLineKind.SURVEY); // red は2つの三角形に属する＝内側
+  site.addLine(sp, ap2, SiteLineKind.SURVEY);
+  site.addLine(ap, ap2, SiteLineKind.SURVEY);
+  const beforeTop = undoManager.peekUndo();
+
+  assert.deepEqual(cycleSiteLineKind(site, red.id), { ok: false });
+  assert.equal(red.lineKind, SiteLineKind.SURVEY, '内側の線は変わらない');
+  assert.deepEqual(cycleSiteLineKind(site, 'no-such-id'), { ok: false });
+  assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
 });
 
 // ---- editSiteLineLength ----
@@ -201,6 +223,58 @@ test('confirmSiteTriangle: 頂点確定でapex・三角形・赤/青辺・histor
   assert.equal(site.triangles.length, 0, 'undoで三角形が消える');
   assert.equal(site.lines.length, 1, 'undoで赤/青辺が消え底辺のみ残る');
   assert.equal(site.history.length, 1, 'undoでhistoryのtriangleステップも消える');
+});
+
+test('confirmSiteTriangle: 道路指定の底辺が内側（三角形2つ）になると無指定へ格下げされ、undoで道路に戻りredoで再び格下げ', () => {
+  const site     = new Site();
+  const project  = { site };
+  const viewport = { worldToScreen: (x, y) => ({ x, y }) };
+  const size     = { width: 1000, height: 1000 };
+
+  // 三角形1つ（底辺・赤辺・青辺）を手動構築し、赤辺を道路指定にする
+  const sp   = site.addPoint(0, 0);
+  const ep   = site.addPoint(1000, 0);
+  const ap   = site.addPoint(640, 480);
+  const base = site.addLine(sp, ep, SiteLineKind.SURVEY);
+  site.addTriangle(base, ap, SiteLineKind.SURVEY);
+  const red  = site.addLine(sp, ap, SiteLineKind.ROAD);
+  site.addLine(ep, ap, SiteLineKind.SURVEY);
+
+  const mode = {
+    inputState: { redLen: '500', blueLen: '500', redKind: SiteLineKind.SURVEY, blueKind: SiteLineKind.SURVEY },
+    selectedLine: red,
+    selectLine() {}, clearInput() {},
+  };
+  const result = confirmSiteTriangle(project, mode, viewport, size, evalExpr);
+  assert.equal(result.toast, null);
+  assert.equal(site.triangles.length, 2);
+  assert.equal(red.lineKind, SiteLineKind.SURVEY, '底辺が内側になり道路指定は無指定へ格下げ');
+  assert.equal(site.history.at(-1).triangleLineKind, SiteLineKind.ROAD, '三角形の kind（底辺の元の kind）は保つ');
+
+  undoManager.undo();
+  assert.equal(site.triangles.length, 1);
+  assert.equal(red.lineKind, SiteLineKind.ROAD, 'undoで道路指定に戻る（同じ undo エントリ）');
+
+  undoManager.redo();
+  assert.equal(site.triangles.length, 2);
+  assert.equal(site.lineMap.get(red.id).lineKind, SiteLineKind.SURVEY, 'redoで再び格下げ');
+});
+
+test('confirmSiteTriangle: 底辺が外周のまま（最初の三角形）なら道路指定は保たれる', () => {
+  const site     = new Site();
+  const project  = { site };
+  const viewport = { worldToScreen: (x, y) => ({ x, y }) };
+  const size     = { width: 1000, height: 1000 };
+  const line = site.addLine(site.addPoint(0, 0), site.addPoint(1000, 0), SiteLineKind.ROAD);
+  site.history.push({ type: 'base', lineId: line.id, length: line.length });
+  const mode = {
+    inputState: { redLen: '800', blueLen: '600', redKind: SiteLineKind.SURVEY, blueKind: SiteLineKind.SURVEY },
+    selectedLine: line,
+    selectLine() {}, clearInput() {},
+  };
+  confirmSiteTriangle(project, mode, viewport, size, evalExpr);
+  assert.equal(site.triangles.length, 1);
+  assert.equal(line.lineKind, SiteLineKind.ROAD, '三角形1つの底辺は外周のまま＝格下げしない');
 });
 
 test('confirmSiteTriangle: 辺長が三角形として不正（h2<0）ならtoastを返しSiteを一切変更せずundoも積まれない', () => {

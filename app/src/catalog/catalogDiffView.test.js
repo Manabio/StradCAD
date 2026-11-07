@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffTooltip, diffPairs, fieldLabel } from './catalogDiffView.js';
 
 // ---- 定数 ----
-test('CATALOG_DIFF_COLOR: #f97316（renderer/SiteLinesLayer.jsxの隣地境界線と同じ値。意味は別）', () => {
+test('CATALOG_DIFF_COLOR: #f97316（オレンジ。意味は別）', () => {
   assert.equal(CATALOG_DIFF_COLOR, '#f97316');
 });
 

@@ -5,6 +5,7 @@ import { runInAction } from 'mobx';
 import { SiteLineKind } from '@core';
 import { undoManager } from '../undoManager.js';
 import { computeSiteApex, pickRedPointId, getSiteLineRedBlue, computeApexSide } from '../site/siteGeometry.js';
+import { computeOuterLineIds } from '../site/lineClassification.js';
 import { findLineHistoryStep, recomputeSiteFromHistory, cloneHistory, computePendingQueue } from './siteHistory.js';
 
 // ---- 三斜 線分長さ編集（history を起点に再計算してUndo登録）----
@@ -125,6 +126,7 @@ export function confirmSiteTriangle(project, mode, viewport, size, evalExpr) {
   const side     = computeApexSide(line, apex);
   let triId, apexPtId, ax, ay;
   let redLineId, redLineRedPointId, blueLineId, blueLineRedPointId;
+  let demoted = false; // 底辺が内側になり道路指定が無指定へ格下げされたか
   runInAction(() => {
     const apexPt = project.site.addPoint(apex.x, apex.y);
     const tri    = project.site.addTriangle(line, apexPt, lineKind);
@@ -148,9 +150,19 @@ export function confirmSiteTriangle(project, mode, viewport, size, evalExpr) {
       triangleId: triId, triangleLineKind: lineKind,
       side,
     });
+
+    // 底辺が内側（三角形2つ）になったとき、道路指定は無指定へ格下げ（外周でなくなるため）
+    if (lineKind === SiteLineKind.ROAD && !computeOuterLineIds(project.site).has(line.id)) {
+      line.lineKind = SiteLineKind.SURVEY;
+      demoted = true;
+    }
   });
   undoManager.push(
     () => runInAction(() => {
+      if (demoted) {
+        const bl = project.site.lineMap.get(line.id);
+        if (bl) bl.lineKind = lineKind;
+      }
       project.site.removeLine(blueLineId);
       project.site.removeLine(redLineId);
       project.site.removeTriangle(triId);
@@ -174,6 +186,7 @@ export function confirmSiteTriangle(project, mode, viewport, size, evalExpr) {
         triangleId: triId, triangleLineKind: lineKind,
         side,
       });
+      if (demoted) ln2.lineKind = SiteLineKind.SURVEY;
     }),
   );
   // 連続入力: 次に底辺とすべき線分を自動選択（赤辺入力にフォーカス）
@@ -185,13 +198,14 @@ export function confirmSiteTriangle(project, mode, viewport, size, evalExpr) {
   return { toast: null };
 }
 
-// ---- 確定済み線分の線種を循環切替（境界 → 道路境界 → 測量 → 境界...） ----
+// ---- 外周の線分の道路指定を切替（無指定=SURVEY ⇄ 道路=ROAD。BOUNDARY は無指定扱い） ----
+// 内側の線（外周でない）・存在しない線は何も変えず { ok:false }（UI は呼ばない）。
+// @returns {{ ok: boolean }}
 export function cycleSiteLineKind(site, lineId) {
   const line = site.lineMap.get(lineId);
-  if (!line) return;
-  const order = [SiteLineKind.BOUNDARY, SiteLineKind.ROAD, SiteLineKind.SURVEY];
+  if (!line || !computeOuterLineIds(site).has(lineId)) return { ok: false };
   const prev = line.lineKind;
-  const next = order[(order.indexOf(prev) + 1) % order.length];
+  const next = prev === SiteLineKind.ROAD ? SiteLineKind.SURVEY : SiteLineKind.ROAD;
   runInAction(() => { line.lineKind = next; });
   undoManager.push(
     () => runInAction(() => {
@@ -203,6 +217,7 @@ export function cycleSiteLineKind(site, lineId) {
       if (l) l.lineKind = next;
     }),
   );
+  return { ok: true };
 }
 
 // ---- 敷地線分描画のタップ確定（2点目のタップで SitePoint×2 + SiteLine を追加）----
