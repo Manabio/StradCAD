@@ -1,9 +1,10 @@
-import { makeObservable, observable, action, computed } from 'mobx';
+import { makeObservable, observable, action, computed, reaction } from 'mobx';
 import { SiteLineKind } from '@core';
 import { isSanshaKind, computeLineTriNums } from '../site/lineClassification.js';
+import { rectEdge, pickRectEdgeAnchor } from '../site/siteRectGeometry.js';
 
 export class SiteModeState {
-  subMode        = 'sansha'; // 'sansha' | 'other' | 'placement'
+  subMode        = 'sansha'; // 'sansha' | 'other' | 'placement' | 'rect'
   selectedLineId = null;     // 選択中の SiteLine ID
   siteDrawState  = null;     // { startWorld: {x,y}, endWorld: {x,y} } | null
   // 三斜入力中の数値入力状態
@@ -14,6 +15,13 @@ export class SiteModeState {
   // 線分c（バッヂ2個）または未選択: null
   inputState     = null;
 
+  // 長方形入力（subMode === 'rect'）。三斜側の状態とは独立（互いに消さない）
+  selectedRectEdge = null;   // { rectId, side } | null（共有辺）
+  rectAnchor       = 'a';    // 'a' | 'b'（共有辺の基点。rectEdge の端点 a/b）
+  // 最初: { kind:'first',  origin:{x,y}, focusedCell:'w'|'h',        wValue, hValue }
+  // 付加: { kind:'attach', focusedCell:'along'|'depth', alongValue, depthValue }
+  rectInputState   = null;
+
   constructor(site) {
     this.site = site;
     makeObservable(this, {
@@ -21,6 +29,9 @@ export class SiteModeState {
       selectedLineId:     observable,
       siteDrawState:      observable.ref,
       inputState:         observable.ref,
+      selectedRectEdge:   observable.ref,
+      rectAnchor:         observable,
+      rectInputState:     observable.ref,
       selectedLine:       computed,
       siteDrawPreviewEnd: computed,
       setSubMode:         action,
@@ -35,7 +46,19 @@ export class SiteModeState {
       cycleEdgeKind:      action,
       clearInput:         action,
       startLenEdit:       action,
+      startFirstRect:     action,
+      selectRectEdge:     action,
+      toggleRectAnchor:   action,
+      setRectFocusedCell: action,
+      setRectInputValue:  action,
+      clearRectInput:     action,
+      clearRectState:     action,
     });
+    // undo 等で選択中の長方形が消えたら、長方形側の選択・入力を残さない
+    this._rectGoneDispose = reaction(
+      () => this.selectedRectEdge != null && !this.site.rectMap.has(this.selectedRectEdge.rectId),
+      (gone) => { if (gone) this.clearRectState(); },
+    );
   }
 
   get selectedLine() {
@@ -56,6 +79,7 @@ export class SiteModeState {
   setSubMode(mode) {
     this.subMode        = mode;
     this.selectedLineId = null;
+    this.clearRectState();
   }
 
   selectLine(lineId) {
@@ -64,6 +88,7 @@ export class SiteModeState {
       const line = this.site.lineMap.get(lineId);
       if (line && isSanshaKind(line.lineKind)) {
         this.subMode = 'sansha';
+        this.clearRectState();
       }
     }
     this.selectedLineId = lineId;
@@ -91,6 +116,14 @@ export class SiteModeState {
   clearSelection() {
     this.selectedLineId = null;
     this.inputState     = null;
+    this.clearRectState();
+  }
+
+  // 長方形側の選択・入力を消す（基点は既定へ戻す）
+  clearRectState() {
+    this.selectedRectEdge = null;
+    this.rectAnchor       = 'a';
+    this.rectInputState   = null;
   }
 
   setFocusedCell(cell) {
@@ -134,6 +167,49 @@ export class SiteModeState {
     };
   }
 
+  // ---- 長方形入力 ----
+
+  // 最初の長方形: 描画エリアのタップ点を左上角として寸法入力へ
+  startFirstRect(wx, wy) {
+    this.selectedRectEdge = null;
+    this.rectInputState = {
+      kind: 'first', origin: { x: wx, y: wy }, focusedCell: 'w', wValue: '', hValue: '',
+    };
+  }
+
+  // 共有辺を選択（基点は pickRectEdgeAnchor の規則で初期化）→ 辺長・奥行の入力へ。
+  // 存在しない長方形なら何もしない
+  selectRectEdge(rectId, side, viewport) {
+    const rect = this.site.rectMap.get(rectId);
+    if (!rect) return;
+    this.selectedRectEdge = { rectId, side };
+    this.rectAnchor = pickRectEdgeAnchor(rectEdge(rect, side), viewport);
+    this.rectInputState = { kind: 'attach', focusedCell: 'along', alongValue: '', depthValue: '' };
+  }
+
+  toggleRectAnchor() {
+    if (!this.selectedRectEdge) return;
+    this.rectAnchor = this.rectAnchor === 'a' ? 'b' : 'a';
+  }
+
+  setRectFocusedCell(cell) {
+    if (!this.rectInputState) return;
+    this.rectInputState = { ...this.rectInputState, focusedCell: cell };
+  }
+
+  setRectInputValue(val) {
+    const st = this.rectInputState;
+    if (!st) return;
+    const key = { w: 'wValue', h: 'hValue', along: 'alongValue', depth: 'depthValue' }[st.focusedCell];
+    if (!key) return;
+    this.rectInputState = { ...st, [key]: val };
+  }
+
+  // 入力と共有辺の選択を消す（確定後・Escape）
+  clearRectInput() {
+    this.clearRectState();
+  }
+
   // ---- 敷地線分描画 ----
 
   startSiteDraw(wx, wy) {
@@ -161,6 +237,7 @@ export class SiteModeState {
   // ---- Lifecycle ----
 
   dispose() {
+    this._rectGoneDispose?.();
     this.clearSelection();
     this.cancelSiteDraw();
   }

@@ -488,6 +488,7 @@ export function serializeSite(site) {
       })),
       lineOrder: [...site.lineOrder],
       history: [...site.history].map(h => ({ ...h })),
+      rects: site.rects.map(r => ({ id: r.id, x: r.x, y: r.y, w: r.w, h: r.h })),
     },
   });
 }
@@ -526,6 +527,7 @@ export function restoreSite(site, data) {
     const order = data.lineOrder ?? [];
     if (order.length > 0) site.lineOrder.replace(order.filter(id => site.lineMap.has(id)));
     for (const h of data.history ?? []) site.history.push({ ...h });
+    for (const d of data.rects ?? []) site.addRect(d.x, d.y, d.w, d.h, d.id);
   });
 }
 

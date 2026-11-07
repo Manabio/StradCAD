@@ -2110,6 +2110,40 @@ test('serializeSite → restoreSite: 底辺+三角形1個の往復（id・座標
   assert.equal(restored.history[1].side, 1);
 });
 
+test('serializeSite → restoreSite: 長方形の往復（id・x・y・w・h・挿入順が一致）', () => {
+  const site = new Site();
+  const a = site.addRect(-100.5, 200, 3000, 2000);
+  const b = site.addRect(2900.5, 200, 1500.25, 800);
+
+  const restored = new Site();
+  restoreSite(restored, decodeSite(serializeSite(site)));
+
+  assert.equal(restored.rects.length, 2);
+  assert.deepEqual(restored.rects.map(r => r.id), [a.id, b.id], '挿入順（番号順）を保つ');
+  for (const src of [a, b]) {
+    const r = restored.rectMap.get(src.id);
+    assert.deepEqual({ x: r.x, y: r.y, w: r.w, h: r.h }, { x: src.x, y: src.y, w: src.w, h: src.h });
+  }
+});
+
+test('decodeSite → restoreSite: 長方形の無いデータ（旧データ相当）は rects が空配列で復元される', () => {
+  const site = new Site();
+  const sp = site.addPoint(0, 0);
+  const ep = site.addPoint(1000, 0);
+  site.addLine(sp, ep, SiteLineKind.SURVEY);
+
+  const data = decodeSite(serializeSite(site));
+  assert.deepEqual(data.rects, []);
+
+  // data.rects 自体が無い（フィールド追加前のデコード結果）場合も復元が落ちない
+  const legacy = { ...data, rects: undefined };
+  const restored = new Site();
+  restored.addRect(0, 0, 1, 1);
+  restoreSite(restored, legacy);
+  assert.equal(restored.rects.length, 0, 'clear() で既存の長方形も消える');
+  assert.equal(restored.lines.length, 1);
+});
+
 test('serializeSite → restoreSite: 復元後に editSiteLineLength(本番経路) が編集を継続できる', () => {
   const site = new Site();
   const sp = site.addPoint(0, 0);

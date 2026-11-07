@@ -125,7 +125,7 @@ export { PlanGraph } from './core/planGraph.js';
 // SITE (敷地モード) — core/site.js。
 // ================================================================
 
-export { SitePoint, SiteLine, SiteTriangle, Site } from './core/site.js';
+export { SitePoint, SiteLine, SiteTriangle, SiteRect, Site } from './core/site.js';
 
 // ================================================================
 // StructuralInfo (構造情報) — core/structuralInfo.js。

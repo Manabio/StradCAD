@@ -99,6 +99,26 @@ test('startSiteDirtyTracking: 点の座標だけが動く編集（辺長編集�
   mgr.disposeSiteDirtyTracking();
 });
 
+test('startSiteDirtyTracking: 長方形の追加・寸法変更・削除でmarkDirtyする', () => {
+  clearDirty();
+  const mgr  = new FloorSwapManager();
+  const site = new Site();
+  mgr.startSiteDirtyTracking(site);
+  assert.equal(isDirty(), false, '前提: 開始直後はdirtyでない');
+
+  const rect = site.addRect(0, 0, 1000, 600);
+  assert.equal(isDirty(), true, 'rectMap.size観測でmarkDirtyされる（長方形の追加・undoのremoveRect相当）');
+
+  clearDirty();
+  runInAction(() => { rect.w = 2000; });
+  assert.equal(isDirty(), true, 'rect.w観測でmarkDirtyされる');
+
+  clearDirty();
+  site.removeRect(rect.id);
+  assert.equal(isDirty(), true, '削除でもmarkDirtyされる');
+  mgr.disposeSiteDirtyTracking();
+});
+
 test('startSiteDirtyTracking: lineKindだけが変わる編集でmarkDirtyする', () => {
   clearDirty();
   const mgr  = new FloorSwapManager();

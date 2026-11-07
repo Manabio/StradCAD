@@ -65,12 +65,31 @@ export class SiteTriangle {
   }
 }
 
-// 敷地図全体: 点・線分・三角形を管理する
+// 敷地の長方形（軸平行）。x, y は左上角の世界座標 mm（y 下向き正）、w, h は mm。
+// 三斜の SitePoint/SiteLine とは独立の実体（境界線は長方形群の外周として導出する）
+export class SiteRect {
+  constructor(id, x, y, w, h) {
+    this.id = id;
+    this.x  = x;
+    this.y  = y;
+    this.w  = w;
+    this.h  = h;
+    makeObservable(this, {
+      x: observable,
+      y: observable,
+      w: observable,
+      h: observable,
+    });
+  }
+}
+
+// 敷地図全体: 点・線分・三角形・長方形を管理する
 export class Site {
   constructor() {
     this.pointMap    = observable.map(); // id → SitePoint
     this.lineMap     = observable.map(); // id → SiteLine
     this.triangleMap = observable.map(); // id → SiteTriangle
+    this.rectMap     = observable.map(); // id → SiteRect（挿入順＝番号順）
     this.lineOrder   = observable.array([]); // 三斜タブ表示順 (SiteLine ID)
     // 三斜の作成手順（線分長さ編集時の再計算に使用）
     // [0]:        { type: 'base', lineId, length }
@@ -82,6 +101,9 @@ export class Site {
       lines:         computed,
       orderedLines:  computed,
       triangles:     computed,
+      rects:         computed,
+      addRect:       action,
+      removeRect:    action,
       addPoint:      action,
       removePoint:   action,
       addLine:       action,
@@ -95,6 +117,7 @@ export class Site {
   get points()      { return [...this.pointMap.values()]; }
   get lines()       { return [...this.lineMap.values()]; }
   get triangles()   { return [...this.triangleMap.values()]; }
+  get rects()       { return [...this.rectMap.values()]; }
 
   get orderedLines() {
     return this.lineOrder
@@ -139,11 +162,22 @@ export class Site {
     this.triangleMap.delete(id);
   }
 
+  addRect(x, y, w, h, id = crypto.randomUUID()) {
+    const rect = new SiteRect(id, x, y, w, h);
+    this.rectMap.set(rect.id, rect);
+    return rect;
+  }
+
+  removeRect(id) {
+    this.rectMap.delete(id);
+  }
+
   // 全消去（起動時の復元 restoreSite 専用。undo スタックとは無関係に実体を作り直す）
   clear() {
     this.pointMap.clear();
     this.lineMap.clear();
     this.triangleMap.clear();
+    this.rectMap.clear();
     this.lineOrder.clear();
     this.history.clear();
   }

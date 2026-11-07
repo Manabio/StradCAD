@@ -107,6 +107,7 @@ const EXPECTED_EXPORTS = [
   'SiteLine',
   'SiteLineKind',
   'SitePoint',
+  'SiteRect',
   'SiteTriangle',
   'Stair',
   'StairType',
