@@ -1,5 +1,5 @@
 import { runInAction } from 'mobx';
-import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, isDefaultRoofSpec, restoreCeilingZones, restoreRoofZones, restorePlacedFigures } from '@core';
+import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, SiteLineKind, isDefaultRoofSpec, restoreCeilingZones, restoreRoofZones, restorePlacedFigures } from '@core';
 import { encode, decode, countClEccentricities } from './schema/graphFbs.js';
 import { normalizeDetailRefs } from './core/detailRefs.js';
 import { kneeDropFrontSideOf } from './core/kneeDropRecord.js';
@@ -488,7 +488,7 @@ export function serializeSite(site) {
       })),
       lineOrder: [...site.lineOrder],
       history: [...site.history].map(h => ({ ...h })),
-      rects: site.rects.map(r => ({ id: r.id, x: r.x, y: r.y, w: r.w, h: r.h })),
+      rects: site.rects.map(r => ({ id: r.id, x: r.x, y: r.y, w: r.w, h: r.h, roadSides: [...r.roadSides] })),
     },
   });
 }
@@ -513,7 +513,9 @@ export function restoreSite(site, data) {
     for (const d of data.lines ?? []) {
       const sp = site.pointMap.get(d.startPointId);
       const ep = site.pointMap.get(d.endPointId);
-      if (sp && ep) site.addLine(sp, ep, d.lineKind, d.id, d.redPointId ?? sp.id);
+      // 旧「境界」(BOUNDARY)は無指定(SURVEY)へ正規化（外周かどうかは幾何で自動判定する。三角形・history の kind はそのまま）
+      const kind = d.lineKind === SiteLineKind.BOUNDARY ? SiteLineKind.SURVEY : d.lineKind;
+      if (sp && ep) site.addLine(sp, ep, kind, d.id, d.redPointId ?? sp.id);
     }
     for (const d of data.triangles ?? []) {
       const baseLine  = site.lineMap.get(d.baseLineId);
@@ -527,7 +529,7 @@ export function restoreSite(site, data) {
     const order = data.lineOrder ?? [];
     if (order.length > 0) site.lineOrder.replace(order.filter(id => site.lineMap.has(id)));
     for (const h of data.history ?? []) site.history.push({ ...h });
-    for (const d of data.rects ?? []) site.addRect(d.x, d.y, d.w, d.h, d.id);
+    for (const d of data.rects ?? []) site.addRect(d.x, d.y, d.w, d.h, d.id, d.roadSides ?? []);
   });
 }
 

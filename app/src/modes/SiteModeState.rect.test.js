@@ -114,3 +114,31 @@ test('三斜側の入力状態は長方形の操作で変わらない', () => {
   sm.startFirstRect(0, 0);
   assert.deepEqual(sm.inputState, { focusedCell: 'len', lenValue: '5' });
 });
+
+test('cycleEdgeKind: SURVEY→ROAD→SURVEY と回り、BOUNDARY（旧データ）からは ROAD になる', () => {
+  const sm = new SiteModeState(new Site());
+  sm.inputState = { focusedCell: 'red', redKind: SiteLineKind.SURVEY, blueKind: SiteLineKind.BOUNDARY };
+  sm.cycleEdgeKind('red');
+  assert.equal(sm.inputState.redKind, SiteLineKind.ROAD);
+  sm.cycleEdgeKind('red');
+  assert.equal(sm.inputState.redKind, SiteLineKind.SURVEY);
+  sm.cycleEdgeKind('blue');
+  assert.equal(sm.inputState.blueKind, SiteLineKind.ROAD);
+});
+
+test('【失敗系】cycleEdgeKind: 入力状態が無ければ何もしない', () => {
+  const sm = new SiteModeState(new Site());
+  sm.cycleEdgeKind('red');
+  assert.equal(sm.inputState, null);
+});
+
+test('selectLine: 赤辺・青辺の初期線種は底辺が道路でも常に無指定（SURVEY）', () => {
+  const site = new Site();
+  const sp = site.addPoint(0, 0);
+  const ep = site.addPoint(1000, 0);
+  const line = site.addLine(sp, ep, SiteLineKind.ROAD);
+  const sm = new SiteModeState(site);
+  sm.selectLine(line.id);
+  assert.equal(sm.inputState.redKind, SiteLineKind.SURVEY);
+  assert.equal(sm.inputState.blueKind, SiteLineKind.SURVEY);
+});

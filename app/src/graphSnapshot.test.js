@@ -2066,6 +2066,7 @@ test('serializeSite → restoreSite: 底辺+三角形1個の往復（id・座標
   const tri       = site.addTriangle(baseLine, apexPt, SiteLineKind.BOUNDARY);
   const redLine   = site.addLine(sp, apexPt, SiteLineKind.BOUNDARY, undefined, sp.id);
   const blueLine  = site.addLine(ep, apexPt, SiteLineKind.ROAD,     undefined, ep.id);
+  assert.equal(redLine.lineKind, SiteLineKind.BOUNDARY, '前提: 旧データ相当の BOUNDARY 線を作る');
   site.history.push({
     type: 'triangle', baseLineId: baseLine.id,
     redLineId: redLine.id, redLen: 800, redKind: SiteLineKind.BOUNDARY,
@@ -2095,8 +2096,13 @@ test('serializeSite → restoreSite: 底辺+三角形1個の往復（id・座標
   assert.ok(rTri);
   assert.equal(rTri.apexPoint.x, 640);
   assert.equal(rTri.apexPoint.y, 480);
-  assert.equal(rTri.lineKind, SiteLineKind.BOUNDARY);
+  assert.equal(rTri.lineKind, SiteLineKind.BOUNDARY, '三角形の kind は正規化しない');
   assert.equal(rTri.baseLine, restored.lineMap.get(baseLine.id), '実体同一性: baseLineは復元後lineMapの同一オブジェクト');
+
+  // 線の BOUNDARY は SURVEY（無指定）へ正規化。ROAD はそのまま
+  assert.equal(restored.lineMap.get(redLine.id).lineKind, SiteLineKind.SURVEY, '線の BOUNDARY は SURVEY へ正規化');
+  assert.equal(restored.lineMap.get(blueLine.id).lineKind, SiteLineKind.ROAD, 'ROAD は保持');
+  assert.equal(restored.history[1].redKind, SiteLineKind.BOUNDARY, 'history の kind はそのまま');
 
   assert.deepEqual([...restored.lineOrder], [baseLine.id, redLine.id, blueLine.id]);
 
@@ -2124,6 +2130,32 @@ test('serializeSite → restoreSite: 長方形の往復（id・x・y・w・h・�
     const r = restored.rectMap.get(src.id);
     assert.deepEqual({ x: r.x, y: r.y, w: r.w, h: r.h }, { x: src.x, y: src.y, w: src.w, h: src.h });
   }
+});
+
+test('serializeSite → restoreSite: 長方形の道路指定（roadSides）が往復する', () => {
+  const site = new Site();
+  const a = site.addRect(0, 0, 3000, 2000, undefined, ['n', 'w']);
+  const b = site.addRect(3000, 0, 1000, 800, undefined, ['e', 's']);
+  const c = site.addRect(0, 5000, 100, 100);
+
+  const restored = new Site();
+  restoreSite(restored, decodeSite(serializeSite(site)));
+
+  assert.deepEqual([...restored.rectMap.get(a.id).roadSides].sort(), ['n', 'w']);
+  assert.deepEqual([...restored.rectMap.get(b.id).roadSides].sort(), ['e', 's']);
+  assert.equal(restored.rectMap.get(c.id).roadSides.size, 0);
+});
+
+test('【失敗系】decodeSite → restoreSite: 旧データ（roadSides 無し）の長方形は道路指定が空で復元される', () => {
+  const site = new Site();
+  const a = site.addRect(0, 0, 3000, 2000);
+  const data = decodeSite(serializeSite(site));
+  assert.deepEqual(data.rects[0].roadSides, [], 'ROAD_SIDES 未書込み（0）は空');
+
+  const legacy = { ...data, rects: data.rects.map(r => ({ id: r.id, x: r.x, y: r.y, w: r.w, h: r.h })) };
+  const restored = new Site();
+  restoreSite(restored, legacy);
+  assert.equal(restored.rectMap.get(a.id).roadSides.size, 0);
 });
 
 test('decodeSite → restoreSite: 長方形の無いデータ（旧データ相当）は rects が空配列で復元される', () => {
@@ -2191,7 +2223,7 @@ test('serializeSite → restoreSite: side=-1の三角形往復でapex座標とhi
   assert.equal(restored.history[1].side, -1, '負のsideが符号を保ったまま復元される');
 });
 
-test('serializeSite → restoreSite: SiteLineKind全種が往復する（Object.values参照のため種別追加時に自動で対象拡大する）', () => {
+test('serializeSite → restoreSite: SiteLineKind全種が往復する（BOUNDARYだけは復元時にSURVEYへ正規化。Object.values参照のため種別追加時に自動で対象拡大する）', () => {
   const site = new Site();
   const kinds = Object.values(SiteLineKind);
   const lineIds = kinds.map((kind, i) => {
@@ -2205,7 +2237,8 @@ test('serializeSite → restoreSite: SiteLineKind全種が往復する（Object.
   restoreSite(restored, decodeSite(bytes));
 
   kinds.forEach((kind, i) => {
-    assert.equal(restored.lineMap.get(lineIds[i]).lineKind, kind);
+    const expected = kind === SiteLineKind.BOUNDARY ? SiteLineKind.SURVEY : kind;
+    assert.equal(restored.lineMap.get(lineIds[i]).lineKind, expected);
   });
 });
 

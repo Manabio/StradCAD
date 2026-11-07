@@ -48,7 +48,7 @@ export class SiteTriangle {
     this.id        = id;
     this.baseLine  = baseLine;  // SiteLine（底辺）
     this.apexPoint = apexPoint; // SitePoint（頂点）
-    this.lineKind  = lineKind;  // 境界/道路境界/測量
+    this.lineKind  = lineKind;  // 無指定(SURVEY)/道路(ROAD)。BOUNDARY は旧データ
     makeObservable(this, {
       lineKind: observable,
       area:     computed,
@@ -68,12 +68,14 @@ export class SiteTriangle {
 // 敷地の長方形（軸平行）。x, y は左上角の世界座標 mm（y 下向き正）、w, h は mm。
 // 三斜の SitePoint/SiteLine とは独立の実体（境界線は長方形群の外周として導出する）
 export class SiteRect {
-  constructor(id, x, y, w, h) {
+  // roadSides: 道路に指定した辺（'n'|'e'|'s'|'w'）。外周上の辺だけが入る（指定が無い外周＝隣地）
+  constructor(id, x, y, w, h, roadSides = []) {
     this.id = id;
     this.x  = x;
     this.y  = y;
     this.w  = w;
     this.h  = h;
+    this.roadSides = observable.set(roadSides);
     makeObservable(this, {
       x: observable,
       y: observable,
@@ -162,8 +164,8 @@ export class Site {
     this.triangleMap.delete(id);
   }
 
-  addRect(x, y, w, h, id = crypto.randomUUID()) {
-    const rect = new SiteRect(id, x, y, w, h);
+  addRect(x, y, w, h, id = crypto.randomUUID(), roadSides = []) {
+    const rect = new SiteRect(id, x, y, w, h, roadSides);
     this.rectMap.set(rect.id, rect);
     return rect;
   }

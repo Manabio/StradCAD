@@ -88,6 +88,7 @@ import {
   confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind,
 } from './transform/siteEdit.js';
 import { confirmSiteRect } from './transform/siteRectConfirm.js';
+import { toggleRectRoadSide } from './transform/siteRectEdit.js';
 import { composeUndoWithMergeChain } from './transform/centerLineMerge.js';
 import { extendCenterLine, shortenCenterLine } from './transform/centerLineExtend.js';
 import {
@@ -2175,10 +2176,17 @@ const App = observer(() => {
     if (toast) setToast({ msg: toast, key: Date.now() });
   }
 
-  // ---- 確定済み線分の線種を循環切替（境界 → 道路境界 → 測量 → 境界...） ----
+  // ---- 外周の線分の道路指定を切替（無指定 ⇄ 道路。内側の線は何もしない） ----
   // 実処理は transform/siteEdit.js の cycleSiteLineKind。
   function handleCycleLineKind(lineId) {
     cycleSiteLineKind(project.site, lineId);
+  }
+
+  // ---- 四角の外周片の道路指定を切替（無指定 ⇄ 道路。内側の辺は拒否してトースト） ----
+  // 実処理は transform/siteRectEdit.js の toggleRectRoadSide。
+  function handleToggleRectRoadSide(rectId, side) {
+    const { toast } = toggleRectRoadSide(project.site, rectId, side);
+    if (toast) setToast({ msg: toast, key: Date.now() });
   }
 
   // カタログ保守パネルは使うときだけ動的importする（モードと同じ考え方。.claude/mode-system.md）。
@@ -3192,6 +3200,7 @@ const App = observer(() => {
           onConfirmTriangle={handleConfirmTriangle}
           onConfirmRect={handleConfirmRect}
           onCycleLineKind={handleCycleLineKind}
+          onToggleRectRoadSide={handleToggleRectRoadSide}
         />
       )}
 

@@ -1,13 +1,19 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Circle, Group, Text, Rect } from 'react-konva';
-import { SiteLineKind } from '@core';
-import { rectEdges, rectEdge, computeOutlineSegments } from '../site/siteRectGeometry.js';
+import {
+  rectEdges, rectEdge, computeOutlinePieces, computeOutlineCorners, computeInnerEdgeSpans,
+} from '../site/siteRectGeometry.js';
 import { computeRectPreview, RECT_ANCHOR_NODE_NAME } from '../site/siteRectInput.js';
-import { KIND_COLOR, SITE_SELECTED_COLOR, lineHitWidth, HIT_PX_MAX } from './SiteLinesLayer.jsx';
+import {
+  SITE_LINE_COLOR, SITE_BOUNDARY_DASH, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT,
+  siteLineWeightKey,
+} from '../site/siteLineStyle.js';
+import { lineHitWidth, HIT_PX_MAX } from './SiteLinesLayer.jsx';
 
 // 敷地モードの長方形（.claude/data-model.md「敷地の長方形入力」節）。
-// 4辺（内側色）＋導出した外周（境界色）＋選択中の共有辺・基点の丸＋番号バッジ＋入力中のプレビュー。
-// 辺は subMode==='rect' のときだけ listening。
+// 線の描画規則は site/siteLineStyle.js（三斜と共通）: 内側の辺＝細線・実線、外周片＝中線・一点鎖線、
+// 色は黒、選択辺は幅を1段上げる。外周の角に小さな丸。＋選択中の共有辺の基点の丸＋番号バッジ＋入力中のプレビュー。
+// 辺の当たりは subMode==='rect' のときだけ listening（透明の当たり線を辺全体に敷く）。
 export const SiteRectsLayer = observer(({ site, mode, viewport, onSelectRectEdge }) => {
   const rects   = site.rects;
   const rectMode = mode.subMode === 'rect';
@@ -17,7 +23,11 @@ export const SiteRectsLayer = observer(({ site, mode, viewport, onSelectRectEdge
   const sw      = viewport.lineWeightsPx.medium / viewport.scaleX;
   const badgeFs = 9  / viewport.scaleX;
 
-  const outline = computeOutlineSegments(rects);
+  const markR   = SITE_CORNER_MARK_RADIUS_PX / viewport.scaleX;
+  const pieces  = computeOutlinePieces(rects);
+  const spans   = computeInnerEdgeSpans(rects, pieces);
+  const corners = computeOutlineCorners(pieces);
+  const isSelEdge = (rectId, side) => sel?.rectId === rectId && sel.side === side;
   const preview = computeRectPreview(site.rectMap, sel, mode.rectAnchor, mode.rectInputState);
 
   const selRect = sel ? site.rectMap.get(sel.rectId) : null;
@@ -44,19 +54,55 @@ export const SiteRectsLayer = observer(({ site, mode, viewport, onSelectRectEdge
 
   return (
     <>
-      {/* 各長方形の4辺（内側色。選択中の辺は選択色） */}
-      {rects.flatMap(rect => rectEdges(rect).map(edge => {
-        const isSel = sel?.rectId === rect.id && sel.side === edge.side;
+      {/* 内側の辺（細線・実線。選択中は1段上げ） */}
+      {spans.map((s, i) => (
+        <Line
+          key={`i-${s.rectId}-${s.side}-${i}`}
+          points={[s.a.x, s.a.y, s.b.x, s.b.y]}
+          stroke={SITE_LINE_COLOR}
+          strokeWidth={viewport.lineWeightsPx[siteLineWeightKey(false, isSelEdge(s.rectId, s.side))]}
+          strokeScaleEnabled={false}
+          listening={false}
+        />
+      ))}
+
+      {/* 外周片（中線・一点鎖線。選択中は1段上げ。隣地／道路は描画上同じ） */}
+      {pieces.map((p, i) => (
+        <Line
+          key={`o-${p.rectId}-${p.side}-${i}`}
+          points={[p.a.x, p.a.y, p.b.x, p.b.y]}
+          stroke={SITE_LINE_COLOR}
+          strokeWidth={viewport.lineWeightsPx[siteLineWeightKey(true, p.owners.some(o => isSelEdge(o.rectId, o.side)))]}
+          dash={[...SITE_BOUNDARY_DASH]}
+          strokeScaleEnabled={false}
+          listening={false}
+        />
+      ))}
+
+      {/* 外周の角の丸 */}
+      {corners.map((c, i) => (
+        <Circle
+          key={`c-${i}`}
+          x={c.x} y={c.y}
+          radius={markR}
+          stroke={SITE_LINE_COLOR}
+          strokeWidth={viewport.lineWeightsPx[SITE_CORNER_MARK_WEIGHT]}
+          strokeScaleEnabled={false}
+          listening={false}
+        />
+      ))}
+
+      {/* 辺の当たり（各長方形の4辺全体に透明の線を敷く。rect サブモードのみ listening） */}
+      {rectMode && rects.flatMap(rect => rectEdges(rect).map(edge => {
         const len = Math.hypot(edge.b.x - edge.a.x, edge.b.y - edge.a.y);
         return (
           <Line
-            key={`e-${rect.id}-${edge.side}`}
+            key={`h-${rect.id}-${edge.side}`}
             points={[edge.a.x, edge.a.y, edge.b.x, edge.b.y]}
-            stroke={isSel ? SITE_SELECTED_COLOR : KIND_COLOR[SiteLineKind.OTHER]}
-            strokeWidth={viewport.lineWeightsPx.thin}
+            stroke="transparent"
+            strokeWidth={1}
             strokeScaleEnabled={false}
             hitStrokeWidth={lineHitWidth({ length: len }, viewport)}
-            listening={rectMode}
             onClick={() => onSelectRectEdge?.(rect.id, edge.side)}
             onTap={() => onSelectRectEdge?.(rect.id, edge.side)}
             onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}
@@ -65,28 +111,7 @@ export const SiteRectsLayer = observer(({ site, mode, viewport, onSelectRectEdge
         );
       }))}
 
-      {/* 外周（長方形の和集合の外形＝境界線） */}
-      {outline.map((s, i) => (
-        <Line
-          key={`o-${i}`}
-          points={[s.a.x, s.a.y, s.b.x, s.b.y]}
-          stroke={KIND_COLOR[SiteLineKind.BOUNDARY]}
-          strokeWidth={viewport.lineWeightsPx.thick}
-          strokeScaleEnabled={false}
-          listening={false}
-        />
-      ))}
-
-      {/* 選択中の共有辺（外周の上に選択色で重ねる）＋基点（赤）・他端（青） */}
-      {selEdge && (
-        <Line
-          points={[selEdge.a.x, selEdge.a.y, selEdge.b.x, selEdge.b.y]}
-          stroke={SITE_SELECTED_COLOR}
-          strokeWidth={viewport.lineWeightsPx.thick}
-          strokeScaleEnabled={false}
-          listening={false}
-        />
-      )}
+      {/* 選択中の共有辺の基点（赤）・他端（青） */}
       {selEdge && anchorCircle('anchor', anchorPt, '#ef4444')}
       {selEdge && anchorCircle('other', otherPt, '#3b82f6')}
 

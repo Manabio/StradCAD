@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildRectTableRows, rectInputRowDefs, rectFocusedValue, rectNumpadLabel, rectEnterAction,
+  buildRectTableRows, buildOutlineRows, rectInputRowDefs, rectFocusedValue, rectNumpadLabel, rectEnterAction,
   rectAnchorLabel, computeRectPreview, evalRectLen,
 } from './siteRectInput.js';
 
@@ -90,4 +90,44 @@ test('【失敗系】computeRectPreview: attach は片方だけ・共有辺な�
   assert.equal(computeRectPreview(mapOf(base), edge, 'a', attach({ depthValue: '1000' })), null);
   assert.equal(computeRectPreview(mapOf(base), null, 'a', attach({ alongValue: '2000', depthValue: '1000' })), null);
   assert.equal(computeRectPreview(mapOf(), edge, 'a', attach({ alongValue: '2000', depthValue: '1000' })), null);
+});
+
+// ---- 外周表 ----
+
+const RR = (id, x, y, w, h, roads = []) => ({ id, x, y, w, h, roadSides: new Set(roads) });
+
+test('buildOutlineRows: 外周片ごとの行（番号-辺・長さ・線種）。道路指定の辺は「道路」、他は「隣地」', () => {
+  const rows = buildOutlineRows([RR('a', 0, 0, 100, 50, ['n'])]);
+  assert.deepEqual(rows.map(r => [r.label, r.length, r.kindLabel]), [
+    ['1-北', 100, '道路'], ['1-東', 50, '隣地'], ['1-南', 100, '隣地'], ['1-西', 50, '隣地'],
+  ]);
+});
+
+test('buildOutlineRows: 内側になった辺は行に出ない（隣接長方形の共有辺）', () => {
+  const rows = buildOutlineRows([RR('a', 0, 0, 100, 50), RR('b', 100, 0, 100, 50)]);
+  assert.deepEqual(rows.map(r => r.label), ['1-北', '1-南', '1-西', '2-北', '2-東', '2-南']);
+});
+
+test('buildOutlineRows: 重なる長方形の同一片はどちらかが道路なら道路（行は1つ）', () => {
+  const rows = buildOutlineRows([RR('a', 0, 0, 100, 50), RR('b', 0, 0, 100, 50, ['n'])]);
+  const north = rows.filter(r => r.side === 'n');
+  assert.equal(north.length, 1);
+  assert.equal(north[0].kindLabel, '道路');
+});
+
+test('buildOutlineRows: 辺が2片以上に分かれると連番、片が複数の辺に属すると辺を並べる、1片なら連番なし', () => {
+  const rows = buildOutlineRows([
+    RR('a', 0, 0, 100, 100), RR('b', 100, 0, 100, 50), RR('c', 0, 100, 200, 50), RR('d', 100, 50, 100, 100),
+  ]);
+  const labels = rows.map(r => r.label);
+  assert.ok(labels.includes('3-南(1)'));
+  assert.ok(labels.includes('3-南(2)/4-南'), 'd.s は1片なので連番なし');
+  assert.ok(labels.includes('3-東/4-東(2)'));
+  assert.ok(!labels.includes('3-南'), '2片に分かれた辺は連番なしの行が無い');
+  assert.ok(labels.includes('1-北'), '1片の辺は連番を付けない');
+  assert.equal(rows.reduce((s, r) => s + r.length, 0), 700);
+});
+
+test('【失敗系】buildOutlineRows: 長方形が無ければ空', () => {
+  assert.deepEqual(buildOutlineRows([]), []);
 });

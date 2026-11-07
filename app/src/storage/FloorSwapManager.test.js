@@ -119,6 +119,19 @@ test('startSiteDirtyTracking: 長方形の追加・寸法変更・削除でmarkD
   mgr.disposeSiteDirtyTracking();
 });
 
+test('startSiteDirtyTracking: 長方形の道路指定だけが変わる編集でmarkDirtyする', () => {
+  clearDirty();
+  const mgr  = new FloorSwapManager();
+  const site = new Site();
+  const rect = site.addRect(0, 0, 1000, 600);
+  mgr.startSiteDirtyTracking(site);
+  clearDirty();
+
+  runInAction(() => { rect.roadSides.add('n'); });
+  assert.equal(isDirty(), true, 'roadSides.size観測でmarkDirtyされる');
+  mgr.disposeSiteDirtyTracking();
+});
+
 test('startSiteDirtyTracking: lineKindだけが変わる編集でmarkDirtyする', () => {
   clearDirty();
   const mgr  = new FloorSwapManager();

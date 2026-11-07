@@ -365,7 +365,7 @@ export class FloorSwapManager {
       for (const l of site.lineMap.values())     { void l.lineKind; }
       for (const t of site.triangleMap.values()) { void t.lineKind; }
       void site.rectMap.size;
-      for (const r of site.rectMap.values())     { void r.x; void r.y; void r.w; void r.h; }
+      for (const r of site.rectMap.values())     { void r.x; void r.y; void r.w; void r.h; void r.roadSides.size; }
 
       if (!initialized) { initialized = true; return; }
 

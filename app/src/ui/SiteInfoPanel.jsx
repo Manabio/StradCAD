@@ -2,19 +2,18 @@
 import { observer } from 'mobx-react-lite';
 import { SiteLineKind } from '@core';
 import { getSiteLineRedBlue } from '../site/siteGeometry.js';
-import { isSanshaKind, computeLineTriNums } from '../site/lineClassification.js';
+import { isSanshaKind, computeLineTriNums, computeOuterLineIds } from '../site/lineClassification.js';
+import { siteLineKindLabel } from '../site/siteLineStyle.js';
 import { NumPad } from './NumPad.jsx';
 import { applyKeyToNumpadValue, toNumpadKey, evalNumpadExpr } from './numpadUtils.js';
 import { ModePanel } from './ModePanel.jsx';
 import { BottomSheet } from './BottomSheet.jsx';
 import {
-  buildRectTableRows, rectInputRowDefs, rectFocusedValue, rectNumpadLabel, rectEnterAction, rectAnchorLabel,
+  buildRectTableRows, buildOutlineRows, rectInputRowDefs, rectFocusedValue, rectNumpadLabel, rectEnterAction, rectAnchorLabel,
 } from '../site/siteRectInput.js';
 
 const KIND_LABEL = {
-  [SiteLineKind.BOUNDARY]:   '境界',
-  [SiteLineKind.ROAD]:       '道路境界',
-  [SiteLineKind.SURVEY]:     '測量',
+  // 三斜の線種表記は siteLineKindLabel（外周=隣地/道路・内側=-）。ここは「その他」タブの種別だけ
   [SiteLineKind.ROAD_WIDTH]: '道路幅員',
   [SiteLineKind.OTHER]:      'その他',
 };
@@ -63,13 +62,14 @@ const TD_BASE = {
   whiteSpace: 'nowrap',
 };
 
-export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, onConfirmLineLen, onConfirmTriangle, onConfirmRect, onCycleLineKind }) => {
+export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, onConfirmLineLen, onConfirmTriangle, onConfirmRect, onCycleLineKind, onToggleRectRoadSide }) => {
   const subMode   = mode.subMode;
   const ptIdx     = makePointIndex(site);
 
   const sanshaLines = site.orderedLines.filter(l => isSanshaKind(l.lineKind));
   const otherLines  = site.orderedLines.filter(l => !isSanshaKind(l.lineKind));
   const lineTriNums = computeLineTriNums(site);
+  const outerIds    = computeOuterLineIds(site);
   const areaRows    = computeAreaRows(site);
   const totalArea   = areaRows.reduce((s, r) => s + r.area, 0);
 
@@ -167,6 +167,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
   }, [mode.rectInputState, mode, subMode, onConfirmRect]);
 
   const rectTable = buildRectTableRows(site.rects);
+  const outlineRows = buildOutlineRows(site.rects);
   const rectIn     = mode.rectInputState;
   const rectSelId  = mode.selectedRectEdge?.rectId ?? null;
   // 入力行（よこ/たて・辺長/奥行）。行クリックでフォーカス移動
@@ -230,7 +231,8 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
             <tbody>
               {sanshaLines.flatMap((line, idx) => {
                 const isSelected = line.id === mode.selectedLineId;
-                const kindLabel  = KIND_LABEL[line.lineKind];
+                const isOuter    = outerIds.has(line.id);
+                const kindLabel  = siteLineKindLabel(isOuter, line.lineKind);
                 const triNums    = lineTriNums.get(line.id) ?? [];
 
                 const inp        = isSelected ? mode.inputState : null;
@@ -247,14 +249,15 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                   background: lenFocused ? '#f0fdf4' : isSelected ? '#dcfce7' : undefined,
                   outline:    lenFocused ? '2px solid #22c55e' : 'none',
                 };
-                const tdKind = { ...td, cursor: 'pointer' };
+                // 内側の線は線種セルをタップ不可（カーソル・ハンドラなし）
+                const tdKind = { ...td, cursor: isOuter ? 'pointer' : undefined };
 
                 // 行クリック（非選択時に選択）
                 const handleRowClick = () => {
                   if (!isSelected) onSelectLine?.(line.id);
                 };
 
-                // 線種クリック（確定済み行のみ循環切替）
+                // 線種クリック（確定済み行のみ道路指定の切替〔無指定⇄道路〕）
                 const handleKindClick = e => {
                   e.stopPropagation();
                   if (!isSelected) onSelectLine?.(line.id);
@@ -293,7 +296,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                         </button>
                       )}
                     </td>
-                    <td style={tdKind} onClick={handleKindClick}>{kindLabel}</td>
+                    <td style={tdKind} onClick={isOuter ? handleKindClick : undefined}>{kindLabel}</td>
                     <td style={td}>
                       {triNums.length === 0 ? '-' : triNums.map(n => (
                         <span key={n} style={{
@@ -307,7 +310,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                   </tr>,
                 ];
 
-                // 三角形未確定の選択行 → 赤辺・青辺の入力行を追加（線種は表中で循環切替）
+                // 三角形未確定の選択行 → 赤辺・青辺の入力行を追加（線種は表中で道路指定の切替〔無指定⇄道路〕）
                 if (isSelected && inp && inp.redLen !== undefined) {
                   const nextNum = site.triangleMap.size + 1;
                   const badge = (color) => (
@@ -339,7 +342,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                         }}>{inp[lenKey] || ' '}</td>
                         <td style={TD_BASE} />
                         <td style={tdKind} onClick={e => { e.stopPropagation(); mode.cycleEdgeKind(color); }}>
-                          {KIND_LABEL[inp[kindKey]]}
+                          {siteLineKindLabel(true, inp[kindKey])}
                         </td>
                         <td style={TD_BASE}>{badge(label === '赤' ? '#ef4444' : '#3b82f6')}</td>
                       </tr>
@@ -392,7 +395,8 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
             </tbody>
           </table>
         ) : subMode === 'rect' ? (
-          // ---- 長方形タブ（番号／よこ／たて／面積。合計は和集合） ----
+          // ---- 長方形タブ（番号／よこ／たて／面積。合計は和集合）＋外周表（辺ごとの道路指定） ----
+          <>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
@@ -448,6 +452,30 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
               </tr>
             </tbody>
           </table>
+          {outlineRows.length > 0 && (
+            <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 12 }}>
+              <thead>
+                <tr>
+                  <th style={{ ...TH_BASE, width: 64 }}>外周</th>
+                  <th style={TH_BASE}>長さ</th>
+                  <th style={{ ...TH_BASE, width: 80 }}>線種</th>
+                </tr>
+              </thead>
+              <tbody>
+                {outlineRows.map(row => (
+                  <tr key={row.key}>
+                    <td style={{ ...TD_BASE, fontWeight: 600 }}>{row.label}</td>
+                    <td style={TD_BASE}>{row.length.toFixed(0)}</td>
+                    <td
+                      style={{ ...TD_BASE, cursor: 'pointer' }}
+                      onClick={() => onToggleRectRoadSide?.(row.rectId, row.side)}
+                    >{row.kindLabel}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          </>
         ) : (
           // ---- その他タブ ----
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>

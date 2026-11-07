@@ -103,12 +103,13 @@ export class SiteModeState {
     } else {
       // 線分a（バッヂ0個）/ 線分b（バッヂ1個）→ 赤辺・青辺の入力行を追加
       // バッヂ0個のみ、長さフィールドを初期フォーカス（線分長さの確定が未済のため）
-      const line = this.site.lineMap.get(lineId);
       this.inputState = {
         focusedCell: badgeCount === 0 ? 'len' : 'red',
         redLen: '', blueLen: '', lenValue: '',
-        redKind: line?.lineKind ?? SiteLineKind.SURVEY,
-        blueKind: line?.lineKind ?? SiteLineKind.SURVEY,
+        // 三斜の線種は SURVEY（無指定）⇄ ROAD の2値。新しい辺は常に無指定
+        // （道路指定は外周になった線へユーザーが明示的に行う）
+        redKind: SiteLineKind.SURVEY,
+        blueKind: SiteLineKind.SURVEY,
       };
     }
   }
@@ -138,13 +139,12 @@ export class SiteModeState {
     this.inputState = { ...this.inputState, [key]: val };
   }
 
-  // 赤辺/青辺（未確定行）の線種を循環切替
+  // 赤辺/青辺（未確定行）の線種を切替（無指定=SURVEY ⇄ 道路=ROAD。BOUNDARY は無指定扱い）
   cycleEdgeKind(which) {
     if (!this.inputState) return;
-    const order = [SiteLineKind.BOUNDARY, SiteLineKind.ROAD, SiteLineKind.SURVEY];
     const key = which === 'red' ? 'redKind' : 'blueKind';
     const cur = this.inputState[key];
-    const next = order[(order.indexOf(cur) + 1) % order.length];
+    const next = cur === SiteLineKind.ROAD ? SiteLineKind.SURVEY : SiteLineKind.ROAD;
     this.inputState = { ...this.inputState, [key]: next };
   }
 

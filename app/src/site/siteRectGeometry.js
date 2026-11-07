@@ -145,6 +145,97 @@ export function isEdgeAttachable(rects, rectId, side) {
   return computeOutlineSegments(rects).some(seg => overlapsCollinear(edge, seg));
 }
 
+/**
+ * 外周片＝外周線分を、同一直線上の全長方形の辺の端点で区間に割ったもの（幾何的に一意。片の合計＝外周長）。
+ * 片の owners ＝その区間を含む辺すべて（長方形の順→北東南西順）。rectId/side は owners[0]。
+ * 別長方形の同一直線の片は端点で区切られたまま結合しない。
+ * @returns {{rectId:string, side:string, a:{x,y}, b:{x,y}, owners:{rectId:string, side:string}[]}[]}
+ */
+export function computeOutlinePieces(rects) {
+  if (!rects || rects.length === 0) return [];
+  const edges = rects.flatMap(rectEdges);
+  const isHoriz = e => e.side === RectSide.N || e.side === RectSide.S;
+  const pieces = [];
+  for (const seg of computeOutlineSegments(rects)) {
+    const horiz = Math.abs(seg.a.y - seg.b.y) <= COORD_EPS_MM;
+    const axis = horiz ? 'x' : 'y';
+    const cross = horiz ? 'y' : 'x';
+    const lines = edges.filter(e =>
+      isHoriz(e) === horiz
+      && Math.abs(e.a[cross] - seg.a[cross]) <= COORD_EPS_MM
+      && Math.min(e.b[axis], seg.b[axis]) - Math.max(e.a[axis], seg.a[axis]) > COORD_EPS_MM);
+    const cuts = uniqueSorted([
+      seg.a[axis], seg.b[axis],
+      ...lines.flatMap(e => [e.a[axis], e.b[axis]]).filter(v => v > seg.a[axis] && v < seg.b[axis]),
+    ]);
+    for (let k = 0; k + 1 < cuts.length; k++) {
+      const lo = cuts[k], hi = cuts[k + 1];
+      const owners = lines
+        .filter(e => e.a[axis] <= lo + COORD_EPS_MM && e.b[axis] >= hi - COORD_EPS_MM)
+        .map(e => ({ rectId: e.rectId, side: e.side }));
+      if (owners.length === 0) continue;
+      const a = horiz ? { x: lo, y: seg.a.y } : { x: seg.a.x, y: lo };
+      const b = horiz ? { x: hi, y: seg.a.y } : { x: seg.a.x, y: hi };
+      pieces.push({ rectId: owners[0].rectId, side: owners[0].side, a, b, owners });
+    }
+  }
+  return pieces;
+}
+
+/**
+ * 内側の辺の区間＝各長方形の辺から、その辺に属する外周片を引いた残り（辺ごと）。
+ * 完全に内側の辺は辺全体、一部が外周の辺は外周でない部分だけ。
+ * @returns {{rectId:string, side:string, a:{x,y}, b:{x,y}}[]}
+ */
+export function computeInnerEdgeSpans(rects, pieces) {
+  const out = [];
+  for (const rect of rects) {
+    for (const edge of rectEdges(rect)) {
+      const horiz = edge.side === RectSide.N || edge.side === RectSide.S;
+      const axis = horiz ? 'x' : 'y';
+      const mine = pieces
+        .filter(p => p.owners.some(o => o.rectId === rect.id && o.side === edge.side))
+        .map(p => [p.a[axis], p.b[axis]])
+        .sort((p, q) => p[0] - q[0]);
+      let cur = edge.a[axis];
+      const end = edge.b[axis];
+      const push = (lo, hi) => {
+        if (hi - lo <= COORD_EPS_MM) return;
+        out.push({
+          rectId: rect.id, side: edge.side,
+          a: horiz ? { x: lo, y: edge.a.y } : { x: edge.a.x, y: lo },
+          b: horiz ? { x: hi, y: edge.a.y } : { x: edge.a.x, y: hi },
+        });
+      };
+      for (const [lo, hi] of mine) {
+        push(cur, lo);
+        cur = Math.max(cur, hi);
+      }
+      push(cur, end);
+    }
+  }
+  return out;
+}
+
+/**
+ * 外周の角＝水平片と垂直片が端点を共有する点（同一直線の継ぎ目は水平どうし・垂直どうしなので除く）。
+ * @returns {{x:number, y:number}[]} 重複なし
+ */
+export function computeOutlineCorners(pieces) {
+  const isH = p => Math.abs(p.a.y - p.b.y) <= COORD_EPS_MM;
+  const hs = pieces.filter(isH);
+  const vs = pieces.filter(p => !isH(p));
+  const same = (p, q) => Math.abs(p.x - q.x) <= COORD_EPS_MM && Math.abs(p.y - q.y) <= COORD_EPS_MM;
+  const out = [];
+  for (const h of hs) {
+    for (const hp of [h.a, h.b]) {
+      if (out.some(o => same(o, hp))) continue;
+      if (vs.some(v => same(v.a, hp) || same(v.b, hp))) out.push({ x: hp.x, y: hp.y });
+    }
+  }
+  return out;
+}
+
 // 和集合の面積 ㎡（重なりは数えない）
 export function computeUnionAreaM2(rects) {
   if (!rects || rects.length === 0) return 0;

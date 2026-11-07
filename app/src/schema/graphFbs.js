@@ -269,7 +269,9 @@ const PLN = {
 // 末尾追加（長方形。無い旧データは読み側で空配列）
 const SITE = { POINTS: 0, LINES: 1, TRIANGLES: 2, LINE_ORDER: 3, HISTORY: 4, RECTS: 5 };
 // SiteRect（敷地の長方形）: 5 フィールド。X,Y=左上角 mm、W,H mm（float64）
-const SRCT = { ID: 0, X: 1, Y: 2, W: 3, H: 4 };
+// ROAD_SIDES: 道路指定の辺のビット集合（int8。RECT_SIDE_BIT）。旧データ（フィールド無し）は 0＝指定なし
+const SRCT = { ID: 0, X: 1, Y: 2, W: 3, H: 4, ROAD_SIDES: 5 };
+export const RECT_SIDE_BIT = Object.freeze({ n: 1, e: 2, s: 4, w: 8 });
 // SiteLine（敷地線分）: 5 フィールド
 const SLN = { ID: 0, START_PT: 1, END_PT: 2, KIND: 3, RED_PT: 4 };
 // SiteTriangle（三斜の三角形）: 4 フィールド
@@ -1027,12 +1029,13 @@ function writeSiteHistoryStep(b, h) {
 
 function writeSiteRect(b, r) {
   const sId = b.createString(r.id);
-  b.startObject(5);
+  b.startObject(6);
   b.addFieldOffset(SRCT.ID, sId, 0);
   b.addFieldFloat64(SRCT.X, r.x, 0.0);
   b.addFieldFloat64(SRCT.Y, r.y, 0.0);
   b.addFieldFloat64(SRCT.W, r.w, 0.0);
   b.addFieldFloat64(SRCT.H, r.h, 0.0);
+  b.addFieldInt8(SRCT.ROAD_SIDES, (r.roadSides ?? []).reduce((m, s) => m | (RECT_SIDE_BIT[s] ?? 0), 0), 0);
   return b.endObject();
 }
 
@@ -1829,7 +1832,9 @@ function readSiteHistoryStep(bb, tablePos) {
 
 function readSiteRect(bb, tablePos) {
   const r = makeReader(bb, tablePos);
-  return { id: r.str(SRCT.ID), x: r.f64(SRCT.X), y: r.f64(SRCT.Y), w: r.f64(SRCT.W), h: r.f64(SRCT.H) };
+  const bits = r.i8(SRCT.ROAD_SIDES);
+  const roadSides = Object.keys(RECT_SIDE_BIT).filter(s => bits & RECT_SIDE_BIT[s]);
+  return { id: r.str(SRCT.ID), x: r.f64(SRCT.X), y: r.f64(SRCT.Y), w: r.f64(SRCT.W), h: r.f64(SRCT.H), roadSides };
 }
 
 function readSite(bb, tablePos) {

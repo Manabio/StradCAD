@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   RectSide, rectEdge, rectEdges, computeAttachedRect, computeOutlineSegments,
   isEdgeAttachable, computeUnionAreaM2, pickRectEdgeAnchor,
+  computeOutlinePieces, computeOutlineCorners, computeInnerEdgeSpans,
 } from './siteRectGeometry.js';
 
 const R = (id, x, y, w, h) => ({ id, x, y, w, h });
@@ -164,4 +165,79 @@ test('pickRectEdgeAnchor: 画面左上原点に近い端点が基点（pickRedPo
   // 反転ビューポートでは b が原点に近い
   const flipped = { worldToScreen: (x, y) => ({ x: (2000 - x) * 0.1, y: y * 0.1 }) };
   assert.equal(pickRectEdgeAnchor(edge, flipped), 'b');
+});
+
+// ---- computeOutlinePieces / computeInnerEdgeSpans / computeOutlineCorners ----
+
+const pieceKeys = (ps) => ps.map(p => `${p.rectId}:${p.side}:${p.a.x},${p.a.y}-${p.b.x},${p.b.y}`).sort();
+
+test('computeOutlinePieces: 単独の長方形は4辺ぜんぶが外周片', () => {
+  const ps = computeOutlinePieces([R('a', 0, 0, 100, 50)]);
+  assert.deepEqual(pieceKeys(ps), [
+    'a:e:100,0-100,50', 'a:n:0,0-100,0', 'a:s:0,50-100,50', 'a:w:0,0-0,50',
+  ]);
+});
+
+test('computeOutlinePieces: 隣接する2つは共有辺が外周から消え、同一直線の片は結合しない（長方形ごと）', () => {
+  const ps = computeOutlinePieces([R('a', 0, 0, 100, 50), R('b', 100, 0, 100, 50)]);
+  assert.deepEqual(pieceKeys(ps), [
+    'a:n:0,0-100,0', 'a:s:0,50-100,50', 'a:w:0,0-0,50',
+    'b:e:200,0-200,50', 'b:n:100,0-200,0', 'b:s:100,50-200,50',
+  ]);
+});
+
+test('computeOutlinePieces: 共有辺が一部だけ内側のとき、外周の部分だけが片になる', () => {
+  // b は a の北辺の左半分に付く。a.n の右半分だけが外周
+  const ps = computeOutlinePieces([R('a', 0, 0, 100, 50), R('b', 0, -30, 40, 30)]);
+  assert.ok(pieceKeys(ps).includes('a:n:40,0-100,0'));
+  assert.ok(!pieceKeys(ps).some(k => k.startsWith('a:n:0,0')), '内側の部分は片にならない');
+});
+
+test('computeOutlinePieces: 同一の片が2辺に属する（同じ辺で重なる長方形）ときは重複を除き owners に束ねる', () => {
+  const ps = computeOutlinePieces([R('a', 0, 0, 100, 50), R('b', 0, 0, 100, 50)]);
+  const n = ps.filter(p => p.a.y === 0 && p.b.y === 0);
+  assert.equal(n.length, 1, '北辺は1片');
+  assert.deepEqual(n[0].owners.map(o => `${o.rectId}:${o.side}`).sort(), ['a:n', 'b:n']);
+  assert.equal(ps.length, 4);
+});
+
+test('【失敗系】computeOutlinePieces: 長方形が無ければ空', () => {
+  assert.deepEqual(computeOutlinePieces([]), []);
+  assert.deepEqual(computeOutlinePieces(null), []);
+});
+
+test('computeInnerEdgeSpans: 内側の辺は辺全体・一部外周の辺は外周でない残りだけ', () => {
+  const rects = [R('a', 0, 0, 100, 50), R('b', 0, -30, 40, 30)];
+  const spans = computeInnerEdgeSpans(rects, computeOutlinePieces(rects));
+  assert.deepEqual(pieceKeys(spans), ['a:n:0,0-40,0', 'b:s:0,0-40,0']);
+});
+
+test('computeOutlinePieces: 同一直線で部分的に重なる長方形でも片は幾何的に一意（合計＝外周長）', () => {
+  const rects = [R('a', 0, 0, 100, 100), R('b', 100, 0, 100, 50), R('c', 0, 100, 200, 50), R('d', 100, 50, 100, 100)];
+  const ps = computeOutlinePieces(rects);
+  const total = ps.reduce((s, p) => s + Math.hypot(p.b.x - p.a.x, p.b.y - p.a.y), 0);
+  assert.equal(total, 700);
+  const geo = ps.map(p => `${p.a.x},${p.a.y}-${p.b.x},${p.b.y}`);
+  assert.equal(new Set(geo).size, geo.length, '同じ区間の片が二重に出ない');
+  const owners = (k) => ps.find(p => `${p.a.x},${p.a.y}-${p.b.x},${p.b.y}` === k).owners.map(o => `${o.rectId}:${o.side}`);
+  assert.deepEqual(owners('0,150-100,150'), ['c:s']);
+  assert.deepEqual(owners('100,150-200,150'), ['c:s', 'd:s']);
+  assert.deepEqual(owners('200,0-200,50'), ['b:e']);
+  assert.deepEqual(owners('200,50-200,100'), ['d:e']);
+  assert.deepEqual(owners('200,100-200,150'), ['c:e', 'd:e']);
+  assert.deepEqual(owners('0,0-100,0'), ['a:n']);
+  assert.deepEqual(owners('100,0-200,0'), ['b:n']);
+});
+
+test('computeOutlineCorners: 市松（角だけ接する2つ）で接点が 1 回だけ出る', () => {
+  const rects = [R('a', 0, 0, 100, 100), R('b', 100, 100, 100, 100)];
+  const cs = computeOutlineCorners(computeOutlinePieces(rects));
+  assert.equal(cs.filter(c => c.x === 100 && c.y === 100).length, 1);
+});
+
+test('computeOutlineCorners: 水平片と垂直片の共有端点だけを返し、同一直線の継ぎ目は除く', () => {
+  const rects = [R('a', 0, 0, 100, 50), R('b', 100, 0, 100, 50)]; // 継ぎ目 x=100 は水平片どうし
+  const cs = computeOutlineCorners(computeOutlinePieces(rects));
+  const keys = cs.map(c => `${c.x},${c.y}`).sort();
+  assert.deepEqual(keys, ['0,0', '0,50', '200,0', '200,50'], '4隅のみ。(100,0)(100,50) の継ぎ目は出ない');
 });

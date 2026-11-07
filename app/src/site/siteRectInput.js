@@ -1,6 +1,8 @@
 // 敷地の長方形入力タブ・描画の判断を担う純関数（SiteInfoPanel.jsx / SiteRectsLayer.jsx が使う）。
 // JSX は node:test で直接テストできないため、表の行・入力行・プレビュー矩形・Enter の遷移はここへ寄せる。
-import { computeAttachedRect, computeUnionAreaM2 } from './siteRectGeometry.js';
+import { computeAttachedRect, computeUnionAreaM2, computeOutlinePieces } from './siteRectGeometry.js';
+import { siteLineKindLabel } from './siteLineStyle.js';
+import { SiteLineKind } from '../core/constants.js';
 import { evalNumpadExpr } from '../ui/numpadUtils.js';
 
 // 基点の丸（赤・青）の Konva ノード名。pointerUp の「空白タップ＝選択解除」から除外するために使う
@@ -19,6 +21,52 @@ export function buildRectTableRows(rects) {
     id: r.id, num: i + 1, w: r.w, h: r.h, areaM2: (r.w * r.h) / 1_000_000,
   }));
   return { rows, totalAreaM2: computeUnionAreaM2(rects) };
+}
+
+const SIDE_ORDER = ['n', 'e', 's', 'w'];
+const SIDE_LABEL = { n: '北', e: '東', s: '南', w: '西' };
+
+/**
+ * 長方形タブの「外周」表。外周片ごとの行（長方形の番号順→辺 北東南西順）。
+ * 線種は辺の道路指定（どれかの所有辺が道路なら道路）で「道路」、無ければ「隣地」。
+ * 辺が 2 片以上に分かれるときラベルに連番「1-北(1)」、片が複数の辺に属するときは「1-北/3-南」と並べる。
+ * @returns {{ key:string, rectId:string, side:string, pos:number, label:string, length:number, isRoad:boolean, kindLabel:string }[]}
+ */
+export function buildOutlineRows(rects) {
+  const numOf = new Map(rects.map((r, i) => [r.id, i + 1]));
+  const roadOf = new Map(rects.map(r => [r.id, r.roadSides]));
+  const pieces = computeOutlinePieces(rects);
+  // 辺（rectId+side）ごとの片を位置順に並べ、2 片以上なら連番（所有辺ごと）
+  const pos = p => p.a.x + p.a.y;
+  const ownerKey = o => `${o.rectId}/${o.side}`;
+  const byOwner = new Map();
+  for (const p of pieces) {
+    for (const o of p.owners) {
+      const k = ownerKey(o);
+      if (!byOwner.has(k)) byOwner.set(k, []);
+      byOwner.get(k).push(p);
+    }
+  }
+  for (const list of byOwner.values()) list.sort((u, v) => pos(u) - pos(v));
+  const ownerLabel = (o, p) => {
+    const list = byOwner.get(ownerKey(o));
+    const base = `${numOf.get(o.rectId)}-${SIDE_LABEL[o.side]}`;
+    return list.length > 1 ? `${base}(${list.indexOf(p) + 1})` : base;
+  };
+  return pieces.map((p, i) => {
+    const isRoad = p.owners.some(o => roadOf.get(o.rectId)?.has(o.side));
+    return {
+      key: `${p.rectId}-${p.side}-${i}`,
+      rectId: p.rectId,
+      side: p.side,
+      pos: pos(p),
+      label: p.owners.map(o => ownerLabel(o, p)).join('/'),
+      length: Math.hypot(p.b.x - p.a.x, p.b.y - p.a.y),
+      isRoad,
+      kindLabel: siteLineKindLabel(true, isRoad ? SiteLineKind.ROAD : SiteLineKind.SURVEY),
+    };
+  }).sort((u, v) => numOf.get(u.rectId) - numOf.get(v.rectId) || SIDE_ORDER.indexOf(u.side) - SIDE_ORDER.indexOf(v.side)
+    || u.pos - v.pos);
 }
 
 // 入力状態 → 入力行の定義（cell は setRectFocusedCell へ渡す値）
