@@ -1,4 +1,5 @@
 import { TOP_BAR } from '../layout.js';
+import { ModeIcon } from './modeIcons.jsx';
 
 // モード切替バー — 横長は上部中央、縦長は下部中央に常時表示。
 // 旧 HamburgerMenu のモード項目（平面/仕上げ/構造/敷地）を画面上に昇格したもの。
@@ -7,6 +8,8 @@ import { TOP_BAR } from '../layout.js';
 // 「他モードでの建具ターゲットクリック」の2経路に一本化する）。モード自体・境界処理
 // （modeBoundaries.opening）・undo履歴ナビゲーションでの復元経路（switchHistoryContext）は
 // App.jsx にそのまま残っている——ここはボタンを配列から外すだけ。
+// ボタンの中身は文字でなくアイコン（ui/modeIcons.jsx。万国共通の図柄・文字なし）。label は
+// ツールチップ（title）・読み上げ（aria-label）・App.jsx のトースト文言の対応付けに残す。
 const MODES = [
   { mode: 'floorplan', label: '平面' },
   { mode: 'finish',    label: '仕上げ' },
@@ -37,9 +40,12 @@ export function ModeBar({ appMode, onSelect, isLandscape }) {
             key={mode}
             onClick={() => onSelect(mode)}
             aria-pressed={active}
+            aria-label={label}
             title={label}
             style={{
-              padding: '5px 16px',
+              padding: '4px 10px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              lineHeight: 0,
               border: '1px solid',
               borderColor: active ? '#2563eb' : '#cbd5e1',
               borderRadius: 8,
@@ -50,7 +56,7 @@ export function ModeBar({ appMode, onSelect, isLandscape }) {
               boxShadow: active ? 'none' : '0 1px 3px rgba(0,0,0,0.08)',
             }}
           >
-            {label}
+            <ModeIcon mode={mode} />
           </button>
         );
       })}
