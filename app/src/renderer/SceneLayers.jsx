@@ -25,6 +25,9 @@ import { DrawPreview } from './DrawPreview.jsx';
 import { CLAddPreview } from './CLAddPreview.jsx';
 import { WallRefIndicator } from './WallRefIndicator.jsx';
 import { SiteLinesLayer, SiteDrawPreview } from './SiteLinesLayer.jsx';
+import { SiteRectsLayer } from './SiteRectsLayer.jsx';
+import { isEdgeAttachable } from '../site/siteRectGeometry.js';
+import { TOAST_RECT_EDGE_INNER } from '../transform/siteRectEdit.js';
 import {
   shouldShowPlanFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers,
   shouldShowColumnOriginMarks, shouldShowEquipmentSymbols, planSectionDirection,
@@ -43,7 +46,7 @@ export const SceneLayers = observer(({
   isStairMode, installEntries, upperEntries, stairLaneGap, stairBreakOverhangMm, stairUnderClips,
   structComposition, belowPlanPeek, abovePlanPeek,
   snapPoint, cursorWorld, clPreview, clDialog, menu,
-  onMemberClick, setStatusMenu,
+  onMemberClick, setStatusMenu, onToast,
   onOpeningTagClick, onElevationOpeningClick,
   didPanEnd, // 直前の pointerUp がパンの終了だったか（usePointerInteraction）。Konva はパン後も click を出すので、図形の選択はこれを見て無視する
 }) => {
@@ -139,6 +142,19 @@ export const SceneLayers = observer(({
                 viewport={viewport}
                 selectedLineId={mode.selectedLineId}
                 onSelectLine={id => { if (!didPanEnd?.()) modeRef.current?.selectLine(id); }}
+              />
+            )}
+            {appMode === 'site' && mode && (
+              <SiteRectsLayer
+                site={project.site}
+                mode={mode}
+                viewport={viewport}
+                onSelectRectEdge={(rectId, side) => {
+                  if (didPanEnd?.()) return;
+                  // 完全に内側の辺は共有辺にできない（R5）。選択時に知らせる
+                  if (!isEdgeAttachable(project.site.rects, rectId, side)) { onToast?.(TOAST_RECT_EDGE_INNER); return; }
+                  modeRef.current?.selectRectEdge(rectId, side, viewport);
+                }}
               />
             )}
             {appMode === 'site' && <SiteDrawPreview mode={mode} />}

@@ -7,6 +7,9 @@ import { NumPad } from './NumPad.jsx';
 import { applyKeyToNumpadValue, toNumpadKey, evalNumpadExpr } from './numpadUtils.js';
 import { ModePanel } from './ModePanel.jsx';
 import { BottomSheet } from './BottomSheet.jsx';
+import {
+  buildRectTableRows, rectInputRowDefs, rectFocusedValue, rectNumpadLabel, rectEnterAction, rectAnchorLabel,
+} from '../site/siteRectInput.js';
 
 const KIND_LABEL = {
   [SiteLineKind.BOUNDARY]:   '境界',
@@ -60,7 +63,7 @@ const TD_BASE = {
   whiteSpace: 'nowrap',
 };
 
-export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, onConfirmLineLen, onConfirmTriangle, onCycleLineKind }) => {
+export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, onConfirmLineLen, onConfirmTriangle, onConfirmRect, onCycleLineKind }) => {
   const subMode   = mode.subMode;
   const ptIdx     = makePointIndex(site);
 
@@ -81,7 +84,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
   // - 空欄での外クリックは、有効な確定値に戻して確定相当
   const lenFieldRef = useRef(null);
   useEffect(() => {
-    if (mode.inputState?.focusedCell !== 'len') return;
+    if (mode.inputState?.focusedCell !== 'len' || subMode === 'rect') return;
     const onPointerDown = (e) => {
       if (lenFieldRef.current?.contains(e.target)) return;
       const val = evalExpr(mode.inputState?.lenValue);
@@ -95,11 +98,11 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
     };
     document.addEventListener('pointerdown', onPointerDown);
     return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [mode.inputState, mode, onConfirmLineLen]);
+  }, [mode.inputState, mode, subMode, onConfirmLineLen]);
 
   // キーボード入力（inputState 表示中のみ）
   useEffect(() => {
-    if (!mode.inputState) return;
+    if (!mode.inputState || subMode === 'rect') return; // 長方形タブでは三斜の入力状態（残っていても）を動かさない
     const onKey = (e) => {
       if (e.key === 'Escape') {
         mode.clearInput();
@@ -138,7 +141,48 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [mode.inputState, mode, onConfirmTriangle, onConfirmLineLen, lineTriNums, sanshaLines]);
+  }, [mode.inputState, mode, subMode, onConfirmTriangle, onConfirmLineLen, lineTriNums, sanshaLines]);
+
+  // 長方形入力のキーボード（rectInputState 表示中のみ。三斜側の keydown とは別 effect）
+  useEffect(() => {
+    if (!mode.rectInputState || subMode !== 'rect') return;
+    const onKey = (e) => {
+      const st = mode.rectInputState;
+      if (e.key === 'Escape') {
+        mode.clearRectInput();
+      } else if (e.key === 'Enter') {
+        const act = rectEnterAction(st);
+        if (act?.type === 'focus') mode.setRectFocusedCell(act.cell);
+        else if (act?.type === 'confirm') onConfirmRect?.();
+      } else {
+        const numpadKey = toNumpadKey(e.key);
+        if (numpadKey != null) {
+          e.preventDefault();
+          mode.setRectInputValue(applyKeyToNumpadValue(rectFocusedValue(st), numpadKey));
+        }
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [mode.rectInputState, mode, subMode, onConfirmRect]);
+
+  const rectTable = buildRectTableRows(site.rects);
+  const rectIn     = mode.rectInputState;
+  const rectSelId  = mode.selectedRectEdge?.rectId ?? null;
+  // 入力行（よこ/たて・辺長/奥行）。行クリックでフォーカス移動
+  const rectInputRows = (keyPrefix) => rectInputRowDefs(rectIn).map(d => {
+    const focused = rectIn.focusedCell === d.cell;
+    return (
+      <tr key={`${keyPrefix}-${d.cell}`} onClick={() => mode.setRectFocusedCell(d.cell)} style={{ cursor: 'pointer' }}>
+        <td style={{ ...TD_BASE, color: '#2563eb', fontWeight: 600 }}>{d.label}</td>
+        <td colSpan={3} style={{
+          ...TD_BASE,
+          background: focused ? '#f0fdf4' : '#f7fdf9',
+          outline:    focused ? '2px solid #22c55e' : 'none',
+        }}>{d.value || ' '}</td>
+      </tr>
+    );
+  });
 
   const inner = (
     <>
@@ -146,6 +190,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
       <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', flexShrink: 0 }}>
         {[
           { key: 'sansha', label: '三斜' },
+          { key: 'rect',   label: '長方形' },
           { key: 'area',   label: '面積' },
           { key: 'other',  label: 'その他' },
         ].map(tab => (
@@ -346,6 +391,63 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
               </tr>
             </tbody>
           </table>
+        ) : subMode === 'rect' ? (
+          // ---- 長方形タブ（番号／よこ／たて／面積。合計は和集合） ----
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={{ ...TH_BASE, width: 48 }}>番号</th>
+                <th style={TH_BASE}>よこ</th>
+                <th style={TH_BASE}>たて</th>
+                <th style={{ ...TH_BASE, width: 80 }}>面積(㎡)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rectTable.rows.flatMap(row => {
+                const isSel = row.id === rectSelId;
+                const td = { ...TD_BASE, background: isSel ? '#eff6ff' : undefined };
+                const out = [
+                  <tr key={row.id}>
+                    <td style={{ ...td, fontWeight: 600 }}>{row.num}</td>
+                    <td style={td}>{row.w.toFixed(0)}</td>
+                    <td style={td}>{row.h.toFixed(0)}</td>
+                    <td style={td}>{row.areaM2.toFixed(2)}</td>
+                  </tr>,
+                ];
+                if (isSel && rectIn?.kind === 'attach') {
+                  out.push(...rectInputRows(row.id));
+                  out.push(
+                    <tr key={`${row.id}-anchor`}>
+                      <td style={{ ...TD_BASE, color: '#ef4444', fontWeight: 600 }}>基点</td>
+                      <td colSpan={2} style={TD_BASE}>{rectAnchorLabel(mode.selectedRectEdge.side, mode.rectAnchor)}</td>
+                      <td style={TD_BASE}>
+                        <button
+                          onClick={() => mode.toggleRectAnchor()}
+                          style={{
+                            padding: '2px 8px', border: '1px solid #cbd5e1', borderRadius: 4,
+                            background: '#fff', cursor: 'pointer', fontSize: 11, color: '#475569',
+                          }}
+                        >切替</button>
+                      </td>
+                    </tr>,
+                  );
+                }
+                return out;
+              })}
+              {rectIn?.kind === 'first' && rectInputRows('first')}
+              {rectTable.rows.length === 0 && !rectIn && (
+                <tr>
+                  <td colSpan={4} style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
+                    描画エリアをタップして左上角を置いてください
+                  </td>
+                </tr>
+              )}
+              <tr>
+                <td colSpan={3} style={{ ...TD_BASE, fontWeight: 700, borderTop: '2px solid #cbd5e1' }}>合計</td>
+                <td style={{ ...TD_BASE, fontWeight: 700, borderTop: '2px solid #cbd5e1' }}>{rectTable.totalAreaM2.toFixed(2)}</td>
+              </tr>
+            </tbody>
+          </table>
         ) : (
           // ---- その他タブ ----
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -412,6 +514,21 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
           />
         );
       })()}
+      {/* NumPad — 長方形タブで入力中のみ表示 */}
+      {subMode === 'rect' && mode.rectInputState && (
+        <NumPad
+          value={rectFocusedValue(mode.rectInputState)}
+          label={rectNumpadLabel(mode.rectInputState)}
+          onChange={val => mode.setRectInputValue(val)}
+          onConfirm={() => {
+            const act = rectEnterAction(mode.rectInputState);
+            if (act?.type === 'focus') mode.setRectFocusedCell(act.cell);
+            else if (act?.type === 'confirm') onConfirmRect?.();
+          }}
+          onCancel={() => mode.clearRectInput()}
+          hideDisplay
+        />
+      )}
     </>
   );
 

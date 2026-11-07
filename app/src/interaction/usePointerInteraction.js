@@ -34,6 +34,7 @@ import { snapshotOpening, pushOpeningUndo } from '../openings/openingEdit.js';
 import { inGutter as isInGutter } from '../layout.js';
 import { commitCLMoveOp } from '../transform/centerLineOps.js';
 import { commitSiteTapLine } from '../transform/siteEdit.js';
+import { RECT_ANCHOR_NODE_NAME } from '../site/siteRectInput.js';
 import { canExtendCenterLine, canShortenCenterLine } from '../transform/centerLineExtend.js';
 import { interiorWallSpans } from '../finish/edgeClassify.js';
 import { isEligibleWallSpan } from '../finish/kneeDropWall.js';
@@ -329,7 +330,7 @@ export function usePointerInteraction({
       } else {
         const sm = modeRef.current?.subMode;
         // ドラッグかタップかを pointerUp で判定するために記録（線分を入力するサブモードだけ）
-        if (sm === 'sansha' || sm === 'other') siteDrawDownRef.current = { x: clientX, y: clientY };
+        if (sm === 'sansha' || sm === 'other' || sm === 'rect') siteDrawDownRef.current = { x: clientX, y: clientY };
         drag.current = { lastX: clientX, lastY: clientY };
       }
       return;
@@ -817,6 +818,17 @@ export function usePointerInteraction({
       }
       // タップ確定
       const sm = modeRef.current?.subMode;
+      if (sm === 'rect') {
+        // 長方形入力: 長方形が1つも無く入力も無ければ、タップ点を最初の長方形の左上角に。
+        // それ以外は長方形側の選択解除（三斜側の状態は巻き込まない。辺の選択はレイヤーの onClick。基点の丸のタップは選択を保つ）
+        if (project.site.rects.length === 0 && !modeRef.current.rectInputState) {
+          const w = viewport.screenToWorld(clientX, clientY);
+          modeRef.current.startFirstRect(w.x, w.y);
+        } else if (e.target?.name?.() !== RECT_ANCHOR_NODE_NAME) {
+          modeRef.current.clearRectState();
+        }
+        return;
+      }
       if (sm !== 'sansha' && sm !== 'other') return;
       const world = viewport.screenToWorld(clientX, clientY);
       if (!modeRef.current.siteDrawState) {

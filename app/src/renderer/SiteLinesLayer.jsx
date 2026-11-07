@@ -22,7 +22,10 @@ export const SiteDrawPreview = observer(({ mode }) => {
   );
 });
 
-const KIND_COLOR = {
+// 選択中の線・辺の色（三斜の線分・長方形の共有辺で共有）
+export const SITE_SELECTED_COLOR = '#1e293b';
+
+export const KIND_COLOR = {
   [SiteLineKind.BOUNDARY]:   '#f97316', // 隣地境界線 — オレンジ
   [SiteLineKind.ROAD]:       '#ef4444', // 道路境界   — 赤
   [SiteLineKind.SURVEY]:     '#3b82f6', // 測量       — 青
@@ -31,13 +34,13 @@ const KIND_COLOR = {
 };
 
 // 線分の当たり判定幅（スクリーンpx）の上限・下限・線分長に対する比率
-const HIT_PX_MAX   = 12;
-const HIT_PX_MIN   = 2;
-const HIT_PX_RATIO = 0.15;
+export const HIT_PX_MAX   = 12;
+export const HIT_PX_MIN   = 2;
+export const HIT_PX_RATIO = 0.15;
 
 // 線分のスクリーン上の長さに応じて hitStrokeWidth（ワールド単位）を狭める。
 // 図形が小さいほど当たり判定も狭くし、隣接する辺との誤選択を防ぐ。
-function lineHitWidth(line, viewport) {
+export function lineHitWidth(line, viewport) {
   const screenLen = line.length * viewport.scaleX;
   const hitPx = Math.min(HIT_PX_MAX, Math.max(HIT_PX_MIN, screenLen * HIT_PX_RATIO));
   return hitPx / viewport.scaleX;
@@ -87,7 +90,7 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
           <Line
             key={`l-${line.id}`}
             points={resolved.points}
-            stroke={isSelected ? '#1e293b' : color}
+            stroke={isSelected ? SITE_SELECTED_COLOR : color}
             strokeWidth={resolved.width}
             strokeScaleEnabled={false}
             hitStrokeWidth={lineHitWidth(line, viewport)}

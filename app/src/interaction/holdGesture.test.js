@@ -80,9 +80,22 @@ test('【不変条件】usePointerInteraction: 仕上げ・天伏の pointerDown
   assert.match(ceiling, /^\s*longPress\.begin\(clientX, clientY\);\s*$/m);
   // 敷地: 描画エリアはサブモードによらず drag.current を立てる（配置サブモードでもパンできる）
   const site = branch(down, "if (appMode === 'site') {");
-  assert.match(site, /^\s*if \(sm === 'sansha' \|\| sm === 'other'\) siteDrawDownRef\.current = \{ x: clientX, y: clientY \};\s*$/m);
+  assert.match(site, /^\s*if \(sm === 'sansha' \|\| sm === 'other' \|\| sm === 'rect'\) siteDrawDownRef\.current = \{ x: clientX, y: clientY \};\s*$/m);
   assert.match(site, /^\s*drag\.current = \{ lastX: clientX, lastY: clientY \};\s*$/m);
-  assert.ok(!/if \(sm === 'sansha' \|\| sm === 'other'\) \{/.test(site), 'drag.current の設定がサブモードの条件の中にある');
+  assert.ok(!/if \(sm === [^)]*\) \{/.test(site), 'drag.current の設定がサブモードの条件の中にある');
+});
+
+test("【不変条件】usePointerInteraction: pointerUp の rect 分岐は、長方形0個かつ入力なしなら startFirstRect、それ以外は RECT_ANCHOR_NODE_NAME 以外で clearRectState。三斜の分岐より前", () => {
+  const src = stripComments(readSrc('./usePointerInteraction.js'));
+  const up = src.slice(src.indexOf('const handlePointerUp = '));
+  const rectStart = up.indexOf("if (sm === 'rect') {");
+  const sansha = up.indexOf("if (sm !== 'sansha' && sm !== 'other') return;");
+  assert.ok(rectStart > 0 && sansha > rectStart, 'rect 分岐は三斜の分岐より前');
+  const b = up.slice(rectStart, sansha);
+  assert.match(b, /^\s*if \(project\.site\.rects\.length === 0 && !modeRef\.current\.rectInputState\) \{\s*$/m);
+  assert.match(b, /^\s*modeRef\.current\.startFirstRect\(w\.x, w\.y\);\s*$/m);
+  assert.match(b, /^\s*\} else if \(e\.target\?\.name\?\.\(\) !== RECT_ANCHOR_NODE_NAME\) \{\s*\n\s*modeRef\.current\.clearRectState\(\);\s*$/m);
+  assert.ok(!/clearSelection\(/.test(b), '三斜側の状態を巻き込む clearSelection を使っている');
 });
 
 test('【不変条件】usePointerInteraction: 仕上げの pointerMove は、パン中はパン、dragState（ロングタップ後のなぞり）は updateDrag、8px 超の移動（longPress.move）で startPanAt', () => {

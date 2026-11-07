@@ -87,6 +87,7 @@ import { CeilingPanel }        from './ceiling/CeilingPanel.jsx';
 import {
   confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind,
 } from './transform/siteEdit.js';
+import { confirmSiteRect } from './transform/siteRectConfirm.js';
 import { composeUndoWithMergeChain } from './transform/centerLineMerge.js';
 import { extendCenterLine, shortenCenterLine } from './transform/centerLineExtend.js';
 import {
@@ -2168,6 +2169,12 @@ const App = observer(() => {
     if (toast) setToast({ msg: toast, key: Date.now() });
   }
 
+  // ---- 長方形入力の確定（最初の長方形／共有辺への付加）。実処理は transform/siteRectConfirm.js ----
+  function handleConfirmRect() {
+    const { toast } = confirmSiteRect(project.site, modeRef.current, evalExpr);
+    if (toast) setToast({ msg: toast, key: Date.now() });
+  }
+
   // ---- 確定済み線分の線種を循環切替（境界 → 道路境界 → 測量 → 境界...） ----
   // 実処理は transform/siteEdit.js の cycleSiteLineKind。
   function handleCycleLineKind(lineId) {
@@ -3098,6 +3105,7 @@ const App = observer(() => {
             menu={menu}
             onMemberClick={openMemberCard}
             setStatusMenu={setStatusMenu}
+            onToast={msg => setToast({ msg, key: Date.now() })}
           />
         </Stage>
       </div>
@@ -3182,6 +3190,7 @@ const App = observer(() => {
           onSelectLine={id => modeRef.current?.selectLine(id)}
           onConfirmLineLen={handleConfirmLineLen}
           onConfirmTriangle={handleConfirmTriangle}
+          onConfirmRect={handleConfirmRect}
           onCycleLineKind={handleCycleLineKind}
         />
       )}
