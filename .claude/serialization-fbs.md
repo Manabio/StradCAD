@@ -57,4 +57,4 @@ CL→壁→開口→部屋→境界エッジ等の順で解決する。新しい
 階ごとの実体（`PlanGraph.placedFigures`。2026-11-05。設計は`detail-figure-model.md`「姿図の配置（S10）」）。X・Y・Z・ROT は f64、MIRROR は int8、NOTE は空なら書かない。vector は0件のとき省くので配置の無い文書のバイト列は変わらない。配列順＝FBS 順。読み側の正規化は`core/placedFigure.js restorePlacedFigures`の1か所（不正を捨て同 id 先勝ち）で、FBS・plain・仕上げ undo が共用する。旧ビルドは未知フィールドを無視して読め、保存し直すと配置が消える（`roofZones`と同じ片方向）。
 
 ## 敷地の長方形（`SITE.RECTS=5`→`SRCT{ID,X,Y,W,H}`の vector）はSiteテーブルの末尾追加
-`Site.rects`（敷地モードの長方形入力。2026-11-07。設計は`data-model.md`「敷地の長方形入力」）。旧データはフィールドが無く空配列として読む。外周は保存せず読込み後に導出する。snapshot（`serializeSite`/`restoreSite`）にも同じ項目を持つ。
+`Site.rects`（敷地モードの長方形入力。2026-11-07。設計は`data-model.md`「敷地の長方形入力」）。旧データはフィールドが無く空配列として読む。外周は保存せず読込み後に導出する。`SRCT.ROAD_SIDES=5`（int8ビット N=1,E=2,S=4,W=8。`RECT_SIDE_BIT`）は道路指定の辺で末尾追加。旧データ（フィールド無し）は0＝指定なし。snapshot（`serializeSite`/`restoreSite`）にも同じ項目を持つ。
