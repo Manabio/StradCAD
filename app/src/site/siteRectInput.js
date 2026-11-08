@@ -100,17 +100,40 @@ export function rectFocusedValue(st) {
   return rectInputRowDefs(st).find(d => d.cell === st?.focusedCell)?.value ?? '';
 }
 
-// NumPad の見出し
+// 修正中の列（'w'＝よこ／'h'＝たて）に対応する入力セル。修正中でなければ null
+export function rectEditCell(st, col) {
+  return st?.editColumns?.[col] ?? null;
+}
+
+// 修正中の列の入力中の値（表のセルに出す）。修正中でなければ ''
+export function rectEditColumnValue(st, col) {
+  const cell = rectEditCell(st, col);
+  return rectInputRowDefs(st).find(d => d.cell === cell)?.value ?? '';
+}
+
+// 修正中のフォーカスセルから見た列（'w' | 'h'）。修正中でなければ null
+function rectEditColumnOf(st) {
+  if (!st?.editColumns) return null;
+  return ['w', 'h'].find(col => st.editColumns[col] === st.focusedCell) ?? null;
+}
+
+// NumPad の見出し（修正中は表の列名 よこ/たて）
 export function rectNumpadLabel(st) {
+  const col = rectEditColumnOf(st);
+  if (col) return col === 'w' ? 'よこ' : 'たて';
   return rectInputRowDefs(st).find(d => d.cell === st?.focusedCell)?.label ?? '';
 }
 
 /**
  * Enter の遷移。1 つ目のセル（w / along）なら 2 つ目へ、2 つ目なら確定。
+ * 修正中は表の列順（editColumns.w → editColumns.h）で判定する（attach×縦辺では depth → along になるため）。
  * @returns {{ type:'focus', cell:string } | { type:'confirm' } | null}
  */
 export function rectEnterAction(st) {
   if (!st) return null;
+  if (st.editColumns) {
+    return rectEditColumnOf(st) === 'w' ? { type: 'focus', cell: st.editColumns.h } : { type: 'confirm' };
+  }
   if (st.focusedCell === 'w') return { type: 'focus', cell: 'h' };
   if (st.focusedCell === 'along') return { type: 'focus', cell: 'depth' };
   return { type: 'confirm' };

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildRectTableRows, buildOutlineRows, rectInputRowDefs, rectFocusedValue, rectNumpadLabel, rectEnterAction,
-  rectAnchorLabel, computeRectPreview, evalRectLen,
+  rectAnchorLabel, computeRectPreview, evalRectLen, rectEditCell, rectEditColumnValue,
 } from './siteRectInput.js';
 
 const R = (id, x, y, w, h) => ({ id, x, y, w, h });
@@ -34,6 +34,34 @@ test('computeRectPreview: editRectId 付きでもそのまま新しい幾何の�
   assert.deepEqual(
     computeRectPreview(mapOf(base), { rectId: 'base', side: 'e' }, 'b', attach({ alongValue: '100', depthValue: '50', editRectId: 't' })),
     { x: 400, y: 200, w: 50, h: 100 });
+});
+
+const editAttachV = (o = {}) => attach({ editRectId: 't', editColumns: { w: 'depth', h: 'along' }, alongValue: '300', depthValue: '700', ...o });
+const editFirst = (o = {}) => first({ editRectId: 't', editColumns: { w: 'w', h: 'h' }, wValue: '1000', hValue: '600', ...o });
+
+test('rectEditCell / rectEditColumnValue: 修正中は列から入力セル・入力中の値を引く。修正中でなければ null / 空', () => {
+  const st = editAttachV();
+  assert.equal(rectEditCell(st, 'w'), 'depth');
+  assert.equal(rectEditCell(st, 'h'), 'along');
+  assert.equal(rectEditColumnValue(st, 'w'), '700');
+  assert.equal(rectEditColumnValue(st, 'h'), '300');
+  assert.equal(rectEditColumnValue(editFirst(), 'h'), '600');
+  assert.equal(rectEditCell(attach(), 'w'), null);
+  assert.equal(rectEditColumnValue(null, 'w'), '');
+});
+
+test('rectNumpadLabel: 修正中は列名（よこ/たて）、attach×縦辺では depth が よこ・along が たて', () => {
+  assert.equal(rectNumpadLabel(editAttachV({ focusedCell: 'depth' })), 'よこ');
+  assert.equal(rectNumpadLabel(editAttachV({ focusedCell: 'along' })), 'たて');
+  assert.equal(rectNumpadLabel(editFirst({ focusedCell: 'h' })), 'たて');
+  assert.equal(rectNumpadLabel(attach({ focusedCell: 'along' })), '辺長', '修正中でなければ従来どおり');
+});
+
+test('rectEnterAction: 修正中は列順（よこ→たて→確定）。attach×縦辺では depth → along → confirm', () => {
+  assert.deepEqual(rectEnterAction(editAttachV({ focusedCell: 'depth' })), { type: 'focus', cell: 'along' });
+  assert.deepEqual(rectEnterAction(editAttachV({ focusedCell: 'along' })), { type: 'confirm' });
+  assert.deepEqual(rectEnterAction(editFirst({ focusedCell: 'w' })), { type: 'focus', cell: 'h' });
+  assert.deepEqual(rectEnterAction(editFirst({ focusedCell: 'h' })), { type: 'confirm' });
 });
 
 test('【失敗系】buildRectTableRows: 長方形が無ければ行なし・合計 0', () => {

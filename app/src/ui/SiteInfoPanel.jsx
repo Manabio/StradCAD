@@ -9,7 +9,7 @@ import { applyKeyToNumpadValue, toNumpadKey, evalNumpadExpr } from './numpadUtil
 import { ModePanel } from './ModePanel.jsx';
 import { BottomSheet } from './BottomSheet.jsx';
 import {
-  buildRectTableRows, buildOutlineRows, rectInputRowDefs, rectFocusedValue, rectNumpadLabel, rectEnterAction, rectAnchorLabel,
+  buildRectTableRows, buildOutlineRows, rectInputRowDefs, rectFocusedValue, rectNumpadLabel, rectEnterAction, rectAnchorLabel, rectEditCell, rectEditColumnValue,
 } from '../site/siteRectInput.js';
 
 const KIND_LABEL = {
@@ -186,7 +186,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
     return (
       <tr key={`${keyPrefix}-${d.cell}`} onClick={() => mode.setRectFocusedCell(d.cell)} style={{ cursor: 'pointer' }}>
         <td style={{ ...TD_BASE, color: '#2563eb', fontWeight: 600 }}>{d.label}</td>
-        <td colSpan={5} style={{
+        <td colSpan={4} style={{
           ...TD_BASE,
           background: focused ? '#f0fdf4' : '#f7fdf9',
           outline:    focused ? '2px solid #22c55e' : 'none',
@@ -408,25 +408,52 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                 <th style={TH_BASE}>よこ</th>
                 <th style={TH_BASE}>たて</th>
                 <th style={{ ...TH_BASE, width: 80 }}>面積(㎡)</th>
-                <th style={{ ...TH_BASE, width: 40 }}>編集</th>
-                <th style={{ ...TH_BASE, width: 40 }}>削除</th>
+                <th style={{ ...TH_BASE, width: 40 }} title="削除">🗑</th>
               </tr>
             </thead>
             <tbody>
               {rectTable.rows.flatMap(row => {
                 const isSel = row.id === inputOwnerId;
                 const td = { ...TD_BASE, background: isSel ? '#eff6ff' : undefined };
+                const editing = rectIn?.editRectId === row.id;
+                // よこ・たて セル: 修正中＝その場の入力欄、修正可＝タップで修正開始の枠付き数値、不可＝素の数値
+                const dimCell = (col, value) => {
+                  if (editing) {
+                    const cell = rectEditCell(rectIn, col);
+                    const focused = rectIn.focusedCell === cell;
+                    return (
+                      <td
+                        style={{
+                          ...td, cursor: 'pointer',
+                          background: focused ? '#f0fdf4' : '#dcfce7',
+                          outline:    focused ? '2px solid #22c55e' : 'none',
+                        }}
+                        onClick={() => mode.setRectFocusedCell(cell)}
+                      >{rectEditColumnValue(rectIn, col) || ' '}</td>
+                    );
+                  }
+                  if (row.canEdit) {
+                    return (
+                      <td style={td}>
+                        <span
+                          onClick={() => onStartRectEdit?.(row.id, col)}
+                          style={{
+                            display: 'inline-block', minWidth: 32,
+                            border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff',
+                            padding: '2px 6px', cursor: 'pointer',
+                          }}
+                        >{value}</span>
+                      </td>
+                    );
+                  }
+                  return <td style={td}>{value}</td>;
+                };
                 const out = [
                   <tr key={row.id}>
                     <td style={{ ...td, fontWeight: 600 }}>{row.num}</td>
-                    <td style={td}>{row.w.toFixed(0)}</td>
-                    <td style={td}>{row.h.toFixed(0)}</td>
+                    {dimCell('w', row.w.toFixed(0))}
+                    {dimCell('h', row.h.toFixed(0))}
                     <td style={td}>{row.areaM2.toFixed(2)}</td>
-                    <td style={td}>
-                      {row.canEdit && rectIn?.editRectId !== row.id && (
-                        <button onClick={() => onStartRectEdit?.(row.id)} style={ICON_BTN} title="寸法を修正">✎</button>
-                      )}
-                    </td>
                     <td style={td}>
                       {row.canDelete && (
                         <button onClick={() => onDeleteRect?.(row.id)} style={ICON_BTN} title="削除">🗑</button>
@@ -434,16 +461,17 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                     </td>
                   </tr>,
                 ];
-                if (isSel && rectIn?.kind === 'first') {
+                // 修正中は入力欄が表のセルなので入力行は出さない（基点行だけ出す）
+                if (isSel && rectIn?.kind === 'first' && !editing) {
                   out.push(...rectInputRows(row.id));
                 }
                 if (isSel && rectIn?.kind === 'attach') {
-                  out.push(...rectInputRows(row.id));
+                  if (!editing) out.push(...rectInputRows(row.id));
                   out.push(
                     <tr key={`${row.id}-anchor`}>
                       <td style={{ ...TD_BASE, color: '#ef4444', fontWeight: 600 }}>基点</td>
                       <td colSpan={2} style={TD_BASE}>{rectAnchorLabel(mode.selectedRectEdge.side, mode.rectAnchor)}</td>
-                      <td colSpan={3} style={TD_BASE}>
+                      <td colSpan={2} style={TD_BASE}>
                         <button
                           onClick={() => mode.toggleRectAnchor()}
                           style={{
@@ -460,7 +488,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
               {rectIn?.kind === 'first' && !rectIn.editRectId && rectInputRows('first')}
               {rectTable.rows.length === 0 && !rectIn && (
                 <tr>
-                  <td colSpan={6} style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
+                  <td colSpan={5} style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
                     描画エリアをタップして左上角を置いてください
                   </td>
                 </tr>
@@ -468,7 +496,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
               <tr>
                 <td colSpan={3} style={{ ...TD_BASE, fontWeight: 700, borderTop: '2px solid #cbd5e1' }}>合計</td>
                 <td style={{ ...TD_BASE, fontWeight: 700, borderTop: '2px solid #cbd5e1' }}>{rectTable.totalAreaM2.toFixed(2)}</td>
-                <td colSpan={2} style={{ ...TD_BASE, borderTop: '2px solid #cbd5e1' }}></td>
+                <td style={{ ...TD_BASE, borderTop: '2px solid #cbd5e1' }}></td>
               </tr>
             </tbody>
           </table>

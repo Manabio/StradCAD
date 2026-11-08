@@ -33,7 +33,30 @@ test('startRectEdit: 隣接 0 は first 形式（x,y 固定・現寸を入れ ed
   assert.equal(sm.selectedRectEdge, null);
   assert.deepEqual(sm.rectInputState, {
     kind: 'first', origin: { x: 0, y: 0 }, focusedCell: 'w', wValue: '1000', hValue: '600', editRectId: rect.id,
+    editColumns: { w: 'w', h: 'h' },
   });
+});
+
+test('startRectEdit: 押した列で初期フォーカスが決まる（first は w/h、attach は基の辺が横なら h→depth・縦なら h→along）', () => {
+  const f = makeState();
+  f.sm.startRectEdit(f.rect.id, vp, 'h');
+  assert.equal(f.sm.rectInputState.focusedCell, 'h');
+
+  // 縦辺（東）に付く対象: よこ＝奥行・たて＝辺長
+  const v = makeState();
+  const tv = v.site.addRect(1000, 200, 400, 400);
+  v.sm.startRectEdit(tv.id, vp, 'h');
+  assert.deepEqual(v.sm.rectInputState.editColumns, { w: 'depth', h: 'along' });
+  assert.equal(v.sm.rectInputState.focusedCell, 'along');
+  v.sm.startRectEdit(tv.id, vp, 'w');
+  assert.equal(v.sm.rectInputState.focusedCell, 'depth');
+
+  // 横辺（南）に付く対象: よこ＝辺長・たて＝奥行
+  const h = makeState();
+  const th = h.site.addRect(0, 600, 500, 300);
+  h.sm.startRectEdit(th.id, vp, 'h');
+  assert.deepEqual(h.sm.rectInputState.editColumns, { w: 'along', h: 'depth' });
+  assert.equal(h.sm.rectInputState.focusedCell, 'depth');
 });
 
 test('startRectEdit: 隣接 1 は基の辺・基点を復元した attach 形式（片端一致なら基点はその端）', () => {
@@ -44,7 +67,8 @@ test('startRectEdit: 隣接 1 は基の辺・基点を復元した attach 形式
   assert.deepEqual(sm.selectedRectEdge, { rectId: rect.id, side: 'e' });
   assert.equal(sm.rectAnchor, 'b');
   assert.deepEqual(sm.rectInputState, {
-    kind: 'attach', focusedCell: 'along', alongValue: '400', depthValue: '400', editRectId: t.id,
+    kind: 'attach', focusedCell: 'depth', alongValue: '400', depthValue: '400', editRectId: t.id,
+    editColumns: { w: 'depth', h: 'along' },
   });
 });
 

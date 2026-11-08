@@ -2190,8 +2190,8 @@ const App = observer(() => {
   }
 
   // ---- 四角の寸法修正の開始・削除（対象は幾何から自動選定。実処理は modes/SiteModeState.js の startRectEdit と transform/siteRectEdit.js の deleteRect） ----
-  function handleStartRectEdit(rectId) {
-    modeRef.current?.startRectEdit(rectId, viewport);
+  function handleStartRectEdit(rectId, column) {
+    modeRef.current?.startRectEdit(rectId, viewport, column);
   }
 
   function handleDeleteRect(rectId) {

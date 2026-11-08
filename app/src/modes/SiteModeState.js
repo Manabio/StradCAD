@@ -20,7 +20,7 @@ export class SiteModeState {
   rectAnchor       = 'a';    // 'a' | 'b'（共有辺の基点。rectEdge の端点 a/b）
   // 最初: { kind:'first',  origin:{x,y}, focusedCell:'w'|'h',        wValue, hValue }
   // 付加: { kind:'attach', focusedCell:'along'|'depth', alongValue, depthValue }
-  // 既存の長方形の修正中は両形式とも editRectId（修正対象の id）が付く
+  // 既存の長方形の修正中は両形式とも editRectId（修正対象の id）と editColumns（表の よこ/たて 列 → 入力セル）が付く
   rectInputState   = null;
 
   constructor(site) {
@@ -192,15 +192,17 @@ export class SiteModeState {
 
   // 既存の長方形の寸法修正を始める（自動選定: 隣接 0＝最初の入力形式／隣接 1＝付加入力形式で基の辺・基点を復元）。
   // 修正不可（隣接 2 以上・基点が復元できない・存在しない）なら何もしない
-  startRectEdit(rectId, viewport) {
+  // column: 表で押した列（'w'＝よこ／'h'＝たて）。最初にフォーカスする入力セルを決める
+  startRectEdit(rectId, viewport, column = 'w') {
     const rect = this.site.rectMap.get(rectId);
     if (!rect) return;
     const rects = this.site.rects;
     if (rectNeighbors(rects, rectId).length === 0) {
       this.selectedRectEdge = null;
       this.rectInputState = {
-        kind: 'first', origin: { x: rect.x, y: rect.y }, focusedCell: 'w',
+        kind: 'first', origin: { x: rect.x, y: rect.y }, focusedCell: column,
         wValue: rect.w.toFixed(0), hValue: rect.h.toFixed(0), editRectId: rectId,
+        editColumns: { w: 'w', h: 'h' },
       };
       return;
     }
@@ -211,9 +213,13 @@ export class SiteModeState {
     this.rectAnchor = d.anchors.length === 2
       ? pickRectEdgeAnchor(rectEdge(base, d.side), viewport)
       : d.anchors[0];
+    // 表の よこ・たて 列が入力のどのセルか（基の辺が横なら よこ＝辺長、縦なら よこ＝奥行）
+    const editColumns = (d.side === 'n' || d.side === 's')
+      ? { w: 'along', h: 'depth' }
+      : { w: 'depth', h: 'along' };
     this.rectInputState = {
-      kind: 'attach', focusedCell: 'along',
-      alongValue: d.along.toFixed(0), depthValue: d.depth.toFixed(0), editRectId: rectId,
+      kind: 'attach', focusedCell: editColumns[column],
+      alongValue: d.along.toFixed(0), depthValue: d.depth.toFixed(0), editRectId: rectId, editColumns,
     };
   }
 
