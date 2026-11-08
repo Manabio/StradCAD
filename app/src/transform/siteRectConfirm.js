@@ -1,7 +1,9 @@
 // 長方形入力の確定（モード状態 → commitFirstRect / commitAttachedRect の振り分け）。
 // 三斜の confirmSiteTriangle（siteEdit.js）と同じ形: 値が無効なら何もせず toast なし、
 // 失敗時は toast を返す。成功後は呼び出し側ではなくここで clearRectInput する。
-import { commitFirstRect, commitAttachedRect } from './siteRectEdit.js';
+import {
+  commitFirstRect, commitAttachedRect, commitEditFirstRect, commitEditAttachedRect,
+} from './siteRectEdit.js';
 
 /**
  * @param {import('../core/site.js').Site} site
@@ -17,14 +19,18 @@ export function confirmSiteRect(site, mode, evalExpr) {
     const w = evalExpr(st.wValue);
     const h = evalExpr(st.hValue);
     if (!Number.isFinite(w) || !Number.isFinite(h)) return { toast: null };
-    result = commitFirstRect(site, st.origin, w, h);
+    result = st.editRectId
+      ? commitEditFirstRect(site, st.editRectId, w, h)
+      : commitFirstRect(site, st.origin, w, h);
   } else {
     const edge = mode.selectedRectEdge;
     if (!edge) return { toast: null };
     const along = evalExpr(st.alongValue);
     const depth = evalExpr(st.depthValue);
     if (!Number.isFinite(along) || !Number.isFinite(depth)) return { toast: null };
-    result = commitAttachedRect(site, edge.rectId, edge.side, mode.rectAnchor, along, depth);
+    result = st.editRectId
+      ? commitEditAttachedRect(site, st.editRectId, edge.rectId, edge.side, mode.rectAnchor, along, depth)
+      : commitAttachedRect(site, edge.rectId, edge.side, mode.rectAnchor, along, depth);
   }
   if (result.ok) mode.clearRectInput();
   return { toast: result.toast };

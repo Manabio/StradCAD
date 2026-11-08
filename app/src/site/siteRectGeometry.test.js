@@ -4,6 +4,7 @@ import {
   RectSide, rectEdge, rectEdges, computeAttachedRect, computeOutlineSegments,
   isEdgeAttachable, computeUnionAreaM2, pickRectEdgeAnchor,
   computeOutlinePieces, computeOutlineCorners, computeInnerEdgeSpans,
+  rectNeighbors, isRectsConnected, canDeleteRect, deriveRectAttachment, canEditRect,
 } from './siteRectGeometry.js';
 
 const R = (id, x, y, w, h) => ({ id, x, y, w, h });
@@ -240,4 +241,99 @@ test('computeOutlineCorners: 水平片と垂直片の共有端点だけを返し
   const cs = computeOutlineCorners(computeOutlinePieces(rects));
   const keys = cs.map(c => `${c.x},${c.y}`).sort();
   assert.deepEqual(keys, ['0,0', '0,50', '200,0', '200,50'], '4隅のみ。(100,0)(100,50) の継ぎ目は出ない');
+});
+
+// ---- 隣接・連結・修正/削除の自動選定 ----
+
+test('rectNeighbors: 辺の共有・面積の重なりは隣接、角だけの接触・離れは隣接でない', () => {
+  const a = R('a', 0, 0, 100, 100);
+  const share = R('share', 100, 20, 50, 50);   // 辺 x=100 を正の長さで共有
+  const overlap = R('overlap', 50, 50, 100, 100); // 面積が重なる
+  const corner = R('corner', 100, 100, 50, 50);   // 角 (100,100) だけ
+  const far = R('far', 300, 0, 10, 10);
+  assert.deepEqual(rectNeighbors([a, share, overlap, corner, far], 'a').map(r => r.id), ['share', 'overlap']);
+  assert.deepEqual(rectNeighbors([a], 'none'), [], '存在しない id は空');
+});
+
+test('isRectsConnected: 0・1 個は true、鎖はつながる、離れた長方形が混じれば false', () => {
+  const a = R('a', 0, 0, 100, 100), b = R('b', 100, 0, 100, 100), c = R('c', 200, 0, 100, 100);
+  assert.equal(isRectsConnected([]), true);
+  assert.equal(isRectsConnected([a]), true);
+  assert.equal(isRectsConnected([a, b, c]), true);
+  assert.equal(isRectsConnected([a, c]), false, '間の B を除くと離れる');
+  assert.equal(isRectsConnected([a, R('d', 100, 100, 50, 50)]), false, '角だけの接触は連結でない');
+});
+
+test('canDeleteRect: 鎖 A-B-C は両端だけ削除可（B は残りが分かれて不可）、単独は削除可', () => {
+  const rects = [R('a', 0, 0, 100, 100), R('b', 100, 0, 100, 100), R('c', 200, 0, 100, 100)];
+  assert.equal(canDeleteRect(rects, 'a'), true);
+  assert.equal(canDeleteRect(rects, 'b'), false);
+  assert.equal(canDeleteRect(rects, 'c'), true);
+  assert.equal(canDeleteRect([R('x', 0, 0, 10, 10)], 'x'), true);
+  assert.equal(canDeleteRect(rects, 'none'), false);
+});
+
+// 基 B(1000,1000,400x300) の各辺に、基点 a/b ごとに対象を computeAttachedRect で作り、復元して往復一致を見る
+test('deriveRectAttachment: 4辺×基点 a/b の往復で computeAttachedRect が対象に一致（along/depth・side も復元）', () => {
+  const base = R('base', 1000, 1000, 400, 300);
+  for (const side of ['n', 'e', 's', 'w']) {
+    for (const anchor of ['a', 'b']) {
+      const horiz = side === 'n' || side === 's';
+      const edgeLen = horiz ? base.w : base.h;
+      const along = edgeLen - 100; // 辺より短い（片側の端だけ一致）
+      const depth = 250;
+      const g = computeAttachedRect(base, side, anchor, along, depth);
+      const target = R('t', g.x, g.y, g.w, g.h);
+      const d = deriveRectAttachment([base, target], 't');
+      assert.ok(d, `${side}/${anchor}`);
+      assert.equal(d.baseRectId, 'base');
+      assert.equal(d.side, side);
+      assert.equal(d.along, along);
+      assert.equal(d.depth, depth);
+      assert.deepEqual(d.anchors, [anchor], '片方の端だけ一致');
+      for (const an of d.anchors) {
+        const re = computeAttachedRect(base, d.side, an, d.along, d.depth);
+        assert.deepEqual(re, { x: target.x, y: target.y, w: target.w, h: target.h });
+      }
+    }
+  }
+});
+
+test('deriveRectAttachment: 辺と同じ長さなら両端一致（anchors が2つ）で、どちらの基点でも対象に一致', () => {
+  const base = R('base', 0, 0, 400, 300);
+  const target = R('t', 400, 0, 200, 300);
+  const d = deriveRectAttachment([base, target], 't');
+  assert.deepEqual(d.anchors, ['a', 'b']);
+  assert.equal(d.side, 'e');
+  for (const an of d.anchors) {
+    assert.deepEqual(computeAttachedRect(base, d.side, an, d.along, d.depth), { x: 400, y: 0, w: 200, h: 300 });
+  }
+});
+
+test('【失敗系】deriveRectAttachment: 基点が辺の端と一致しない・面積が重なる・隣接 2・存在しないは null', () => {
+  const base = R('base', 0, 0, 400, 300);
+  assert.equal(deriveRectAttachment([base, R('t', 400, 50, 100, 100)], 't'), null, '辺の中ほどに付く＝どちらの端とも不一致');
+  assert.equal(deriveRectAttachment([base, R('t', 300, 100, 200, 100)], 't'), null, '面積が重なる');
+  assert.equal(deriveRectAttachment([base, R('far', 900, 900, 10, 10)], 'far'), null, '隣接 0');
+  assert.equal(deriveRectAttachment([base], 'none'), null);
+  const mid = [R('a', 0, 0, 100, 100), R('b', 100, 0, 100, 100), R('c', 200, 0, 100, 100)];
+  assert.equal(deriveRectAttachment(mid, 'b'), null, '隣接 2');
+});
+
+test('canEditRect: 角だけ接する長方形は隣接に数えない', () => {
+  const a = R('a', 0, 0, 1000, 1000);
+  const b = R('b', 1000, 0, 500, 500);   // A の東に付加
+  const c = R('c', 1500, 500, 300, 300); // B と角 (1500,500) だけで接する
+  assert.equal(canEditRect([a, b, c], 'b'), true, 'B の隣接は A だけ');
+  assert.deepEqual(rectNeighbors([a, b, c], 'c'), []);
+});
+
+test('canEditRect: 隣接 0 と 隣接 1（復元可）は可、隣接 2 以上・基点不一致・存在しないは不可', () => {
+  const chain = [R('a', 0, 0, 100, 100), R('b', 100, 0, 100, 100), R('c', 200, 0, 100, 100)];
+  assert.equal(canEditRect(chain, 'a'), true);
+  assert.equal(canEditRect(chain, 'c'), true);
+  assert.equal(canEditRect(chain, 'b'), false, '隣接 2');
+  assert.equal(canEditRect([R('x', 0, 0, 10, 10)], 'x'), true, '隣接 0');
+  assert.equal(canEditRect([R('a', 0, 0, 400, 300), R('t', 400, 50, 100, 100)], 't'), false, '基点が復元できない');
+  assert.equal(canEditRect(chain, 'none'), false);
 });

@@ -253,3 +253,92 @@ export function computeUnionAreaM2(rects) {
 export function pickRectEdgeAnchor(edge, viewport) {
   return pickRedPointId({ id: 'a', ...edge.a }, { id: 'b', ...edge.b }, viewport);
 }
+
+// ---- 隣接・連結・修正/削除の自動選定（端の長方形だけが対象。設計意図は .claude/data-model.md） ----
+
+// 2 つの長方形が隣接＝閉区間の重なりが両軸で非負、かつ少なくとも一方が正（辺の正の長さの共有か面積の重なり。角だけの接触は隣接でない）
+function areRectsAdjacent(p, q) {
+  const ox = Math.min(p.x + p.w, q.x + q.w) - Math.max(p.x, q.x);
+  const oy = Math.min(p.y + p.h, q.y + q.h) - Math.max(p.y, q.y);
+  return ox >= -COORD_EPS_MM && oy >= -COORD_EPS_MM && (ox > COORD_EPS_MM || oy > COORD_EPS_MM);
+}
+
+/** rectId の長方形に隣接する長方形の配列（rects の順）。 */
+export function rectNeighbors(rects, rectId) {
+  const rect = rects.find(r => r.id === rectId);
+  if (!rect) return [];
+  return rects.filter(r => r.id !== rectId && areRectsAdjacent(rect, r));
+}
+
+/** 隣接関係で全長方形がつながっているか（BFS。0・1 個は true）。 */
+export function isRectsConnected(rects) {
+  if (rects.length <= 1) return true;
+  const seen = new Set([rects[0].id]);
+  const queue = [rects[0]];
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    for (const r of rects) {
+      if (!seen.has(r.id) && areRectsAdjacent(cur, r)) {
+        seen.add(r.id);
+        queue.push(r);
+      }
+    }
+  }
+  return seen.size === rects.length;
+}
+
+/** 削除可＝その長方形を除いた残りが連結。存在しなければ false。 */
+export function canDeleteRect(rects, rectId) {
+  if (!rects.some(r => r.id === rectId)) return false;
+  return isRectsConnected(rects.filter(r => r.id !== rectId));
+}
+
+// 対象が基の辺 side の外側に付いているときの、対象側の対面の辺（e→w, w→e, s→n, n→s）
+const FACING_SIDE = {
+  [RectSide.E]: RectSide.W,
+  [RectSide.W]: RectSide.E,
+  [RectSide.S]: RectSide.N,
+  [RectSide.N]: RectSide.S,
+};
+
+/**
+ * 隣接 1 の長方形から付加入力（基の辺・基点・辺長・奥行）を復元する。
+ * 付加入力は常に基の辺の端点から伸ばすので、保存せず幾何から復元できる。
+ * 隣接が 1 でない／面積が重なる（どの辺にも当たらない）／基点が復元できない → null。
+ * @returns {{ baseRectId:string, side:string, along:number, depth:number, anchors:('a'|'b')[] } | null}
+ */
+export function deriveRectAttachment(rects, rectId) {
+  const target = rects.find(r => r.id === rectId);
+  if (!target) return null;
+  const neighbors = rectNeighbors(rects, rectId);
+  if (neighbors.length !== 1) return null;
+  const base = neighbors[0];
+  const near = (u, v) => Math.abs(u - v) <= COORD_EPS_MM;
+  let side;
+  if (near(target.x, base.x + base.w)) side = RectSide.E;
+  else if (near(target.x + target.w, base.x)) side = RectSide.W;
+  else if (near(target.y, base.y + base.h)) side = RectSide.S;
+  else if (near(target.y + target.h, base.y)) side = RectSide.N;
+  else return null;
+  const horizontal = side === RectSide.N || side === RectSide.S;
+  const edge = rectEdge(base, side);
+  const facing = rectEdge(target, FACING_SIDE[side]);
+  const samePoint = (p, q) => near(p.x, q.x) && near(p.y, q.y);
+  const anchors = [];
+  if (samePoint(edge.a, facing.a)) anchors.push('a');
+  if (samePoint(edge.b, facing.b)) anchors.push('b');
+  if (anchors.length === 0) return null;
+  return {
+    baseRectId: base.id,
+    side,
+    along: horizontal ? target.w : target.h,
+    depth: horizontal ? target.h : target.w,
+    anchors,
+  };
+}
+
+/** 修正可＝隣接 0（最初の入力形式）または付加入力を復元できる（隣接 1）。隣接 2 以上は不可。 */
+export function canEditRect(rects, rectId) {
+  if (!rects.some(r => r.id === rectId)) return false;
+  return rectNeighbors(rects, rectId).length === 0 || deriveRectAttachment(rects, rectId) !== null;
+}

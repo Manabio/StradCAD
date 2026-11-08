@@ -6,8 +6,10 @@ import { undoManager } from '../undoManager.js';
 import {
   commitFirstRect, commitAttachedRect, toggleRectRoadSide, TOAST_RECT_ROAD_INNER,
   TOAST_RECT_EDGE_INNER, TOAST_RECT_ATTACH_BAD, TOAST_RECT_SIZE_BAD, TOAST_RECT_BASE_MISSING,
+  deleteRect, commitEditFirstRect, commitEditAttachedRect, TOAST_RECT_EDIT_LOCKED, TOAST_RECT_DELETE_LOCKED,
 } from './siteRectEdit.js';
-import { buildOutlineRows } from '../site/siteRectInput.js';
+import { buildOutlineRows, buildRectTableRows } from '../site/siteRectInput.js';
+import { isEdgeAttachable } from '../site/siteRectGeometry.js';
 
 test('commitFirstRect: 長方形を追加し、undo で消え redo で同 id・同寸法で戻る', () => {
   const site = new Site();
@@ -199,4 +201,164 @@ test('【失敗系】commitAttachedRect: 失敗時は道路指定を変えず un
   assert.equal(res.ok, false);
   assert.equal(site.rectMap.get(a.rectId).roadSides.has('n'), true);
   assert.equal(undoManager.peekUndo(), before);
+});
+
+// ---- 削除・寸法修正 ----
+
+const geom = (r) => ({ x: r.x, y: r.y, w: r.w, h: r.h });
+
+test('deleteRect: 端の長方形を消し、undo で同 id・roadSides ごと戻り redo で再び消える', () => {
+  const site = new Site();
+  const a = commitFirstRect(site, { x: 0, y: 0 }, 1000, 600);
+  const b = commitAttachedRect(site, a.rectId, 'e', 'a', 600, 500);
+  toggleRectRoadSide(site, b.rectId, 'n'); // B の北辺（外周）を道路に
+  const res = deleteRect(site, b.rectId);
+  assert.deepEqual(res, { ok: true, toast: null });
+  assert.equal(site.rectMap.has(b.rectId), false);
+
+  undoManager.undo();
+  const back = site.rectMap.get(b.rectId);
+  assert.ok(back, '同 id で戻る');
+  assert.deepEqual(geom(back), { x: 1000, y: 0, w: 500, h: 600 });
+  assert.deepEqual([...back.roadSides], ['n'], 'roadSides も復元');
+
+  undoManager.redo();
+  assert.equal(site.rectMap.has(b.rectId), false);
+});
+
+test('deleteRect: 中間（A,B,C の B）を消して undo すると id 順・番号・外周ラベルが削除前と一致する', () => {
+  const site = new Site();
+  const a = commitFirstRect(site, { x: 0, y: 0 }, 1000, 600);
+  const b = commitAttachedRect(site, a.rectId, 'e', 'a', 600, 500);
+  const c = commitAttachedRect(site, a.rectId, 'w', 'a', 600, 400);
+  // B を端にするため C は A の西側。B・C とも端なので B は削除可
+  const ids = site.rects.map(r => r.id);
+  assert.deepEqual(ids, [a.rectId, b.rectId, c.rectId]);
+  const tableBefore = buildRectTableRows(site.rects);
+  const outlineBefore = buildOutlineRows(site.rects);
+  const keep = site.rectMap.get(c.rectId);
+  assert.equal(deleteRect(site, b.rectId).ok, true);
+  undoManager.undo();
+  assert.deepEqual(site.rects.map(r => r.id), ids);
+  assert.equal(site.rectMap.get(c.rectId), keep, '他の SiteRect は同じインスタンス');
+  assert.deepEqual(buildRectTableRows(site.rects), tableBefore);
+  assert.deepEqual(buildOutlineRows(site.rects), outlineBefore);
+});
+
+test('【失敗系】deleteRect: 残りが分かれる削除（鎖の中間）・存在しない id は TOAST_RECT_DELETE_LOCKED で undo を積まない', () => {
+  const site = new Site();
+  const a = commitFirstRect(site, { x: 0, y: 0 }, 1000, 600);
+  const b = commitAttachedRect(site, a.rectId, 'e', 'a', 600, 500);
+  commitAttachedRect(site, b.rectId, 'e', 'a', 600, 400);
+  const before = undoManager.peekUndo();
+  for (const id of [b.rectId, 'none']) {
+    const res = deleteRect(site, id);
+    assert.deepEqual(res, { ok: false, toast: TOAST_RECT_DELETE_LOCKED });
+  }
+  assert.equal(site.rects.length, 3);
+  assert.equal(undoManager.peekUndo(), before, 'undo は積まれない');
+});
+
+test('commitEditFirstRect: 同じインスタンスの w,h を書き換え（x,y・id・roadSides 保持）、undo/redo で往復する', () => {
+  const site = new Site();
+  const a = commitFirstRect(site, { x: 100, y: 200 }, 1000, 600);
+  toggleRectRoadSide(site, a.rectId, 'n');
+  const inst = site.rectMap.get(a.rectId);
+  const res = commitEditFirstRect(site, a.rectId, 2000, 800);
+  assert.deepEqual(res, { ok: true, toast: null });
+  assert.equal(site.rectMap.get(a.rectId), inst, '同一インスタンス');
+  assert.deepEqual(geom(inst), { x: 100, y: 200, w: 2000, h: 800 });
+  assert.deepEqual([...inst.roadSides], ['n']);
+
+  undoManager.undo();
+  assert.deepEqual(geom(inst), { x: 100, y: 200, w: 1000, h: 600 });
+  undoManager.redo();
+  assert.deepEqual(geom(inst), { x: 100, y: 200, w: 2000, h: 800 });
+});
+
+test('【失敗系】commitEditFirstRect: 無効寸法は TOAST_RECT_SIZE_BAD、隣接ありは TOAST_RECT_EDIT_LOCKED、いずれも不変・undo なし', () => {
+  const site = new Site();
+  const a = commitFirstRect(site, { x: 0, y: 0 }, 1000, 600);
+  const before = undoManager.peekUndo();
+  for (const [w, h] of [[0, 100], [100, -1], [NaN, 100]]) {
+    assert.deepEqual(commitEditFirstRect(site, a.rectId, w, h), { ok: false, toast: TOAST_RECT_SIZE_BAD });
+  }
+  assert.deepEqual(geom(site.rectMap.get(a.rectId)), { x: 0, y: 0, w: 1000, h: 600 });
+  commitAttachedRect(site, a.rectId, 'e', 'a', 600, 500);
+  const before2 = undoManager.peekUndo();
+  assert.deepEqual(commitEditFirstRect(site, a.rectId, 500, 500), { ok: false, toast: TOAST_RECT_EDIT_LOCKED });
+  assert.equal(undoManager.peekUndo(), before2);
+  assert.notEqual(before, before2);
+});
+
+test('commitEditAttachedRect: 同じインスタンスを書き換え（id 同一）、基点・辺長・奥行どおりの幾何。undo/redo で往復', () => {
+  const site = new Site();
+  const a = commitFirstRect(site, { x: 0, y: 0 }, 1000, 600);
+  const b = commitAttachedRect(site, a.rectId, 'e', 'a', 300, 500);
+  const inst = site.rectMap.get(b.rectId);
+  const res = commitEditAttachedRect(site, b.rectId, a.rectId, 'e', 'b', 400, 700);
+  assert.deepEqual(res, { ok: true, toast: null });
+  assert.equal(site.rectMap.get(b.rectId), inst);
+  // 東辺の基点 b（下端 y=600）から上へ 400、外側（東）へ 700
+  assert.deepEqual(geom(inst), { x: 1000, y: 200, w: 700, h: 400 });
+
+  undoManager.undo();
+  assert.deepEqual(geom(inst), { x: 1000, y: 0, w: 500, h: 300 });
+  undoManager.redo();
+  assert.deepEqual(geom(inst), { x: 1000, y: 200, w: 700, h: 400 });
+});
+
+test('commitEditAttachedRect: 基の辺を全部覆っている対象も修正できる（基の辺の外周判定は対象を除いた rects で行う）', () => {
+  const site = new Site();
+  const a = commitFirstRect(site, { x: 0, y: 0 }, 1000, 600);
+  const b = commitAttachedRect(site, a.rectId, 'e', 'a', 600, 500); // A の東辺を全部覆う
+  assert.equal(isEdgeAttachable(site.rects, a.rectId, 'e'), false, '全体では A の東辺は内側に見える');
+  const res = commitEditAttachedRect(site, b.rectId, a.rectId, 'e', 'a', 600, 800);
+  assert.deepEqual(res, { ok: true, toast: null });
+  assert.deepEqual(geom(site.rectMap.get(b.rectId)), { x: 1000, y: 0, w: 800, h: 600 });
+});
+
+test('commitEditAttachedRect: 修正で内側になった辺の道路指定は無指定へ格下げされ、undo で戻る', () => {
+  const site = new Site();
+  const a = commitFirstRect(site, { x: 0, y: 0 }, 1000, 600);
+  const b = commitAttachedRect(site, a.rectId, 'e', 'a', 300, 500); // 東辺の上 300 に付く
+  toggleRectRoadSide(site, a.rectId, 'e'); // A の東辺（外周片は y 300..600 のみ）を道路に
+  assert.equal(site.rectMap.get(a.rectId).roadSides.has('e'), true);
+  // B を東辺の全長（600）へ伸ばすと A の東辺は完全に内側
+  const res = commitEditAttachedRect(site, b.rectId, a.rectId, 'e', 'a', 600, 500);
+  assert.equal(res.ok, true);
+  assert.equal(site.rectMap.get(a.rectId).roadSides.has('e'), false, '格下げ');
+  undoManager.undo();
+  assert.equal(site.rectMap.get(a.rectId).roadSides.has('e'), true, 'undo で道路指定も戻る');
+  assert.deepEqual(geom(site.rectMap.get(b.rectId)), { x: 1000, y: 0, w: 500, h: 300 });
+  undoManager.redo();
+  assert.equal(site.rectMap.get(a.rectId).roadSides.has('e'), false);
+});
+
+test('【失敗系】commitEditAttachedRect: 隣接 2・無効寸法・基が無い・基と同一は拒否し、不変・undo なし', () => {
+  const site = new Site();
+  const a = commitFirstRect(site, { x: 0, y: 0 }, 1000, 600);
+  const b = commitAttachedRect(site, a.rectId, 'e', 'a', 600, 500);
+  const c = commitAttachedRect(site, b.rectId, 'e', 'a', 600, 400);
+  const before = undoManager.peekUndo();
+  assert.deepEqual(commitEditAttachedRect(site, b.rectId, a.rectId, 'e', 'a', 600, 300),
+    { ok: false, toast: TOAST_RECT_EDIT_LOCKED }, 'B は隣接 2');
+  assert.deepEqual(commitEditAttachedRect(site, c.rectId, b.rectId, 'e', 'a', 0, 300),
+    { ok: false, toast: TOAST_RECT_ATTACH_BAD });
+  assert.deepEqual(commitEditAttachedRect(site, c.rectId, 'none', 'e', 'a', 100, 300),
+    { ok: false, toast: TOAST_RECT_BASE_MISSING });
+  assert.deepEqual(commitEditAttachedRect(site, c.rectId, c.rectId, 'e', 'a', 100, 300),
+    { ok: false, toast: TOAST_RECT_BASE_MISSING });
+  assert.deepEqual(geom(site.rectMap.get(c.rectId)), { x: 1500, y: 0, w: 400, h: 600 });
+  assert.equal(undoManager.peekUndo(), before);
+});
+
+test('長方形を付けてから削除すると、外周表は付ける前（A だけ）と一致する（外周片は導出で一本へ戻る）', () => {
+  const site = new Site();
+  const a = commitFirstRect(site, { x: 0, y: 0 }, 1000, 600);
+  const onlyA = buildOutlineRows(site.rects);
+  const b = commitAttachedRect(site, a.rectId, 'e', 'a', 300, 500);
+  assert.notDeepEqual(buildOutlineRows(site.rects), onlyA, '付けると外周片が分かれる');
+  assert.equal(deleteRect(site, b.rectId).ok, true);
+  assert.deepEqual(buildOutlineRows(site.rects), onlyA);
 });

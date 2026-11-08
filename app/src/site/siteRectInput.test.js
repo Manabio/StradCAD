@@ -20,6 +20,22 @@ test('buildRectTableRows: 番号は rects の順（1始まり）、面積は㎡�
   assert.equal(totalAreaM2, 18, '重なり 2000×3000 を二重に数えない');
 });
 
+test('buildRectTableRows: canEdit / canDelete は端の長方形だけ真（鎖 A-B-C の B は両方偽）', () => {
+  const rects = [R('a', 0, 0, 100, 100), R('b', 100, 0, 100, 100), R('c', 200, 0, 100, 100)];
+  const { rows } = buildRectTableRows(rects);
+  assert.deepEqual(rows.map(r => [r.id, r.canEdit, r.canDelete]), [['a', true, true], ['b', false, false], ['c', true, true]]);
+  assert.deepEqual(buildRectTableRows([R('x', 0, 0, 10, 10)]).rows.map(r => [r.canEdit, r.canDelete]), [[true, true]]);
+});
+
+test('computeRectPreview: editRectId 付きでもそのまま新しい幾何のプレビューになる（first・attach）', () => {
+  assert.deepEqual(computeRectPreview(new Map(), null, 'a', first({ wValue: '2500', hValue: '1500', editRectId: 'a' })),
+    { x: 10, y: 20, w: 2500, h: 1500 });
+  const base = R('base', 0, 0, 400, 300);
+  assert.deepEqual(
+    computeRectPreview(mapOf(base), { rectId: 'base', side: 'e' }, 'b', attach({ alongValue: '100', depthValue: '50', editRectId: 't' })),
+    { x: 400, y: 200, w: 50, h: 100 });
+});
+
 test('【失敗系】buildRectTableRows: 長方形が無ければ行なし・合計 0', () => {
   assert.deepEqual(buildRectTableRows([]), { rows: [], totalAreaM2: 0 });
 });

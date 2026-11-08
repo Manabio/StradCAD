@@ -27,6 +27,81 @@ test('selectRectEdge: 共有辺を選び基点を左上原点に近い端点で�
   assert.deepEqual(sm.rectInputState, { kind: 'attach', focusedCell: 'along', alongValue: '', depthValue: '' });
 });
 
+test('startRectEdit: 隣接 0 は first 形式（x,y 固定・現寸を入れ editRectId 付き）で選択辺なし', () => {
+  const { rect, sm } = makeState();
+  sm.startRectEdit(rect.id, vp);
+  assert.equal(sm.selectedRectEdge, null);
+  assert.deepEqual(sm.rectInputState, {
+    kind: 'first', origin: { x: 0, y: 0 }, focusedCell: 'w', wValue: '1000', hValue: '600', editRectId: rect.id,
+  });
+});
+
+test('startRectEdit: 隣接 1 は基の辺・基点を復元した attach 形式（片端一致なら基点はその端）', () => {
+  const { site, rect, sm } = makeState();
+  // rect(0,0,1000,600) の東辺に下端（基点 b）から付く 400x400
+  const t = site.addRect(1000, 200, 400, 400);
+  sm.startRectEdit(t.id, vp);
+  assert.deepEqual(sm.selectedRectEdge, { rectId: rect.id, side: 'e' });
+  assert.equal(sm.rectAnchor, 'b');
+  assert.deepEqual(sm.rectInputState, {
+    kind: 'attach', focusedCell: 'along', alongValue: '400', depthValue: '400', editRectId: t.id,
+  });
+});
+
+test('startRectEdit: 両端一致なら基点は pickRectEdgeAnchor の規則で初期化', () => {
+  const { site, rect, sm } = makeState();
+  const t = site.addRect(1000, 0, 400, 600);
+  sm.startRectEdit(t.id, vp);
+  assert.deepEqual(sm.selectedRectEdge, { rectId: rect.id, side: 'e' });
+  assert.equal(sm.rectAnchor, 'a', '画面左上に近い端点');
+});
+
+test('【失敗系】startRectEdit: 修正不可（隣接 2・基点不一致・存在しない）は何もしない', () => {
+  const { site, sm } = makeState(); // A(0,0,1000,600)
+  const b = site.addRect(1000, 0, 500, 600);
+  site.addRect(1500, 0, 500, 600);
+  sm.startRectEdit(b.id, vp); // 隣接 2
+  assert.equal(sm.rectInputState, null);
+  const s2 = makeState(); // 基の東辺の中ほどに付く＝どちらの端とも不一致
+  const odd = s2.site.addRect(1000, 100, 300, 200);
+  s2.sm.startRectEdit(odd.id, vp);
+  assert.equal(s2.sm.rectInputState, null);
+  assert.equal(s2.sm.selectedRectEdge, null);
+  sm.startRectEdit('none', vp);
+  assert.equal(sm.rectInputState, null);
+  assert.equal(sm.selectedRectEdge, null);
+});
+
+test('setRectInputValue / setRectFocusedCell は editRectId を保つ', () => {
+  const { rect, sm } = makeState();
+  sm.startRectEdit(rect.id, vp);
+  sm.setRectInputValue('1500');
+  sm.setRectFocusedCell('h');
+  sm.setRectInputValue('700');
+  assert.equal(sm.rectInputState.editRectId, rect.id);
+  assert.equal(sm.rectInputState.wValue, '1500');
+  assert.equal(sm.rectInputState.hValue, '700');
+});
+
+test('修正中の長方形（editRectId）が消えたら（undo 等）長方形側の入力を残さない', () => {
+  const { site, rect, sm } = makeState();
+  sm.startRectEdit(rect.id, vp);
+  assert.ok(sm.rectInputState);
+  site.removeRect(rect.id);
+  assert.equal(sm.rectInputState, null);
+  assert.equal(sm.selectedRectEdge, null);
+});
+
+test('startRectEdit 後に selectRectEdge すると editRectId が消え新規付加になる', () => {
+  const { site, rect, sm } = makeState();
+  const b = site.addRect(1000, 0, 400, 600);
+  sm.startRectEdit(b.id, vp);
+  assert.equal(sm.rectInputState.editRectId, b.id);
+  sm.selectRectEdge(rect.id, 's', vp);
+  assert.deepEqual(sm.rectInputState, { kind: 'attach', focusedCell: 'along', alongValue: '', depthValue: '' });
+  assert.equal('editRectId' in sm.rectInputState, false);
+});
+
 test('toggleRectAnchor: a と b を切り替える（辺未選択なら何もしない）', () => {
   const { rect, sm } = makeState();
   sm.toggleRectAnchor();

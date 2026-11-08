@@ -106,6 +106,7 @@ export class Site {
       rects:         computed,
       addRect:       action,
       removeRect:    action,
+      insertRectAt:  action,
       addPoint:      action,
       removePoint:   action,
       addLine:       action,
@@ -167,6 +168,17 @@ export class Site {
   addRect(x, y, w, h, id = crypto.randomUUID(), roadSides = []) {
     const rect = new SiteRect(id, x, y, w, h, roadSides);
     this.rectMap.set(rect.id, rect);
+    return rect;
+  }
+
+  // 削除の undo 用: 表示番号（rectMap の挿入順）を保つため、index の位置へ同 id の長方形を挟む。
+  // index が末尾以降なら addRect と同じ結果。他の SiteRect は同じインスタンスのまま並べ直す。
+  insertRectAt(index, x, y, w, h, id, roadSides = []) {
+    const entries = [...this.rectMap.entries()];
+    const rect = new SiteRect(id, x, y, w, h, roadSides);
+    entries.splice(Math.max(0, index), 0, [id, rect]);
+    this.rectMap.clear();
+    for (const [k, v] of entries) this.rectMap.set(k, v);
     return rect;
   }
 

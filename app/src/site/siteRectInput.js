@@ -1,6 +1,8 @@
 // 敷地の長方形入力タブ・描画の判断を担う純関数（SiteInfoPanel.jsx / SiteRectsLayer.jsx が使う）。
 // JSX は node:test で直接テストできないため、表の行・入力行・プレビュー矩形・Enter の遷移はここへ寄せる。
-import { computeAttachedRect, computeUnionAreaM2, computeOutlinePieces } from './siteRectGeometry.js';
+import {
+  computeAttachedRect, computeUnionAreaM2, computeOutlinePieces, canEditRect, canDeleteRect,
+} from './siteRectGeometry.js';
 import { siteLineKindLabel } from './siteLineStyle.js';
 import { SiteLineKind } from '../core/constants.js';
 import { evalNumpadExpr } from '../ui/numpadUtils.js';
@@ -14,11 +16,13 @@ export const evalRectLen = (s) => evalNumpadExpr(s, { positiveOnly: true });
 
 /**
  * 長方形タブの表。番号は rects の順（1 始まり）。合計は和集合の面積（重なりは数えない）。
- * @returns {{ rows: {id:string, num:number, w:number, h:number, areaM2:number}[], totalAreaM2: number }}
+ * canEdit / canDelete は「端の長方形」だけが真（修正可＝隣接 0、または隣接 1 で基の辺・基点を復元できる／削除可＝除いても残りが連結。隣接 2 以上でも削除可はあり得る）。
+ * @returns {{ rows: {id:string, num:number, w:number, h:number, areaM2:number, canEdit:boolean, canDelete:boolean}[], totalAreaM2: number }}
  */
 export function buildRectTableRows(rects) {
   const rows = rects.map((r, i) => ({
     id: r.id, num: i + 1, w: r.w, h: r.h, areaM2: (r.w * r.h) / 1_000_000,
+    canEdit: canEditRect(rects, r.id), canDelete: canDeleteRect(rects, r.id),
   }));
   return { rows, totalAreaM2: computeUnionAreaM2(rects) };
 }

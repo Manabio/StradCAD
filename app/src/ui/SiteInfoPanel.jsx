@@ -52,6 +52,14 @@ const TH_BASE = {
   fontWeight: 600,
   fontSize: 11,
 };
+// 表内の小さなアイコンボタン（三斜の ✎・長方形の ✎/🗑）
+const ICON_BTN = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: 22, height: 22, padding: 0,
+  border: '1px solid #cbd5e1', borderRadius: 4,
+  background: '#fff', cursor: 'pointer',
+  fontSize: 11, lineHeight: 1, color: '#475569',
+};
 const TD_BASE = {
   padding: '4px 6px',
   borderBottom: '1px solid #f1f5f9',
@@ -62,7 +70,7 @@ const TD_BASE = {
   whiteSpace: 'nowrap',
 };
 
-export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, onConfirmLineLen, onConfirmTriangle, onConfirmRect, onCycleLineKind, onToggleRectRoadSide }) => {
+export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, onConfirmLineLen, onConfirmTriangle, onConfirmRect, onCycleLineKind, onToggleRectRoadSide, onStartRectEdit, onDeleteRect }) => {
   const subMode   = mode.subMode;
   const ptIdx     = makePointIndex(site);
 
@@ -170,13 +178,15 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
   const outlineRows = buildOutlineRows(site.rects);
   const rectIn     = mode.rectInputState;
   const rectSelId  = mode.selectedRectEdge?.rectId ?? null;
+  // 入力行・基点行を出す行。修正中は基の長方形ではなく修正対象の行
+  const inputOwnerId = rectIn?.editRectId ?? rectSelId;
   // 入力行（よこ/たて・辺長/奥行）。行クリックでフォーカス移動
   const rectInputRows = (keyPrefix) => rectInputRowDefs(rectIn).map(d => {
     const focused = rectIn.focusedCell === d.cell;
     return (
       <tr key={`${keyPrefix}-${d.cell}`} onClick={() => mode.setRectFocusedCell(d.cell)} style={{ cursor: 'pointer' }}>
         <td style={{ ...TD_BASE, color: '#2563eb', fontWeight: 600 }}>{d.label}</td>
-        <td colSpan={3} style={{
+        <td colSpan={5} style={{
           ...TD_BASE,
           background: focused ? '#f0fdf4' : '#f7fdf9',
           outline:    focused ? '2px solid #22c55e' : 'none',
@@ -283,13 +293,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                       {triNums.length > 0 && !lenEditing && (
                         <button
                           onClick={handleEditClick}
-                          style={{
-                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                            width: 22, height: 22, padding: 0,
-                            border: '1px solid #cbd5e1', borderRadius: 4,
-                            background: '#fff', cursor: 'pointer',
-                            fontSize: 11, lineHeight: 1, color: '#475569',
-                          }}
+                          style={ICON_BTN}
                           title="長さを編集"
                         >
                           ✎
@@ -404,11 +408,13 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                 <th style={TH_BASE}>よこ</th>
                 <th style={TH_BASE}>たて</th>
                 <th style={{ ...TH_BASE, width: 80 }}>面積(㎡)</th>
+                <th style={{ ...TH_BASE, width: 40 }}>編集</th>
+                <th style={{ ...TH_BASE, width: 40 }}>削除</th>
               </tr>
             </thead>
             <tbody>
               {rectTable.rows.flatMap(row => {
-                const isSel = row.id === rectSelId;
+                const isSel = row.id === inputOwnerId;
                 const td = { ...TD_BASE, background: isSel ? '#eff6ff' : undefined };
                 const out = [
                   <tr key={row.id}>
@@ -416,15 +422,28 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                     <td style={td}>{row.w.toFixed(0)}</td>
                     <td style={td}>{row.h.toFixed(0)}</td>
                     <td style={td}>{row.areaM2.toFixed(2)}</td>
+                    <td style={td}>
+                      {row.canEdit && rectIn?.editRectId !== row.id && (
+                        <button onClick={() => onStartRectEdit?.(row.id)} style={ICON_BTN} title="寸法を修正">✎</button>
+                      )}
+                    </td>
+                    <td style={td}>
+                      {row.canDelete && (
+                        <button onClick={() => onDeleteRect?.(row.id)} style={ICON_BTN} title="削除">🗑</button>
+                      )}
+                    </td>
                   </tr>,
                 ];
+                if (isSel && rectIn?.kind === 'first') {
+                  out.push(...rectInputRows(row.id));
+                }
                 if (isSel && rectIn?.kind === 'attach') {
                   out.push(...rectInputRows(row.id));
                   out.push(
                     <tr key={`${row.id}-anchor`}>
                       <td style={{ ...TD_BASE, color: '#ef4444', fontWeight: 600 }}>基点</td>
                       <td colSpan={2} style={TD_BASE}>{rectAnchorLabel(mode.selectedRectEdge.side, mode.rectAnchor)}</td>
-                      <td style={TD_BASE}>
+                      <td colSpan={3} style={TD_BASE}>
                         <button
                           onClick={() => mode.toggleRectAnchor()}
                           style={{
@@ -438,10 +457,10 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                 }
                 return out;
               })}
-              {rectIn?.kind === 'first' && rectInputRows('first')}
+              {rectIn?.kind === 'first' && !rectIn.editRectId && rectInputRows('first')}
               {rectTable.rows.length === 0 && !rectIn && (
                 <tr>
-                  <td colSpan={4} style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
+                  <td colSpan={6} style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
                     描画エリアをタップして左上角を置いてください
                   </td>
                 </tr>
@@ -449,6 +468,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
               <tr>
                 <td colSpan={3} style={{ ...TD_BASE, fontWeight: 700, borderTop: '2px solid #cbd5e1' }}>合計</td>
                 <td style={{ ...TD_BASE, fontWeight: 700, borderTop: '2px solid #cbd5e1' }}>{rectTable.totalAreaM2.toFixed(2)}</td>
+                <td colSpan={2} style={{ ...TD_BASE, borderTop: '2px solid #cbd5e1' }}></td>
               </tr>
             </tbody>
           </table>

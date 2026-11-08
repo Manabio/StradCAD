@@ -1,7 +1,7 @@
 import { makeObservable, observable, action, computed, reaction } from 'mobx';
 import { SiteLineKind } from '@core';
 import { isSanshaKind, computeLineTriNums } from '../site/lineClassification.js';
-import { rectEdge, pickRectEdgeAnchor } from '../site/siteRectGeometry.js';
+import { rectEdge, pickRectEdgeAnchor, rectNeighbors, deriveRectAttachment } from '../site/siteRectGeometry.js';
 
 export class SiteModeState {
   subMode        = 'sansha'; // 'sansha' | 'other' | 'placement' | 'rect'
@@ -20,6 +20,7 @@ export class SiteModeState {
   rectAnchor       = 'a';    // 'a' | 'b'（共有辺の基点。rectEdge の端点 a/b）
   // 最初: { kind:'first',  origin:{x,y}, focusedCell:'w'|'h',        wValue, hValue }
   // 付加: { kind:'attach', focusedCell:'along'|'depth', alongValue, depthValue }
+  // 既存の長方形の修正中は両形式とも editRectId（修正対象の id）が付く
   rectInputState   = null;
 
   constructor(site) {
@@ -47,6 +48,7 @@ export class SiteModeState {
       clearInput:         action,
       startLenEdit:       action,
       startFirstRect:     action,
+      startRectEdit:      action,
       selectRectEdge:     action,
       toggleRectAnchor:   action,
       setRectFocusedCell: action,
@@ -54,9 +56,10 @@ export class SiteModeState {
       clearRectInput:     action,
       clearRectState:     action,
     });
-    // undo 等で選択中の長方形が消えたら、長方形側の選択・入力を残さない
+    // undo 等で選択辺の長方形・修正対象の長方形が消えたら、長方形側の選択・入力を残さない
     this._rectGoneDispose = reaction(
-      () => this.selectedRectEdge != null && !this.site.rectMap.has(this.selectedRectEdge.rectId),
+      () => (this.selectedRectEdge != null && !this.site.rectMap.has(this.selectedRectEdge.rectId))
+        || (this.rectInputState?.editRectId != null && !this.site.rectMap.has(this.rectInputState.editRectId)),
       (gone) => { if (gone) this.clearRectState(); },
     );
   }
@@ -185,6 +188,33 @@ export class SiteModeState {
     this.selectedRectEdge = { rectId, side };
     this.rectAnchor = pickRectEdgeAnchor(rectEdge(rect, side), viewport);
     this.rectInputState = { kind: 'attach', focusedCell: 'along', alongValue: '', depthValue: '' };
+  }
+
+  // 既存の長方形の寸法修正を始める（自動選定: 隣接 0＝最初の入力形式／隣接 1＝付加入力形式で基の辺・基点を復元）。
+  // 修正不可（隣接 2 以上・基点が復元できない・存在しない）なら何もしない
+  startRectEdit(rectId, viewport) {
+    const rect = this.site.rectMap.get(rectId);
+    if (!rect) return;
+    const rects = this.site.rects;
+    if (rectNeighbors(rects, rectId).length === 0) {
+      this.selectedRectEdge = null;
+      this.rectInputState = {
+        kind: 'first', origin: { x: rect.x, y: rect.y }, focusedCell: 'w',
+        wValue: rect.w.toFixed(0), hValue: rect.h.toFixed(0), editRectId: rectId,
+      };
+      return;
+    }
+    const d = deriveRectAttachment(rects, rectId);
+    if (!d) return;
+    const base = this.site.rectMap.get(d.baseRectId);
+    this.selectedRectEdge = { rectId: d.baseRectId, side: d.side };
+    this.rectAnchor = d.anchors.length === 2
+      ? pickRectEdgeAnchor(rectEdge(base, d.side), viewport)
+      : d.anchors[0];
+    this.rectInputState = {
+      kind: 'attach', focusedCell: 'along',
+      alongValue: d.along.toFixed(0), depthValue: d.depth.toFixed(0), editRectId: rectId,
+    };
   }
 
   toggleRectAnchor() {

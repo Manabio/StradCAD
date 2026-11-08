@@ -88,7 +88,7 @@ import {
   confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind,
 } from './transform/siteEdit.js';
 import { confirmSiteRect } from './transform/siteRectConfirm.js';
-import { toggleRectRoadSide } from './transform/siteRectEdit.js';
+import { toggleRectRoadSide, deleteRect } from './transform/siteRectEdit.js';
 import { composeUndoWithMergeChain } from './transform/centerLineMerge.js';
 import { extendCenterLine, shortenCenterLine } from './transform/centerLineExtend.js';
 import {
@@ -2189,6 +2189,16 @@ const App = observer(() => {
     if (toast) setToast({ msg: toast, key: Date.now() });
   }
 
+  // ---- 四角の寸法修正の開始・削除（対象は幾何から自動選定。実処理は modes/SiteModeState.js の startRectEdit と transform/siteRectEdit.js の deleteRect） ----
+  function handleStartRectEdit(rectId) {
+    modeRef.current?.startRectEdit(rectId, viewport);
+  }
+
+  function handleDeleteRect(rectId) {
+    const { toast } = deleteRect(project.site, rectId);
+    if (toast) setToast({ msg: toast, key: Date.now() });
+  }
+
   // カタログ保守パネルは使うときだけ動的importする（モードと同じ考え方。.claude/mode-system.md）。
   // React.lazy+SuspenseはErrorBoundary無しではチャンク読込み失敗時にroot全体が白画面になるため
   // 不採用——EccentricityDialog.jsx等と同じ「import().then().catch()」型ではなくasync/awaitで揃える。
@@ -3201,6 +3211,8 @@ const App = observer(() => {
           onConfirmRect={handleConfirmRect}
           onCycleLineKind={handleCycleLineKind}
           onToggleRectRoadSide={handleToggleRectRoadSide}
+          onStartRectEdit={handleStartRectEdit}
+          onDeleteRect={handleDeleteRect}
         />
       )}
 
