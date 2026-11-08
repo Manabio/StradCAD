@@ -52,7 +52,7 @@ const TH_BASE = {
   fontWeight: 600,
   fontSize: 11,
 };
-// 表内の小さなアイコンボタン（三斜の ✎・長方形の ✎/🗑）
+// 表内の小さなアイコンボタン（三斜の ✎・長方形の 🗑）
 const ICON_BTN = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   width: 22, height: 22, padding: 0,
@@ -60,6 +60,17 @@ const ICON_BTN = {
   background: '#fff', cursor: 'pointer',
   fontSize: 11, lineHeight: 1, color: '#475569',
 };
+// ゴミ箱アイコン（削除）。絵文字は小さく薄く出るため、濃い線のインライン SVG で描く（色は番号バッジと同じ #334155）。
+// コンポーネントでなく要素の定数（react-refresh/only-export-components を避ける）
+const TRASH_ICON = (
+  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth={2.5}
+    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: 'inline-block', verticalAlign: 'middle' }}>
+    <path d="M3 6h18" />
+    <path d="M8 6V4h8v2" />
+    <path d="M6 6l1 14h10l1-14" />
+    <path d="M10 11v6M14 11v6" />
+  </svg>
+);
 const TD_BASE = {
   padding: '4px 6px',
   borderBottom: '1px solid #f1f5f9',
@@ -408,7 +419,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                 <th style={TH_BASE}>よこ</th>
                 <th style={TH_BASE}>たて</th>
                 <th style={{ ...TH_BASE, width: 80 }}>面積(㎡)</th>
-                <th style={{ ...TH_BASE, width: 40 }} title="削除">🗑</th>
+                <th style={{ ...TH_BASE, width: 40 }} title="削除">{TRASH_ICON}</th>
               </tr>
             </thead>
             <tbody>
@@ -456,7 +467,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                     <td style={td}>{row.areaM2.toFixed(2)}</td>
                     <td style={td}>
                       {row.canDelete && (
-                        <button onClick={() => onDeleteRect?.(row.id)} style={ICON_BTN} title="削除">🗑</button>
+                        <button onClick={() => onDeleteRect?.(row.id)} style={ICON_BTN} title="削除">{TRASH_ICON}</button>
                       )}
                     </td>
                   </tr>,
