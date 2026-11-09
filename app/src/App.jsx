@@ -785,7 +785,7 @@ const App = observer(() => {
                   await s.init(); // 全採用階の peek・外壁立面の一括構築（決して reject しない）
                   return s;
                 })
-              : import('./modes/SiteModeState.js').then(m => new m.SiteModeState(project.site));
+              : import('./modes/SiteModeState.js').then(m => new m.SiteModeState(project.site, project));
 
     loader.then(s => {
       if (cancelled) { s.dispose(); return; }

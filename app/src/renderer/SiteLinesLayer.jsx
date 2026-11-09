@@ -2,7 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { Line, Circle, Group, Text } from 'react-konva';
 import { getSiteLineRedBlue } from '../site/siteGeometry.js';
 import { resolveSiteLinePointsMm } from '../site/siteLineJoinPrimitives.js';
-import { computeOuterLineIds } from '../site/lineClassification.js';
+import { computeOuterLineIds, computeOuterCornerPoints } from '../site/lineClassification.js';
 import {
   SITE_LINE_COLOR, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT, lineHitWidth, SITE_HIT_NODE_NAME,
 } from '../site/siteLineStyle.js';
@@ -42,13 +42,7 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
 
   // 外周（境界線）が2本以上集まる端点に小さな○を表示
   const outerIds = computeOuterLineIds(site);
-  const pointHitCount = new Map(); // pointId -> 外周線分の本数
-  for (const line of site.lines) {
-    if (!outerIds.has(line.id)) continue;
-    pointHitCount.set(line.startPoint.id, (pointHitCount.get(line.startPoint.id) ?? 0) + 1);
-    pointHitCount.set(line.endPoint.id,   (pointHitCount.get(line.endPoint.id)   ?? 0) + 1);
-  }
-  const intersectionPoints = site.points.filter(p => (pointHitCount.get(p.id) ?? 0) >= 2);
+  const intersectionPoints = computeOuterCornerPoints(site, outerIds);
 
   // L字の角の外角を閉じる延長（site/siteLineJoinPrimitives.js。展開図と同じ規則を境界線へ適用。
   // 詳細は同モジュール冒頭コメント・.claude/elevation-model.md「L字の角の外角を閉じる」節）。

@@ -328,7 +328,8 @@ export function usePointerInteraction({
         drag.current = { lastX: clientX, lastY: clientY };
         setIsPanning(true);
       } else {
-        const sm = modeRef.current?.subMode;
+        // 配置図の表示中は inputSubMode が null＝押下を記録せず入力を止める（pointerUp は downPt なしで抜ける。パンは効く）
+        const sm = modeRef.current?.inputSubMode;
         // ドラッグかタップかを pointerUp で判定するために記録（線分を入力するサブモードだけ）
         if (sm === 'sansha' || sm === 'rect') siteDrawDownRef.current = { x: clientX, y: clientY };
         drag.current = { lastX: clientX, lastY: clientY };

@@ -1,10 +1,18 @@
-import { makeObservable, observable, action, computed, reaction } from 'mobx';
+import { makeObservable, observable, action, computed, reaction, runInAction } from 'mobx';
 import { SiteLineKind } from '@core';
+import {
+  SITE_PLACEMENT_EMPTY_MESSAGE, SITE_PLACEMENT_READ_ERROR_MESSAGE, SITE_PLACEMENT_LOADING_MESSAGE, SITE_LOG_TAG,
+} from '../core/constants.js';
+import { withGraphsReadScope } from '../graphReadScope.js';
+import { gridBoundsMm } from '../initialView.js';
 import { isSanshaKind, computeLineTriNums } from '../site/lineClassification.js';
 import { rectEdge, pickRectEdgeAnchor, rectNeighbors, deriveRectAttachment } from '../site/siteRectGeometry.js';
+import { composeSitePlacementView } from '../site/sitePlacementView.js';
+import { leanToPlanRegions, topRoofPlanRegions } from '../structural/roofFramingRegions.js';
+import { collectAdoptedFloors } from './adoptedFloors.js';
 
 export class SiteModeState {
-  subMode        = 'sansha'; // 'sansha' | 'placement' | 'rect'（'other'＝その他タブは 2026-11-09 廃止）
+  subMode        = 'sansha'; // 'sansha' | 'rect'（'other'＝その他タブは 2026-11-09 廃止。配置図は subMode でなく showPlacement の切替）
   selectedLineId = null;     // 選択中の SiteLine ID
   siteDrawState  = null;     // { startWorld: {x,y}, endWorld: {x,y} } | null
   // 三斜入力中の数値入力状態
@@ -23,9 +31,26 @@ export class SiteModeState {
   // 既存の長方形の修正中は両形式とも editRectId（修正対象の id）と editColumns（表の よこ/たて 列 → 入力セル）が付く
   rectInputState   = null;
 
-  constructor(site) {
+  // 配置図（屋根伏せ図＋図芯合わせした敷地の外周）の表示。表示中は敷地の入力（三斜・長方形の UI と pointer 操作）を止める。
+  // 読込み: 全採用階を読む（graph は変更しない表示専用。立面モードの init と同じく uiBusy/runBusy は使わない）。
+  // 世代 _placementGen: 読込みの await 中に 非表示→再表示 や dispose が起きたとき、古い結果を捨てるため。
+  showPlacement    = false;
+  placementLoading = false;
+  placementRoof    = null; // { floors: [{planeId, regions}], gridBounds, readFailed } | null
+
+  constructor(site, project = null) {
     this.site = site;
+    this.project = project;
+    this._placementGen = 0;
+    this._disposed = false;
     makeObservable(this, {
+      showPlacement:      observable,
+      placementLoading:   observable,
+      placementRoof:      observable.ref,
+      placementView:      computed,
+      placementMessage:   computed,
+      inputSubMode:       computed,
+      setShowPlacement:   action,
       subMode:            observable,
       selectedLineId:     observable,
       siteDrawState:      observable.ref,
@@ -73,6 +98,82 @@ export class SiteModeState {
 
   get selectedLine() {
     return this.selectedLineId ? (this.site.lineMap.get(this.selectedLineId) ?? null) : null;
+  }
+
+  // pointer 操作が読むサブモード。配置図の表示中は null（押下を記録せず入力を止める。パンは効く）
+  get inputSubMode() {
+    return this.showPlacement ? null : this.subMode;
+  }
+
+  get placementView() {
+    return this.showPlacement && this.placementRoof
+      ? composeSitePlacementView({ site: this.site, roof: this.placementRoof })
+      : null;
+  }
+
+  // 配置図の下に出す通知文。読込み中 → 読めなかった階・屋根がある → 屋根の線が1本も無い、の優先順
+  get placementMessage() {
+    if (!this.showPlacement) return null;
+    if (this.placementLoading) return SITE_PLACEMENT_LOADING_MESSAGE;
+    const view = this.placementView;
+    if (!view) return null;
+    if (this.placementRoof.readFailed || view.roofFailedCount > 0) return SITE_PLACEMENT_READ_ERROR_MESSAGE;
+    if (view.roofEmpty) return SITE_PLACEMENT_EMPTY_MESSAGE;
+    return null;
+  }
+
+  /**
+   * 配置図の表示を切り替える。表示にするときは敷地の選択・入力・描画中の線を捨てて全採用階を読む。
+   * 返す Promise は読込みの完了で解決し、決して reject しない（失敗は placementRoof.readFailed）。
+   */
+  setShowPlacement(on) {
+    if (on === this.showPlacement) return Promise.resolve();
+    this.showPlacement = on;
+    if (on) {
+      this.clearSelection();
+      this.cancelSiteDraw();
+      return this._loadPlacement();
+    }
+    this.placementRoof = null;
+    this.placementLoading = false;
+    this._placementGen++;
+    return Promise.resolve();
+  }
+
+  async _loadPlacement() {
+    const gen = ++this._placementGen;
+    const project = this.project;
+    runInAction(() => { this.placementLoading = true; });
+    let roof;
+    try {
+      const { floors, readFailed } = await collectAdoptedFloors(project, SITE_LOG_TAG);
+      if (this._disposed || gen !== this._placementGen || !this.showPlacement) return;
+      let regionFailed = false;
+      const graphs = floors.map(f => f.graph).filter(Boolean);
+      const regionFloors = withGraphsReadScope(graphs, () => floors.flatMap(f => {
+        if (!f.graph) return []; // peek に失敗した階（readFailed は collectAdoptedFloors が立てている）
+        try {
+          return [{ planeId: f.plane.id, regions: [...leanToPlanRegions(f.graph), ...topRoofPlanRegions(f.graph, project)] }];
+        } catch (err) {
+          console.warn(`${SITE_LOG_TAG} 階「${f.plane.name ?? f.plane.id}」の屋根を解決できませんでした（その階は描かない）:`, err);
+          regionFailed = true;
+          return [];
+        }
+      }));
+      roof = {
+        floors: regionFloors,
+        gridBounds: project?.structGraph ? gridBoundsMm(project.structGraph) : null,
+        readFailed: readFailed || regionFailed,
+      };
+    } catch (err) {
+      console.error(`${SITE_LOG_TAG} 配置図の読込みに失敗:`, err);
+      roof = { floors: [], gridBounds: null, readFailed: true };
+    }
+    if (this._disposed || gen !== this._placementGen || !this.showPlacement) return;
+    runInAction(() => {
+      this.placementRoof = roof;
+      this.placementLoading = false;
+    });
   }
 
   // ドラッグ方向（45度基準）で垂直/水平を判定した確定端点
@@ -293,6 +394,7 @@ export class SiteModeState {
   // ---- Lifecycle ----
 
   dispose() {
+    this._disposed = true;
     this._rectGoneDispose?.();
     this._lineGoneDispose?.();
     this.clearSelection();

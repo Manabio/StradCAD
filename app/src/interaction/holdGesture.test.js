@@ -78,8 +78,11 @@ test('【不変条件】usePointerInteraction: 仕上げ・天伏の pointerDown
   assert.match(ceiling, /^\s*ceilingDragDownRef\.current = \{ x: clientX, y: clientY, canTrace, deciding: false \};\s*$/m);
   assert.match(ceiling, /^\s*updateSnap\(clientX, clientY\);/m, '長押しメニューの対象は押下点で解決する');
   assert.match(ceiling, /^\s*longPress\.begin\(clientX, clientY\);\s*$/m);
-  // 敷地: 描画エリアはサブモードによらず drag.current を立てる（配置サブモードでもパンできる）
+  // 敷地: 描画エリアはサブモードによらず drag.current を立てる（配置図の表示中もパンできる）
   const site = branch(down, "if (appMode === 'site') {");
+  // 押下の記録は inputSubMode（配置図の表示中は null）を読む。subMode を直接読むと配置図の表示中も入力が通る
+  assert.match(site, /^\s*const sm = modeRef\.current\?\.inputSubMode;\s*$/m, '敷地の pointerDown は inputSubMode を読む');
+  assert.ok(!/modeRef\.current\?\.subMode/.test(site), '敷地の pointerDown が subMode を直接読んでいる');
   assert.match(site, /^\s*if \(sm === 'sansha' \|\| sm === 'rect'\) siteDrawDownRef\.current = \{ x: clientX, y: clientY \};\s*$/m);
   assert.match(site, /^\s*drag\.current = \{ lastX: clientX, lastY: clientY \};\s*$/m);
   assert.ok(!/if \(sm === [^)]*\) \{/.test(site), 'drag.current の設定がサブモードの条件の中にある');

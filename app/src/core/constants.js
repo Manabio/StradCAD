@@ -500,6 +500,26 @@ export const FACADE_GL_LABEL = 'GL';
 export const FACADE_EMPTY_MESSAGE = '外壁が無いため立面図を描けません';
 /** 立面モードの初期化に失敗したときの表示文（展開モードの「展開モードの初期化に失敗しました」と同じ言い方）。 */
 export const FACADE_INIT_ERROR_MESSAGE = '立面モードの初期化に失敗しました';
+
+// ---- 敷地モードの配置図（site/sitePlacementView.js・modes/SiteModeState.js・ui/SiteInfoPanel.jsx） ----
+/** 配置図の表示スイッチの見出しと2つの選択肢。 */
+export const SITE_PLACEMENT_SWITCH_LABEL = '配置図';
+export const SITE_PLACEMENT_SHOW_LABEL = '表示';
+export const SITE_PLACEMENT_HIDE_LABEL = '非表示';
+/** 配置図に描く屋根伏せ図の線が1本も無いときの表示文。 */
+export const SITE_PLACEMENT_EMPTY_MESSAGE = '屋根伏図がありません';
+/** 一部の階（または屋根）を読み込めなかったときの表示文（立面の FACADE_INIT_ERROR_MESSAGE と同じ位置づけ）。 */
+export const SITE_PLACEMENT_READ_ERROR_MESSAGE = '一部の階を読み込めませんでした';
+/** 全採用階の読み込み中の表示文。 */
+export const SITE_PLACEMENT_LOADING_MESSAGE = '読み込み中…';
+/** 敷地モード（modes/SiteModeState.js・site/sitePlacementView.js）のログの接頭辞。 */
+export const SITE_LOG_TAG = '[site]';
+/** 度→ラジアンの換算係数（回転の写像・図形の角度から使う）。 */
+export const DEG_TO_RAD = Math.PI / 180;
+/** 屋根伏せ図の線の太さ（viewport.lineWeightsPx のキー。下屋の平面表示と同じ細い実線）。 */
+export const SITE_PLACEMENT_ROOF_LINE_WEIGHT = 'thin';
+/** 配置図の図芯合わせで、建物側の基準にした情報源（屋根の線の外接矩形／通り芯の範囲／基準なし）。 */
+export const SitePlacementCenterSource = Object.freeze({ ROOF: 'roof', GRID: 'grid', NONE: 'none' });
 /** 立面の入力組み立て（facade/facadeInputs.js）で階を飛ばした理由。 */
 export const FacadeSkipReason = Object.freeze({
   NO_GRAPH:         'noGraph',          // その階の graph が無い（未読込み）

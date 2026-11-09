@@ -2,6 +2,7 @@
 import { observer } from 'mobx-react-lite';
 import { isSanshaKind, computeLineTriNums, computeOuterLineIds } from '../site/lineClassification.js';
 import { siteLineKindLabel } from '../site/siteLineStyle.js';
+import { SITE_PLACEMENT_SWITCH_LABEL, SITE_PLACEMENT_SHOW_LABEL, SITE_PLACEMENT_HIDE_LABEL } from '../core/constants.js';
 import { rowDeleteAction, triangleNumber } from '../site/triangleDeletion.js';
 import {
   buildSanshaAreaRows, buildRectAreaRows, sumAreaM2, rectsOverlap, formatAreaM2,
@@ -27,6 +28,17 @@ const TH_BASE = {
   fontWeight: 600,
   fontSize: 11,
 };
+// 横並びの切替ボタン（タブ見出し・配置図の表示スイッチ共通）。選択中は下線・太字・青
+const segmentButtonStyle = (active) => ({
+  flex: 1, padding: '10px 0',
+  border: 'none',
+  borderBottom: active ? '2px solid #2563eb' : '2px solid transparent',
+  background: 'none', cursor: 'pointer',
+  fontSize: 13,
+  fontWeight: active ? 700 : 400,
+  color: active ? '#2563eb' : '#64748b',
+  transition: 'all 0.1s',
+});
 // タップで編集を始める数値フィールド（三斜の線分長さ・長方形のよこ/たて）
 const FIELD_SPAN = {
   display: 'inline-block', minWidth: 32,
@@ -41,6 +53,9 @@ const ICON_BTN = {
   background: '#fff', cursor: 'pointer',
   fontSize: 11, lineHeight: 1, color: '#475569',
 };
+// パネルの行の文字（面積行・配置図スイッチ見出し共通）と、その見出し語（太字）
+const PANEL_ROW_TEXT = { padding: '6px 8px', fontSize: 13, color: '#1e293b' };
+const PANEL_LABEL = { fontWeight: 700 };
 // ゴミ箱アイコン（削除）。絵文字は小さく薄く出るため、濃い線のインライン SVG で描く（色は番号バッジと同じ #334155）。
 // コンポーネントでなく要素の定数（react-refresh/only-export-components を避ける）
 const TRASH_ICON = (
@@ -64,6 +79,7 @@ const TD_BASE = {
 
 export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, onConfirmLineLen, onConfirmTriangle, onConfirmRect, onCycleLineKind, onToggleRectRoadSide, onStartRectEdit, onDeleteRect, onDeleteSiteRow }) => {
   const subMode   = mode.subMode;
+  const placing   = mode.showPlacement; // 配置図の表示中（敷地の入力 UI を出さない）
 
   const sanshaLines = site.orderedLines.filter(l => isSanshaKind(l.lineKind));
   const lineTriNums = computeLineTriNums(site);
@@ -192,35 +208,45 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
 
   const inner = (
     <>
-      {/* タブヘッダー */}
-      <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', flexShrink: 0 }}>
+      {/* 配置図の表示スイッチ（表示中は敷地の入力を止め、下のタブ・面積・表を出さない） */}
+      <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid #e2e8f0', flexShrink: 0 }}>
+        <span style={{ ...PANEL_ROW_TEXT, ...PANEL_LABEL, whiteSpace: 'nowrap' }}>{SITE_PLACEMENT_SWITCH_LABEL}</span>
         {[
-          { key: 'sansha', label: '三斜' },
-          { key: 'rect',   label: '長方形' },
-        ].map(tab => (
+          { on: true,  label: SITE_PLACEMENT_SHOW_LABEL },
+          { on: false, label: SITE_PLACEMENT_HIDE_LABEL },
+        ].map(opt => (
           <button
-            key={tab.key}
-            onClick={() => mode.setSubMode(tab.key)}
-            style={{
-              flex: 1, padding: '10px 0',
-              border: 'none',
-              borderBottom: subMode === tab.key ? '2px solid #2563eb' : '2px solid transparent',
-              background: 'none', cursor: 'pointer',
-              fontSize: 13,
-              fontWeight: subMode === tab.key ? 700 : 400,
-              color: subMode === tab.key ? '#2563eb' : '#64748b',
-              transition: 'all 0.1s',
-            }}
+            key={opt.label}
+            onClick={() => mode.setShowPlacement(opt.on)}
+            style={segmentButtonStyle(placing === opt.on)}
           >
-            {tab.label}
+            {opt.label}
           </button>
         ))}
       </div>
 
+      {/* タブヘッダー */}
+      {!placing && (
+        <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', flexShrink: 0 }}>
+          {[
+            { key: 'sansha', label: '三斜' },
+            { key: 'rect',   label: '長方形' },
+          ].map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => mode.setSubMode(tab.key)}
+              style={segmentButtonStyle(subMode === tab.key)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* 面積行（三斜・長方形タブ共通。▶ の内訳は三斜だけ。長方形は下の表が内訳を兼ねる） */}
-      {showArea && (
+      {showArea && !placing && (
         <div style={{ flexShrink: 0, borderBottom: '1px solid #e2e8f0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', fontSize: 13, color: '#1e293b' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, ...PANEL_ROW_TEXT }}>
             {subMode === 'sansha' && (
               <button
                 onClick={() => setAreaOpen(o => !o)}
@@ -228,7 +254,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                 style={{ ...ICON_BTN, fontSize: 10 }}
               >{areaOpen ? '▼' : '▶'}</button>
             )}
-            <span style={{ fontWeight: 700 }}>面積：</span>
+            <span style={PANEL_LABEL}>面積：</span>
             <span>{formatAreaM2(totalArea)}</span>
             <span>㎡</span>
             {areaOverlap && <span style={{ color: '#94a3b8', fontSize: 11 }}>（重なりあり）</span>}
@@ -270,7 +296,14 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
 
       {/* テーブル */}
       <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto' }}>
-        {subMode === 'sansha' ? (
+        {placing ? (
+          // ---- 配置図の表示中: 表は出さず、通知文（読込み中・読めなかった階・屋根伏図なし）があれば1行だけ出す ----
+          mode.placementMessage && (
+            <div style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
+              {mode.placementMessage}
+            </div>
+          )
+        ) : subMode === 'sansha' ? (
           // ---- 三斜タブ（1線1行） ----
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -542,11 +575,11 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
             </table>
           )}
           </>
-        ) : null /* 'placement' など表を持たないサブモード（「その他」タブは 2026-11-09 廃止） */}
+        ) : null /* 表を持たないサブモードは無い（「その他」タブは 2026-11-09 廃止）。配置図は上の placing 分岐 */}
       </div>
 
       {/* NumPad — 三斜タブで行選択中のみ表示 */}
-      {subMode === 'sansha' && mode.inputState && (() => {
+      {!placing && subMode === 'sansha' && mode.inputState && (() => {
         const fc = mode.inputState.focusedCell;
         const numpadValue   = fc === 'len' ? mode.inputState.lenValue
                             : fc === 'red' ? mode.inputState.redLen
@@ -565,7 +598,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
         );
       })()}
       {/* NumPad — 長方形タブで入力中のみ表示 */}
-      {subMode === 'rect' && mode.rectInputState && (
+      {!placing && subMode === 'rect' && mode.rectInputState && (
         <NumPad
           value={rectFocusedValue(mode.rectInputState)}
           label={rectNumpadLabel(mode.rectInputState)}

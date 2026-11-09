@@ -44,3 +44,15 @@ export function computeOuterLineIds(site) {
   }
   return ids;
 }
+
+// 外周（outerIds の線分）が2本以上集まる端点（SitePoint）。境界線の角の丸を置く点。
+// 敷地モードの描画（renderer/SiteLinesLayer.jsx）と配置図（site/sitePlacementView.js）が共有する。
+export function computeOuterCornerPoints(site, outerIds) {
+  const pointHitCount = new Map(); // pointId -> 外周線分の本数
+  for (const line of site.lines) {
+    if (!outerIds.has(line.id)) continue;
+    pointHitCount.set(line.startPoint.id, (pointHitCount.get(line.startPoint.id) ?? 0) + 1);
+    pointHitCount.set(line.endPoint.id,   (pointHitCount.get(line.endPoint.id)   ?? 0) + 1);
+  }
+  return site.points.filter(p => (pointHitCount.get(p.id) ?? 0) >= 2);
+}

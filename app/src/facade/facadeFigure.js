@@ -5,15 +5,13 @@
  * 図の座標: X = u − uMin（建物の左端が 0）、Y = glZMm − z（GL が Y=0・上が負。展開図と同じ規約）。
  * 注記の大きさ（annotationMm）は呼び出し側が倍率確定後に実画面mm→モデルmmへ換算して渡す（2パス方式）。
  */
-import { FACADE_TITLE_BY_DIRECTION, FACADE_GL_LABEL } from '../core/constants.js';
+import { FACADE_TITLE_BY_DIRECTION, FACADE_GL_LABEL, DEG_TO_RAD } from '../core/constants.js';
 import { line, polyline, text } from '../elevation/elevationPrimitives.js';
 import { ElevationLineRole, FACE_LABEL_FONT_PX, CANVAS_BG_COLOR } from '../elevation/elevationStyle.js';
 import { facadeViews, facadeFloorProfiles, buildFacadeLines, projectedRoofSegments } from './facadeGeometry.js';
 import { FACADE_GL_MARK_APEX_DEG, FACADE_LEVEL_FONT_PX } from './facadeStyle.js';
 import { buildFacadeOpenings } from './facadeOpenings.js';
 import { buildFacadePlacedFigures, facadePlacedFiguresExtent } from './facadePlacedFigures.js';
-
-const DEG_TO_RAD = Math.PI / 180;
 
 const hasAnySegment = inputs => (inputs?.floors ?? []).some(f => (f.segments ?? []).length > 0);
 
