@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CenterLineType } from '../core/constants.js';
 import { computeSitePlacement, normalizeAngle180, normalizeLineAngle90 } from './sitePlacementSolve.js';
-import { applySiteTransform } from './sitePlacementView.js';
+import { applySiteTransform } from './siteTransform.js';
 
 const EPS = 1e-6;
 const close = (a, b, msg) => assert.ok(Math.abs(a - b) < EPS, `${msg ?? ''} ${a} vs ${b}`);

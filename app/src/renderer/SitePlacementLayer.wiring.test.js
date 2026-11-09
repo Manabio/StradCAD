@@ -38,7 +38,7 @@ test('SitePlacementLayer: 屋根線は PLAN_SOLIDS_COLOR・細線、敷地は SI
   assert.match(layer, /radius=\{markR\}/);
   assert.match(layer, /const markR = SITE_CORNER_MARK_RADIUS_PX \/ viewport\.scaleX;/);
   const shapes = count(layer, /<(Line|Circle|Group|Text)\b/g);
-  assert.equal(shapes, 8, '通り芯の Line・屋根の Line・敷地の Line・寸法線上の点の Circle・角の見える Circle・角の当たり Circle・番号の Text・Group');
+  assert.equal(shapes, 9, '通り芯の Line・屋根の Line・敷地の Line・寸法線上の点の Circle・角の見える Circle・角の当たり Circle・番号の Text・境界線ラベルの Text・Group');
   assert.equal(count(layer, /listening=\{false\}/g), shapes - 2, '当たり用の丸と Group 以外は listening={false}');
 });
 
@@ -70,6 +70,32 @@ test('SitePlacementLayer: 選択中の頂点は placementVertexIndex で引き�
   assert.match(layer, /view\.grid\.lines\.find\(l => l\.id === selectedGridId\)/);
   assert.match(layer, /stroke=\{l\.key === selectedGridKey \|\| l\.key === selectedAlongKey \? MEMBER_SELECTION_COLOR : originColor\(SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY\)\}/);
   assert.ok(!/Math\.abs\(/.test(layer), '一致判定を描画側に書かない（純モジュールの口だけ）');
+});
+
+test('SitePlacementLayer: 境界線ラベルは layoutBoundaryLabels の結果を敷地 Group の外の Text に写す（箱幅・offset・align・listening・色）', () => {
+  assert.match(layer, /const BOUNDARY_LABEL_BOX_PX = 200;/);
+  assert.match(layer, /const boundaryBoxW = BOUNDARY_LABEL_BOX_PX \/ viewport\.scaleX;/);
+  assert.match(layer, /const fallbackCenter = view\.siteCenter \? applySiteTransform\(view\.siteCenter, view\.siteTransform\) : null;/);
+  assert.match(layer, /layoutBoundaryLabels\(view\.boundaryPieces, view\.siteTransform, viewport\.scaleX, fallbackCenter\)/);
+  const at = layer.indexOf('boundaryLabels.map');
+  assert.ok(at > layer.indexOf('</Group>'), '敷地 Group の外（配置図座標）');
+  const block = layer.slice(at);
+  assert.match(block, /<Text\b/);
+  assert.match(block, /x=\{l\.x\} y=\{l\.y\}/);
+  assert.match(block, /rotation=\{l\.rotation\}/);
+  assert.match(block, /text=\{l\.text\}/);
+  assert.match(block, /fontSize=\{numFontSize\}/);
+  assert.match(block, /fill=\{SITE_LINE_COLOR\}/);
+  assert.match(block, /width=\{boundaryBoxW\}/);
+  assert.match(block, /offsetX=\{boundaryBoxW \/ 2\}/);
+  assert.match(block, /offsetY=\{numFontSize\}/);
+  assert.match(block, /align="center"/);
+  assert.match(block, /listening=\{false\}/);
+});
+
+test('編集画面（SiteLinesLayer・SiteRectsLayer）には境界線ラベルを出さない', () => {
+  assert.ok(!/layoutBoundaryLabels|siteBoundaryLabels/.test(code('./SiteLinesLayer.jsx')));
+  assert.ok(!/layoutBoundaryLabels|siteBoundaryLabels/.test(code('./SiteRectsLayer.jsx')));
 });
 
 test('SiteModeState: 頂点の一致判定は純モジュール（samePlacementVertex・placementVertexIndex）だけを使う（比較を2か所に書かない）', () => {

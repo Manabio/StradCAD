@@ -4,7 +4,7 @@
  * store.js・snap.js・.jsx・structural/ を静的に import しない（node:test から単体で import できる）。
  */
 import { CenterLineType, DEG_TO_RAD, FULL_TURN_DEG, HALF_TURN_DEG } from '../core/constants.js';
-import { applySiteTransform } from './sitePlacementView.js';
+import { applySiteTransform } from './siteTransform.js';
 
 // 通り芯の向き（度。x 軸正から y 下向き正の座標系で測る）。VERTICAL＝x=value の縦線、HORIZONTAL＝y=value の横線。
 const AXIS_ANGLE_DEG = Object.freeze({

@@ -7,9 +7,10 @@ import { Site } from '../core.js';
 import { SitePlacementCenterSource } from '../core/constants.js';
 import {
   roofPlanLines, siteOutlineSegments, siteOutlineCorners, boundsOfPointLists,
-  composeSitePlacementView, applySiteTransform, siteTransformGroupProps,
+  composeSitePlacementView,
   samePlacementVertex, placementVertexIndex,
 } from './sitePlacementView.js';
+import { applySiteTransform, siteTransformGroupProps } from './siteTransform.js';
 import { SITE_PLACEMENT_VERTEX_EPS_MM } from '../core/constants.js';
 
 /** 矩形の外形線だけの region（閉路1本）。 */
@@ -152,6 +153,17 @@ test('composeSitePlacementView: 屋根の線が無ければ通り芯の範囲の
     assert.deepEqual(none.siteTransform, { rotationDeg: 0, tx: 0, ty: 0 });
     assert.equal(none.roofEmpty, true);
   }
+});
+
+test('composeSitePlacementView: boundaryPieces（敷地座標・結合済み）を戻す。同種で隣り合う長方形の北辺は1片、空の敷地は []', () => {
+  const site = new Site();
+  site.addRect(0, 0, 4000, 3000, 'r1');
+  site.addRect(4000, 0, 3000, 3000, 'r2');
+  const v = composeSitePlacementView({ site, roof: farRoof() });
+  const north = v.boundaryPieces.filter(p => p.a.y === 0 && p.b.y === 0);
+  assert.equal(north.length, 1);
+  assert.deepEqual([north[0].a.x, north[0].b.x, north[0].road], [0, 7000, false]);
+  assert.deepEqual(composeSitePlacementView({ site: new Site(), roof: farRoof() }).boundaryPieces, []);
 });
 
 test('【失敗系】composeSitePlacementView: 敷地が空なら敷地側の図芯が無く、tx=ty=0。屋根は描く', () => {

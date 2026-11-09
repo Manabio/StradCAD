@@ -17,6 +17,11 @@ const OUTWARD = {
   [RectSide.W]: { x: -1, y: 0 },
 };
 
+/** 辺 side の外向き単位法線（y 下向き正）。 */
+export function rectSideOutward(side) {
+  return OUTWARD[side];
+}
+
 // 辺。a は座標の小さい側の端点（N: NW→NE / S: SW→SE / W: NW→SW / E: NE→SE）
 export function rectEdge(rect, side) {
   const l = rect.x, r = rect.x + rect.w, t = rect.y, b = rect.y + rect.h;

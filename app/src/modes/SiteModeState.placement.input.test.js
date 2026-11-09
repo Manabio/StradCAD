@@ -11,7 +11,7 @@ import {
   TOAST_PLACEMENT_INCOMPLETE, TOAST_PLACEMENT_DISTANCE_BAD, TOAST_PLACEMENT_UNSOLVABLE,
   TOAST_PLACEMENT_ALONG_INCOMPLETE, TOAST_PLACEMENT_ALONG_AXIS,
 } from '../transform/sitePlacementEdit.js';
-import { applySiteTransform } from '../site/sitePlacementView.js';
+import { applySiteTransform } from '../site/siteTransform.js';
 import { SiteModeState } from './SiteModeState.js';
 
 /** 長方形1枚の敷地と、通り芯 X=0・X=6000・Y=0・Y=4000 を持つ project。 */

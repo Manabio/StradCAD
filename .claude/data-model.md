@@ -333,7 +333,7 @@ id の振り直し・付け替えは、参照の種類（壁・開口・他の�
 敷地パネルの「配置図：表示｜非表示」（`SiteModeState.showPlacement`。保存しない画面状態）。表示中は、全採用階の屋根伏せ図（下屋＋最上階の主屋根・屋根区画の線。傾斜ラベルは出さない）と、図芯を合わせて平行移動した敷地の外周（三斜＝外周線、長方形＝外周片、角の丸付き）だけを描く。敷地の入力（三斜・長方形の描画・選択・パネルの表と NumPad）は止める。なお敷地モードでは平面図一式（壁・建具・柱・階段・姿図の配置）を、配置図の表示・非表示に関わらず描かない（`shouldShowPlanFigure` が site で false。2026-11-09 ユーザー指示）。非表示側の挙動は変えない。
 - 入力を止める口は1点: pointer 操作は `inputSubMode`（表示中は null）を読み、押下を記録しない（`subMode` は変えない＝非表示に戻すと元のタブ）。パンは効く。表示にした時点で選択・入力・描画中の線を捨てる。
 - 描画の判断は純モジュール `site/sitePlacementView.js` に集め、`SitePlacementLayer` は写すだけ。屋根の region の解決は `structural/roofFramingRegions.js`（storage を推移的に引く）なので modes/ 側で行って渡す。全採用階の収集は立面モードと共有（`modes/adoptedFloors.js`）。graph は変えない読込みなので `uiBusy` は使わない（立面の init と同じ）。読込みは世代番号で、await 中の非表示化・再表示・`dispose` に負けた古い結果を捨てる。
-- 図芯＝描いた線の外接矩形の中心（屋根が無ければ通り芯の範囲の中心、それも無ければ合わせない）。敷地側は外周の外接矩形。写像は回転を含む形で1箇所（`applySiteTransform`／`siteTransformGroupProps`）に持つ。`composeSitePlacementView` は `site.placement` があればその変換を使い（戻り値 `placed:true`）、無ければこの図芯合わせ（回転 0）。
+- 図芯＝描いた線の外接矩形の中心（屋根が無ければ通り芯の範囲の中心、それも無ければ合わせない）。敷地側は外周の外接矩形。写像は回転を含む形で1箇所（`site/siteTransform.js` の `applySiteTransform`／`siteTransformGroupProps`。`sitePlacementView.js` からは再 export しない）に持つ。`composeSitePlacementView` は `site.placement` があればその変換を使い（戻り値 `placed:true`）、無ければこの図芯合わせ（回転 0）。
 - **配置の保存（`Site.placement`、2026-11-09 S3）**: `{rotationDeg, tx, ty, input:{v1, v2, centerLineId, distance, rotationFlipped, sideFlipped}}`、初期値 `null`（＝配置の痕跡なし）。変換は敷地座標 p → p' = R(rotationDeg)·p + (tx, ty)（原点まわりの回転＋平行移動。y 下向き正の標準の回転行列）。pivot を持たない理由は、敷地の図芯が形（長方形の追加・線の編集）で動くため、図芯まわりの回転にすると形を直すたびに配置がずれるから。変換と入力を両方保存する理由は、変換だけでは再編集（S4）ができず、入力だけでは変換を再現できない（沿い座標は「前回の変換で写した頂点1」＝その時点の履歴に依存する R6）から。`observable.ref`・`setPlacement`（null 可）・`clear()` で null。保存は SITE の末尾追加 `PLACEMENT`（SitePlacement テーブル。旧データはフィールド無し＝null）、dirty は `startSiteDirtyTracking` が観測、undo は `transform/sitePlacementEdit.js applySitePlacementWithUndo`（参照同一なら何もしない）。
 - **突入時の表示（R2）**: 敷地モードへ入るとき `site.placement` があれば配置図を開いた状態にする（`SiteModeState.init` が `setShowPlacement(true)` を待つ。App.jsx のローダーが `await s.init()`）。痕跡が無ければ従来どおり非表示。
 - **配置を解く純関数 `site/sitePlacementSolve.js computeSitePlacement`**（UI は S4）: 入力＝頂点1・頂点2（敷地座標）・基準の通り芯 `{centerLineType, value}`（VERTICAL＝x=value、HORIZONTAL＝y=value）・距離・回転反転・側反転・建物図芯・前回の変換。手順: (1) 線分 v1→v2 を通り芯に平行にする回転＝平行になる2解のうち絶対値の小さい方（(−90,90]。R3）、回転反転なら半周足して (−180,180]。(2) 頂点1の像の通り芯に直交する座標＝value ± distance。符号は建物図芯の反対側（図芯の当該座標 > value なら −、以外 +。R4）、側反転で逆。**図芯が無いときの既定の側**＝前回の変換で写した頂点1が value に対してある側（同側。ちょうど value 上なら +）。(3) 頂点1の像の通り芯沿いの座標＝前回の変換で写した頂点1の当該座標（R6）。(4) (tx, ty) = 頂点1の像 − R·v1。解けない入力（線分の長さ 0・距離が有限でない／0 以下・通り芯が縦横以外・頂点の座標や通り芯の値が有限でない）は `null`（NaN の変換を保存すると敷地が黙って消えるため）。`input.centerLineId` は文字列（FBS の string は null を持てないので、保存・復元のコピーで未指定は `''` に揃える。頂点が欠けた壊れたデータは null として復元）。
@@ -355,6 +355,13 @@ id の振り直し・付け替えは、参照の種類（壁・開口・他の�
   - 側反転（位置）・位置の解除は、配置済みで確定できる入力なら即時に再配置する（1 件ずつ undo）。解除は along を既定へ戻して R6 の据え置きへ（`clearPlacementAlong`。配置そのものの解除 `clearPlacement` とは別）。距離欄と位置の離れ欄の NumPad は排他（片方を開くともう片方は閉じる）。undo/redo 同期は along も保存値から作り直す。
   - 位置が none のときは側反転（位置）を出さない（押せても配置は変わらないため。アクションもフラグだけ切り替えて再配置しない）。失効した通り芯（1 段目・通り芯B とも）は図に選択色を出さない（R9）。案内文「先に 1 段目の通り芯を選ぶ」は 1 段目の通り芯が未選択のときだけ。
   - **扱わない**: 2 点それぞれの離れで傾きまで決める方式（回転を通り芯への平行から外す）は別課題。
+- **境界線ラベル（S6、2026-11-10）**: 配置図の敷地の外周に「隣地境界線(<mm>)」「道路境界線(<mm>)」を描く（`site/siteBoundaryLabels.js`）。**対象は配置図（表示側）だけ**——境界線の種別・長さは問題.md の配置図の構成要素で、編集画面は種別バッジと端点で見せているため出さない（SiteLinesLayer・SiteRectsLayer は不変）。
+  - **片の単位と結合**: 三斜＝外周の線1本、長方形＝`computeOutlinePieces` の片（共有辺で割れた片）。同一直線上で端点を共有し `road` が同じ隣接片は1本に結合して、その長さを1つのラベルにする（判定幅は `SITE_PLACEMENT_VERTEX_EPS_MM`。離れた片・種別違い・折れる片・折り返す片は結合しない）。
+  - **種別**: 三斜＝線の `lineKind === ROAD`、長方形＝片の owners のどれかの辺が `roadSides` にあれば道路（長方形タブの外周表 `buildOutlineRows`・道路の切替 `toggleRectRoadSide` と同じ規則）。
+  - **向き**: 片の角度を [−90, 90) へ（90 は −90）＝字は常に上向きか左向き（逆さにならない）。配置で通り芯に平行にそろえた辺は浮動小数の誤差で ±90 の境目に来るため、`SITE_BOUNDARY_LABEL_VERTICAL_EPS_DEG`（1e-6 度）以内は鉛直とみなして −90（字の上が左）に固定する。
+  - **外側の決め方**: 三斜＝その線が属する三角形の第3頂点の反対側、長方形＝辺の外向き法線、三角形の無い線（最初の1本）＝敷地の外周の外接矩形の中心（配置図座標）から離れる側。
+  - **ベースラインの離れ**: 字の上が外を向くなら線から `TEXT_GAP_PX`、字の上が線を向くならベースラインが遠いので `TEXT_GAP_PX`＋字高さ（`NUM_FONT_PX`）。字は敷地 Group の外に固定 px（`/scale`）で描く。
+  - 短い片のラベルが隣と重なることは受容（避けない）。
 - 採らなかった案: 配置図を `subMode`（第3のタブ）にする案は、タブの下の表・面積・入力と排他にする分岐が各所に増えるため見送り。viewport は動かさない（表示を切り替えても画面の位置は変わらない）。
 
 ## 近傍検出の優先順位は「画面距離が最も近い1件」で解決する

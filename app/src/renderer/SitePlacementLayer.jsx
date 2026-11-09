@@ -1,6 +1,8 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Circle, Group, Text } from 'react-konva';
-import { siteTransformGroupProps, placementVertexIndex } from '../site/sitePlacementView.js';
+import { placementVertexIndex } from '../site/sitePlacementView.js';
+import { siteTransformGroupProps, applySiteTransform } from '../site/siteTransform.js';
+import { layoutBoundaryLabels } from '../site/siteBoundaryLabels.js';
 import {
   SITE_LINE_COLOR, SITE_BOUNDARY_DASH, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT, siteLineWeightKey,
   HIT_PX_MAX, SITE_HIT_NODE_NAME,
@@ -15,6 +17,9 @@ import { PLAN_SOLIDS_COLOR } from './PlanSolidsLayer.jsx';
 import { originColor } from './canvasStyle.js';
 import { DIMENSION_LINE_WEIGHT, NUM_FONT_PX, TEXT_GAP_PX, gridLineDash } from './dimensionStyle.js';
 import { labelCircle, dimensionRow } from './gutterPrimitives.jsx';
+
+// 境界線ラベルの Text の箱幅（画面 px）。実幅に依らず中心を合わせるための箱で、描画都合の値。
+const BOUNDARY_LABEL_BOX_PX = 200;
 
 // 敷地モードの配置図（site/sitePlacementView.js の composeSitePlacementView の結果を写すだけ。判断は純モジュール側）。
 // 屋根伏せ図の線・通り芯（線・寸法・丸ラベル。site/sitePlacementGrid.js が画面 px の離れを世界座標へ直す）は世界座標、
@@ -36,6 +41,9 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd })
   const g = layoutSitePlacementGrid(view.grid, viewport.scaleX);
   const gridLineWidth = viewport.lineWeightsPx[SITE_PLACEMENT_GRID_LINE_WEIGHT];
   const dimDotR = GRID_DIM_DOT_RADIUS_PX / viewport.scaleX;
+  const boundaryBoxW = BOUNDARY_LABEL_BOX_PX / viewport.scaleX;
+  const fallbackCenter = view.siteCenter ? applySiteTransform(view.siteCenter, view.siteTransform) : null;
+  const boundaryLabels = layoutBoundaryLabels(view.boundaryPieces, view.siteTransform, viewport.scaleX, fallbackCenter);
   return (
     <>
       {g.lines.map(l => (
@@ -129,6 +137,21 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd })
         ];
       })}
       {g.labels.flatMap(l => labelCircle(l.key, l.x, l.y, l.label, viewport))}
+      {boundaryLabels.map(l => (
+        <Text
+          key={`bt-${l.key}`}
+          x={l.x} y={l.y}
+          rotation={l.rotation}
+          text={l.text}
+          fontSize={numFontSize}
+          fill={SITE_LINE_COLOR}
+          width={boundaryBoxW}
+          offsetX={boundaryBoxW / 2}
+          offsetY={numFontSize}
+          align="center"
+          listening={false}
+        />
+      ))}
     </>
   );
 });

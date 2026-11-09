@@ -9,13 +9,14 @@
  * 図芯合わせ: 建物側の図芯＝屋根の線の外接矩形の中心（屋根が無ければ通り芯の範囲の中心・それも無ければ合わせない）、敷地側＝敷地の外周の外接矩形の中心。
  * 配置の指定（site.placement）が無ければ、敷地を tx,ty だけ平行移動して2つの図芯を重ねる（回転 0）。あればその {rotationDeg, tx, ty} を使う（placed:true）。
  * 写像は p' = R(rotationDeg)·p + (tx, ty)（原点まわりの回転＋平行移動。pivot は持たない＝敷地の図芯は形で動くため）。
- * 写像の口（applySiteTransform・siteTransformGroupProps）は1つだけ持つ。
+ * 写像の口（applySiteTransform・siteTransformGroupProps）は site/siteTransform.js だけが持つ（ここからは再 export しない）。
  */
-import { SitePlacementCenterSource, SITE_LOG_TAG, DEG_TO_RAD, SITE_PLACEMENT_VERTEX_EPS_MM } from '../core/constants.js';
+import { SitePlacementCenterSource, SITE_LOG_TAG, SITE_PLACEMENT_VERTEX_EPS_MM } from '../core/constants.js';
 import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { computeOuterLineIds, computeOuterCornerPoints } from './lineClassification.js';
 import { computeOutlinePieces, computeOutlineCorners } from './siteRectGeometry.js';
 import { composeSitePlacementGrid } from './sitePlacementGrid.js';
+import { boundaryPieces, mergeCollinearPieces } from './siteBoundaryLabels.js';
 
 // Konva の key の組み立て部品。種別ごとの id 空間の衝突を避けるためだけに付け、比較には使わない。
 const SITE_PLACEMENT_KEY_PREFIX = Object.freeze({ LEAN: 'l', RECT: 'r', POINT: 'p', CORNER: 'c' });
@@ -105,6 +106,7 @@ const centerOf = b => (b ? { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 
  *   siteSegments: Array<{key:string, points:number[]}>, siteCorners: Array<{key:string, x:number, y:number}>,
  *   buildingCenter: {x:number,y:number}|null, centerSource: string, siteCenter: {x:number,y:number}|null,
  *   grid: ReturnType<typeof composeSitePlacementGrid>,
+ *   boundaryPieces: ReturnType<typeof mergeCollinearPieces>,
  *   siteTransform: {rotationDeg:number, tx:number, ty:number},
  *   placed: boolean,
  * }}
@@ -133,6 +135,8 @@ export function composeSitePlacementView({ site, roof }) {
     buildingCenter, centerSource, siteCenter,
     // 通り芯の線・丸ラベル・寸法（図芯の基準 gridBounds とは別の入力。ここから図芯は求めない）
     grid: composeSitePlacementGrid({ gridLines: roof?.gridLines ?? [], roofBounds }),
+    // 境界線ラベルの片（敷地座標・結合済み。字の位置は scale に依るのでレイヤーが layoutBoundaryLabels で出す）
+    boundaryPieces: mergeCollinearPieces(boundaryPieces(site)),
     siteTransform,
     placed: placement !== null,
   };
@@ -150,19 +154,4 @@ export function placementVertexIndex(input, pt) {
   if (samePlacementVertex(input.v1, pt)) return 1;
   if (samePlacementVertex(input.v2, pt)) return 2;
   return null;
-}
-
-/** 敷地の座標 pt を配置図の座標へ写す: p → R(rotationDeg)·p + (tx, ty)（y 下向き正の座標系での標準の回転行列）。 */
-export function applySiteTransform(pt, t) {
-  const rad = t.rotationDeg * DEG_TO_RAD;
-  const cos = Math.cos(rad), sin = Math.sin(rad);
-  return {
-    x: t.tx + pt.x * cos - pt.y * sin,
-    y: t.ty + pt.x * sin + pt.y * cos,
-  };
-}
-
-/** applySiteTransform と同じ写像を Konva の Group の props で表す（x,y＝平行移動、rotation＝原点まわりの回転）。 */
-export function siteTransformGroupProps(t) {
-  return { x: t.tx, y: t.ty, rotation: t.rotationDeg };
 }

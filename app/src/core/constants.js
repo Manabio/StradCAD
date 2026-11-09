@@ -517,6 +517,14 @@ export const SITE_PLACEMENT_LOADING_MESSAGE = '読み込み中…';
  * 浮動小数の保険としてだけ持つ（site/sitePlacementView.js の samePlacementVertex が唯一の比較口）。
  */
 export const SITE_PLACEMENT_VERTEX_EPS_MM = 1e-6;
+/** 配置図の境界線ラベル（site/siteBoundaryLabels.js）の種別名。パネルの短縮形 siteLineKindLabel とは別。 */
+export const SITE_BOUNDARY_LABEL_NEIGHBOR = '隣地境界線';
+export const SITE_BOUNDARY_LABEL_ROAD = '道路境界線';
+/**
+ * 境界線ラベルの片の角度が ±90 の境目にあるときの許容幅（度）。配置で通り芯に平行にそろえた辺の角度は
+ * 浮動小数の誤差で ±90 の境目に来るため、この幅以内は鉛直とみなして「字の上が左」（−90）に固定する。リード裁定 2026-11-10。
+ */
+export const SITE_BOUNDARY_LABEL_VERTICAL_EPS_DEG = 1e-6;
 /** 配置指定 UI（ui/SiteInfoPanel.jsx）の文言。 */
 export const SITE_PLACEMENT_HINT = '配置図の敷地の角をタップ';
 export const SITE_PLACEMENT_VERTEX1_LABEL = '頂点1';
