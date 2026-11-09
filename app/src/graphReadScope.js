@@ -79,6 +79,18 @@ export function withGraphReadScope(graph, fn) {
 }
 
 /**
+ * 複数の graph をまとめて読み取りスコープに入れる（withGraphReadScope の入れ子。ElevationModeState._buildBands の入れ子と同じ）。
+ * 立面・敷地の配置図のように、全採用階を一括で読む処理が使う。
+ * @template T
+ * @param {Array<object|null|undefined>} graphs
+ * @param {() => T} fn
+ * @returns {T}
+ */
+export function withGraphsReadScope(graphs, fn) {
+  return graphs.reduceRight((inner, g) => () => withGraphReadScope(g, inner), fn)();
+}
+
+/**
  * スコープ内なら key で memo 化して compute の結果を返す（スコープ外は毎回 compute する）。
  * @template T
  * @param {object} graph

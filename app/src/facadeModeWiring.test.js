@@ -63,7 +63,7 @@ test('【配線】SceneLayers.jsx: facade は平面レイヤー群より前に�
   assert.match(branch, /^\s*<FacadeLayer mode=\{mode\} size=\{size\} \/>\s*$/m);
   assert.match(branch, /^\s*return \(\s*$/m);
   const iFacade = code.indexOf("if (appMode === 'facade') {");
-  const iPlan = code.indexOf('const showPlanFigure = shouldShowPlanFigure(appMode);');
+  const iPlan = code.indexOf('const showPlanFigure = shouldShowPlanFigure(appMode)');
   assert.ok(iPlan >= 0 && iFacade < iPlan, '早期 return は平面レイヤー群の組み立てより前');
 });
 

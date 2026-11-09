@@ -1,6 +1,6 @@
 import { makeObservable, observable, action, computed, runInAction, reaction } from 'mobx';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
-import { withGraphReadScope } from '../graphReadScope.js';
+import { withGraphsReadScope } from '../graphReadScope.js';
+import { collectAdoptedFloors } from './adoptedFloors.js';
 import { screenMmToModelMm, clampScrollY } from '../elevation/elevationLayout.js';
 import { FACADE_EMPTY_MESSAGE, FACADE_INIT_ERROR_MESSAGE, FacadeSkipReason } from '../core/constants.js';
 import { ERR_DETAIL_FIT_FAILED_MORE } from '../error.js';
@@ -15,6 +15,7 @@ import {
 // DEFAULT_PX_PER_MM は DOM 依存の無い viewport.js から取る（ElevationModeState.js と同じ。node:test から単体 import できる状態を保つ）。
 import { DEFAULT_PX_PER_MM as DEFAULT_SCREEN_PX_PER_MM, resolveLineWeightsPx } from '../viewport.js';
 
+const FACADE_LOG_TAG = '[facade]';
 // 方位は常に未設定（null）で渡す（リード裁定 S1。北の角度の入力は今後）。
 const NORTH_ANGLE_DEG = null;
 // viewSize が無いとき（突入直後の単体テスト等）の既定。ElevationModeState と同じ値。
@@ -72,7 +73,7 @@ export class FacadeModeState {
    */
   async init() {
     try {
-      const { floors, readFailed } = await this._collectFloors();
+      const { floors, readFailed } = await collectAdoptedFloors(this.project, FACADE_LOG_TAG);
       if (this._disposed) return { ok: true, error: null };
 
       const graphs = floors.map(f => f.graph).filter(Boolean);
@@ -111,28 +112,6 @@ export class FacadeModeState {
       });
       return { ok: false, error: FACADE_INIT_ERROR_MESSAGE };
     }
-  }
-
-  /**
-   * 採用階を昇順に集める（自階は live、他階は peek を並行）。peek の失敗は階ごとに握って graph null にする。
-   * 自階が検討案（planes に無い）なら、同じ高さの採用階は peek で読む（立面は採用階の建物を描く）。
-   * @returns {Promise<{floors: Array<{plane:object, graph:object|null}>, readFailed:boolean}>}
-   */
-  async _collectFloors() {
-    const project = this.project;
-    const planes = project?.planes ?? [];
-    let readFailed = false;
-    const floors = await Promise.all(planes.map(async plane => {
-      if (plane.id === project.activePlaneId) return { plane, graph: project.activeGraph ?? null };
-      try {
-        return { plane, graph: (await floorSwapManager.peek(plane, project.structGraph)) ?? null };
-      } catch (err) {
-        console.warn(`[facade] 階「${plane.name ?? plane.id}」の読み込みに失敗（その階は描かない）:`, err);
-        readFailed = true;
-        return { plane, graph: null };
-      }
-    }));
-    return { floors, readFailed };
   }
 
   /** 注記の実画面 mm を現在の倍率でモデル mm に直し、model を組む（同期）。外形が未確定なら []。 */
@@ -216,9 +195,4 @@ export class FacadeModeState {
  */
 export function facadeRoofRegionsResolver(project) {
   return graph => ({ leanTo: leanToPlanRegions(graph), top: topRoofPlanRegions(graph, project) });
-}
-
-/** 複数の graph をまとめて読み取りスコープに入れる（graphReadScope.js。ElevationModeState._buildBands の入れ子と同じ）。 */
-function withGraphsReadScope(graphs, fn) {
-  return graphs.reduceRight((inner, g) => () => withGraphReadScope(g, inner), fn)();
 }
