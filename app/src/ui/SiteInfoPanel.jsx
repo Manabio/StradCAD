@@ -82,10 +82,11 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
   const otherLines  = site.orderedLines.filter(l => !isSanshaKind(l.lineKind));
   const lineTriNums = computeLineTriNums(site);
   const outerIds    = computeOuterLineIds(site);
-  // 面積行（三斜・長方形タブ共通）。開閉は両タブ共有
+  // 面積行（三斜・長方形タブ共通）。▶ の内訳は三斜だけ（長方形は表自体が求積表＝内訳を兼ねる）
   const [areaOpen, setAreaOpen] = useState(false);
   const showArea    = subMode === 'sansha' || subMode === 'rect';
-  const areaRows    = !showArea ? [] : subMode === 'rect' ? buildRectAreaRows(site.rects) : buildSanshaAreaRows(site);
+  const rectAreaRows = buildRectAreaRows(site.rects); // rects と同順（長方形タブの表の小計に使う）
+  const areaRows    = !showArea ? [] : subMode === 'rect' ? rectAreaRows : buildSanshaAreaRows(site);
   const totalArea   = sumAreaM2(areaRows);
   const areaOverlap = subMode === 'rect' && rectsOverlap(site.rects);
 
@@ -194,7 +195,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
     return (
       <tr key={`${keyPrefix}-${d.cell}`} onClick={() => mode.setRectFocusedCell(d.cell)} style={{ cursor: 'pointer' }}>
         <td style={{ ...TD_BASE, color: '#2563eb', fontWeight: 600 }}>{d.label}</td>
-        <td colSpan={3} style={{
+        <td colSpan={6} style={{
           ...TD_BASE,
           background: focused ? '#f0fdf4' : '#f7fdf9',
           outline:    focused ? '2px solid #22c55e' : 'none',
@@ -231,21 +232,23 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
         ))}
       </div>
 
-      {/* 面積行（三斜・長方形タブ共通。▶ で内訳） */}
+      {/* 面積行（三斜・長方形タブ共通。▶ の内訳は三斜だけ。長方形は下の表が内訳を兼ねる） */}
       {showArea && (
         <div style={{ flexShrink: 0, borderBottom: '1px solid #e2e8f0' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', fontSize: 13, color: '#1e293b' }}>
-            <button
-              onClick={() => setAreaOpen(o => !o)}
-              title="内訳"
-              style={{ ...ICON_BTN, fontSize: 10 }}
-            >{areaOpen ? '▼' : '▶'}</button>
+            {subMode === 'sansha' && (
+              <button
+                onClick={() => setAreaOpen(o => !o)}
+                title="内訳"
+                style={{ ...ICON_BTN, fontSize: 10 }}
+              >{areaOpen ? '▼' : '▶'}</button>
+            )}
             <span style={{ fontWeight: 700 }}>面積：</span>
             <span>{formatAreaM2(totalArea)}</span>
             <span>㎡</span>
             {areaOverlap && <span style={{ color: '#94a3b8', fontSize: 11 }}>（重なりあり）</span>}
           </div>
-          {areaOpen && (
+          {areaOpen && subMode === 'sansha' && (
             <div style={{ maxHeight: 160, overflowY: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
@@ -434,31 +437,34 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
             </tbody>
           </table>
         ) : subMode === 'rect' ? (
-          // ---- 長方形タブ（番号／よこ／たて。面積は見出し直下の「面積：」行）＋外周表（辺ごとの道路指定） ----
+          // ---- 長方形タブ（求積表＝内訳を兼ねる: 番号／よこ × たて／=／小計／🗑。合計は見出し直下の「面積：」行）＋外周表（辺ごとの道路指定） ----
           <>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <th style={{ ...TH_BASE, width: 48 }}>番号</th>
-                <th style={TH_BASE}>よこ</th>
-                <th style={TH_BASE}>たて</th>
-                <th style={{ ...TH_BASE, width: 40 }} title="削除">{TRASH_ICON}</th>
+                <th style={{ ...TH_BASE, width: 40 }}>番号</th>
+                <th colSpan={3} style={TH_BASE}>よこ × たて</th>
+                <th style={{ ...TH_BASE, width: 16 }} />
+                <th style={{ ...TH_BASE, width: 72, textAlign: 'right' }}>小計(㎡)</th>
+                <th style={{ ...TH_BASE, width: 36 }} title="削除">{TRASH_ICON}</th>
               </tr>
             </thead>
             <tbody>
-              {rectTable.rows.flatMap(row => {
+              {rectTable.rows.flatMap((row, idx) => {
                 const isSel = row.id === inputOwnerId;
                 const td = { ...TD_BASE, background: isSel ? '#eff6ff' : undefined };
                 const editing = rectIn?.editRectId === row.id;
-                // よこ・たて セル: 修正中＝その場の入力欄、修正可＝タップで修正開始の枠付き数値、不可＝素の数値
+                // よこ・たて セル: 修正中＝その場の入力欄、修正可＝タップで修正開始の枠付き数値、不可＝素の数値。
+                // よこ は × に寄せて右揃え、たて は左揃え（式として読めるように）
                 const dimCell = (col, value) => {
+                  const align = { textAlign: col === 'w' ? 'right' : 'left', fontVariantNumeric: 'tabular-nums' };
                   if (editing) {
                     const cell = rectEditCell(rectIn, col);
                     const focused = rectIn.focusedCell === cell;
                     return (
                       <td
                         style={{
-                          ...td, cursor: 'pointer',
+                          ...td, ...align, cursor: 'pointer',
                           background: focused ? '#f0fdf4' : '#dcfce7',
                           outline:    focused ? '2px solid #22c55e' : 'none',
                         }}
@@ -468,7 +474,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                   }
                   if (row.canEdit) {
                     return (
-                      <td style={td}>
+                      <td style={{ ...td, ...align }}>
                         <span
                           onClick={() => onStartRectEdit?.(row.id, col)}
                           style={FIELD_SPAN}
@@ -476,13 +482,16 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                       </td>
                     );
                   }
-                  return <td style={td}>{value}</td>;
+                  return <td style={{ ...td, ...align }}>{value}</td>;
                 };
                 const out = [
                   <tr key={row.id}>
                     <td style={{ ...td, fontWeight: 600 }}>{row.num}</td>
                     {dimCell('w', row.w.toFixed(0))}
+                    <td style={{ ...td, padding: '4px 2px' }}>×</td>
                     {dimCell('h', row.h.toFixed(0))}
+                    <td style={{ ...td, padding: '4px 2px' }}>=</td>
+                    <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatAreaM2(rectAreaRows[idx].areaM2)}</td>
                     <td style={td}>
                       {row.canDelete && (
                         <button onClick={() => onDeleteRect?.(row.id)} style={ICON_BTN} title="削除">{TRASH_ICON}</button>
@@ -499,8 +508,8 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                   out.push(
                     <tr key={`${row.id}-anchor`}>
                       <td style={{ ...TD_BASE, color: '#ef4444', fontWeight: 600 }}>基点</td>
-                      <td colSpan={2} style={TD_BASE}>{rectAnchorLabel(mode.selectedRectEdge.side, mode.rectAnchor)}</td>
-                      <td colSpan={1} style={TD_BASE}>
+                      <td colSpan={4} style={TD_BASE}>{rectAnchorLabel(mode.selectedRectEdge.side, mode.rectAnchor)}</td>
+                      <td colSpan={2} style={TD_BASE}>
                         <button
                           onClick={() => mode.toggleRectAnchor()}
                           style={{
@@ -517,7 +526,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
               {rectIn?.kind === 'first' && !rectIn.editRectId && rectInputRows('first')}
               {rectTable.rows.length === 0 && !rectIn && (
                 <tr>
-                  <td colSpan={4} style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
+                  <td colSpan={7} style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
                     描画エリアをタップして左上角を置いてください
                   </td>
                 </tr>
