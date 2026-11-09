@@ -4,7 +4,7 @@ import { getSiteLineRedBlue } from '../site/siteGeometry.js';
 import { resolveSiteLinePointsMm } from '../site/siteLineJoinPrimitives.js';
 import { computeOuterLineIds } from '../site/lineClassification.js';
 import {
-  SITE_LINE_COLOR, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT,
+  SITE_LINE_COLOR, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT, lineHitWidth, SITE_HIT_NODE_NAME,
 } from '../site/siteLineStyle.js';
 
 // ---- 描画中プレビュー ----
@@ -24,19 +24,6 @@ export const SiteDrawPreview = observer(({ mode }) => {
     />
   );
 });
-
-// 線分の当たり判定幅（スクリーンpx）の上限・下限・線分長に対する比率
-export const HIT_PX_MAX   = 12;
-export const HIT_PX_MIN   = 2;
-export const HIT_PX_RATIO = 0.15;
-
-// 線分のスクリーン上の長さに応じて hitStrokeWidth（ワールド単位）を狭める。
-// 図形が小さいほど当たり判定も狭くし、隣接する辺との誤選択を防ぐ。
-export function lineHitWidth(line, viewport) {
-  const screenLen = line.length * viewport.scaleX;
-  const hitPx = Math.min(HIT_PX_MAX, Math.max(HIT_PX_MIN, screenLen * HIT_PX_RATIO));
-  return hitPx / viewport.scaleX;
-}
 
 export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSelectLine }) => {
   const r       = 4  / viewport.scaleX; // 端点丸の半径（スクリーン 4px 相当）
@@ -85,7 +72,8 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
             strokeWidth={resolved.width}
             dash={resolved.dash ? [...resolved.dash] : undefined}
             strokeScaleEnabled={false}
-            hitStrokeWidth={lineHitWidth(line, viewport)}
+            name={SITE_HIT_NODE_NAME}
+            hitStrokeWidth={lineHitWidth()}
             onClick={() => onSelectLine?.(line.id)}
             onTap={() => onSelectLine?.(line.id)}
             onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}

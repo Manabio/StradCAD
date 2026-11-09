@@ -6,9 +6,8 @@ import {
 import { computeRectPreview, RECT_ANCHOR_NODE_NAME } from '../site/siteRectInput.js';
 import {
   SITE_LINE_COLOR, SITE_BOUNDARY_DASH, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT,
-  siteLineWeightKey,
+  siteLineWeightKey, lineHitWidth, HIT_PX_MAX, SITE_HIT_NODE_NAME,
 } from '../site/siteLineStyle.js';
-import { lineHitWidth, HIT_PX_MAX } from './SiteLinesLayer.jsx';
 
 // 敷地モードの長方形（.claude/data-model.md「敷地の長方形入力」節）。
 // 線の描画規則は site/siteLineStyle.js（三斜と共通）: 内側の辺＝細線・実線、外周片＝中線・一点鎖線、
@@ -40,7 +39,7 @@ export const SiteRectsLayer = observer(({ site, mode, viewport, onSelectRectEdge
   const anchorCircle = (key, pt, fill) => (
     <Circle
       key={key}
-      name={RECT_ANCHOR_NODE_NAME}
+      name={`${RECT_ANCHOR_NODE_NAME} ${SITE_HIT_NODE_NAME}`}
       x={pt.x} y={pt.y}
       radius={r}
       fill={fill}
@@ -94,7 +93,6 @@ export const SiteRectsLayer = observer(({ site, mode, viewport, onSelectRectEdge
 
       {/* 辺の当たり（各長方形の4辺全体に透明の線を敷く。rect サブモードのみ listening） */}
       {rectMode && rects.flatMap(rect => rectEdges(rect).map(edge => {
-        const len = Math.hypot(edge.b.x - edge.a.x, edge.b.y - edge.a.y);
         return (
           <Line
             key={`h-${rect.id}-${edge.side}`}
@@ -102,7 +100,8 @@ export const SiteRectsLayer = observer(({ site, mode, viewport, onSelectRectEdge
             stroke="transparent"
             strokeWidth={1}
             strokeScaleEnabled={false}
-            hitStrokeWidth={lineHitWidth({ length: len }, viewport)}
+            name={SITE_HIT_NODE_NAME}
+            hitStrokeWidth={lineHitWidth()}
             onClick={() => onSelectRectEdge?.(rect.id, edge.side)}
             onTap={() => onSelectRectEdge?.(rect.id, edge.side)}
             onMouseEnter={e => { e.target.getStage().container().style.cursor = 'pointer'; }}

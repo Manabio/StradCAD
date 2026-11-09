@@ -85,7 +85,7 @@ test('【不変条件】usePointerInteraction: 仕上げ・天伏の pointerDown
   assert.ok(!/if \(sm === [^)]*\) \{/.test(site), 'drag.current の設定がサブモードの条件の中にある');
 });
 
-test("【不変条件】usePointerInteraction: pointerUp の rect 分岐は、長方形0個かつ入力なしなら startFirstRect、それ以外は RECT_ANCHOR_NODE_NAME 以外で clearRectState。三斜の分岐より前", () => {
+test("【不変条件】usePointerInteraction: pointerUp の rect 分岐は、長方形0個かつ入力なしなら startFirstRect、それ以外は clearRectState（当たり図形の上のタップは何もしない）。三斜の分岐より前", () => {
   const src = stripComments(readSrc('./usePointerInteraction.js'));
   const up = src.slice(src.indexOf('const handlePointerUp = '));
   const rectStart = up.indexOf("if (sm === 'rect') {");
@@ -94,7 +94,10 @@ test("【不変条件】usePointerInteraction: pointerUp の rect 分岐は、�
   const b = up.slice(rectStart, sansha);
   assert.match(b, /^\s*if \(project\.site\.rects\.length === 0 && !modeRef\.current\.rectInputState\) \{\s*$/m);
   assert.match(b, /^\s*modeRef\.current\.startFirstRect\(w\.x, w\.y\);\s*$/m);
-  assert.match(b, /^\s*\} else if \(e\.target\?\.name\?\.\(\) !== RECT_ANCHOR_NODE_NAME\) \{\s*\n\s*modeRef\.current\.clearRectState\(\);\s*$/m);
+  assert.match(b, /^\s*if \(hitShape\) return;\s*$/m, '当たり図形の上のタップで空白タップ処理をしている');
+  assert.match(b, /^\s*\} else \{\s*\n\s*modeRef\.current\.clearRectState\(\);\s*$/m);
+  assert.match(up, /^\s*const hitShape = !!e\.target\?\.hasName\?\.\(SITE_HIT_NODE_NAME\);\s*$/m, '空白判定が敷地の当たり図形の name を見ていない');
+  assert.match(up, /^\s*if \(hitShape && !modeRef\.current\.siteDrawState\) return;\s*$/m, '三斜の当たり図形タップ');
   assert.ok(!/clearSelection\(/.test(b), '三斜側の状態を巻き込む clearSelection を使っている');
 });
 
@@ -199,7 +202,7 @@ test('【不変条件】usePointerInteraction: パンは panTo に一本化（�
   assert.match(src, /^\s*resetGestureRefs, didOpeningDragEnd, didPanEnd,\s*$/m, 'didPanEnd を返していない');
   const scene = readSrc('../renderer/SceneLayers.jsx');
   assert.match(scene, /^\s*onSelectStair=\{appMode === 'finish' \? \(id => \{ if \(!didPanEnd\?\.\(\)\) modeRef\.current\?\.selectStair\(id\); \}\) : null\}\s*$/m, '仕上げの階段の click がパンの終了を見ていない');
-  assert.match(scene, /^\s*onSelectLine=\{id => \{ if \(!didPanEnd\?\.\(\)\) modeRef\.current\?\.selectLine\(id\); \}\}\s*$/m, '敷地線の click がパンの終了を見ていない');
+  assert.match(scene, /^\s*onSelectLine=\{id => \{ if \(!didPanEnd\?\.\(\)\) modeRef\.current\?\.toggleLineSelection\(id\); \}\}\s*$/m, '敷地線の click がパンの終了を見ていない');
   const app = readSrc('../App.jsx');
   assert.match(app, /^\s*resetGestureRefs, didOpeningDragEnd, didPanEnd,\s*$/m, 'App.jsx が didPanEnd を受けていない');
   assert.match(app, /^\s*didPanEnd=\{didPanEnd\}\s*$/m, 'App.jsx が SceneLayers へ didPanEnd を渡していない');

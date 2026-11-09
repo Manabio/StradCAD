@@ -50,6 +50,8 @@ export class SiteModeState {
       startFirstRect:     action,
       startRectEdit:      action,
       selectRectEdge:     action,
+      toggleRectEdge:     action,
+      toggleLineSelection: action,
       toggleRectAnchor:   action,
       setRectFocusedCell: action,
       setRectInputValue:  action,
@@ -120,6 +122,12 @@ export class SiteModeState {
         blueKind: SiteLineKind.SURVEY,
       };
     }
+  }
+
+  // 描画エリアの線タップ: 選択中の線の再タップは解除、違う線なら選択
+  toggleLineSelection(lineId) {
+    if (lineId != null && this.selectedLineId === lineId) this.clearSelection();
+    else this.selectLine(lineId);
   }
 
   clearSelection() {
@@ -193,6 +201,13 @@ export class SiteModeState {
     this.selectedRectEdge = { rectId, side };
     this.rectAnchor = pickRectEdgeAnchor(rectEdge(rect, side), viewport);
     this.rectInputState = { kind: 'attach', focusedCell: 'along', alongValue: '', depthValue: '' };
+  }
+
+  // 描画エリアの辺タップ: 選択中の辺の再タップは解除（修正中の基の辺なら修正の取り消し）、違う辺なら選択
+  toggleRectEdge(rectId, side, viewport) {
+    const cur = this.selectedRectEdge;
+    if (cur && cur.rectId === rectId && cur.side === side) this.clearRectState();
+    else this.selectRectEdge(rectId, side, viewport);
   }
 
   // 既存の長方形の寸法修正を始める（自動選定: 隣接 0＝最初の入力形式／隣接 1＝付加入力形式で基の辺・基点を復元）。

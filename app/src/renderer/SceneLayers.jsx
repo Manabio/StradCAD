@@ -141,7 +141,7 @@ export const SceneLayers = observer(({
                 site={project.site}
                 viewport={viewport}
                 selectedLineId={mode.selectedLineId}
-                onSelectLine={id => { if (!didPanEnd?.()) modeRef.current?.selectLine(id); }}
+                onSelectLine={id => { if (!didPanEnd?.()) modeRef.current?.toggleLineSelection(id); }}
               />
             )}
             {appMode === 'site' && mode && (
@@ -153,7 +153,7 @@ export const SceneLayers = observer(({
                   if (didPanEnd?.()) return;
                   // 完全に内側の辺は共有辺にできない（R5）。選択時に知らせる
                   if (!isEdgeAttachable(project.site.rects, rectId, side)) { onToast?.(TOAST_RECT_EDGE_INNER); return; }
-                  modeRef.current?.selectRectEdge(rectId, side, viewport);
+                  modeRef.current?.toggleRectEdge(rectId, side, viewport);
                 }}
               />
             )}

@@ -248,6 +248,44 @@ test('【失敗系】cycleEdgeKind: 入力状態が無ければ何もしない',
   assert.equal(sm.inputState, null);
 });
 
+test('toggleRectEdge: 選択中の辺の再タップで解除（基点・入力も戻る）、別の辺なら選択を移す', () => {
+  const { rect, sm } = makeState();
+  sm.toggleRectEdge(rect.id, 'n', vp);
+  assert.deepEqual(sm.selectedRectEdge, { rectId: rect.id, side: 'n' });
+  assert.notEqual(sm.rectInputState, null);
+  sm.toggleRectEdge(rect.id, 's', vp);
+  assert.deepEqual(sm.selectedRectEdge, { rectId: rect.id, side: 's' });
+  sm.toggleRectEdge(rect.id, 's', vp);
+  assert.equal(sm.selectedRectEdge, null);
+  assert.equal(sm.rectInputState, null);
+  assert.equal(sm.rectAnchor, 'a');
+});
+
+test('【失敗系】toggleRectEdge: 存在しない長方形の辺は選択も解除も起こさない', () => {
+  const { sm } = makeState();
+  sm.toggleRectEdge('none', 'n', vp);
+  assert.equal(sm.selectedRectEdge, null);
+  assert.equal(sm.rectInputState, null);
+});
+
+test('toggleLineSelection: 選択中の線の再タップで解除（入力も消える）、別の線なら選択を移し入力行を作り直す', () => {
+  const site = new Site();
+  const l1 = site.addLine(site.addPoint(0, 0), site.addPoint(1000, 0), SiteLineKind.SURVEY);
+  const l2 = site.addLine(site.addPoint(0, 500), site.addPoint(1000, 500), SiteLineKind.SURVEY);
+  const sm = new SiteModeState(site);
+  sm.setSubMode('sansha');
+  sm.toggleLineSelection(l1.id);
+  assert.equal(sm.selectedLineId, l1.id);
+  assert.notEqual(sm.inputState, null);
+  sm.inputState = { ...sm.inputState, lenValue: '123' };
+  sm.toggleLineSelection(l2.id);
+  assert.equal(sm.selectedLineId, l2.id);
+  assert.equal(sm.inputState.lenValue, '');
+  sm.toggleLineSelection(l2.id);
+  assert.equal(sm.selectedLineId, null);
+  assert.equal(sm.inputState, null);
+});
+
 test('selectLine: 赤辺・青辺の初期線種は底辺が道路でも常に無指定（SURVEY）', () => {
   const site = new Site();
   const sp = site.addPoint(0, 0);

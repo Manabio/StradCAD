@@ -4,8 +4,16 @@ import assert from 'node:assert/strict';
 import { SiteLineKind } from '../core/constants.js';
 import {
   SITE_LINE_COLOR, SITE_BOUNDARY_DASH, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT,
-  siteLineWeightKey, siteLineKindLabel,
+  siteLineWeightKey, siteLineKindLabel, lineHitWidth, HIT_PX_MAX,
 } from './siteLineStyle.js';
+
+test('lineHitWidth: 線長・倍率に依らず固定の画面px（12）を返す。実寸（/ scaleX）へ直さない', () => {
+  assert.equal(HIT_PX_MAX, 12);
+  assert.equal(lineHitWidth(), 12);
+  // 引数（旧 API の line・viewport）が渡っても結果は変わらない
+  assert.equal(lineHitWidth({ length: 10 }, { scaleX: 0.08 }), 12);
+  assert.equal(lineHitWidth({ length: 100000 }, { scaleX: 5 }), 12);
+});
 
 test('定数: 黒・一点鎖線[40,4,2,4]・角の丸 半径6px/thin', () => {
   assert.equal(SITE_LINE_COLOR, '#000000');

@@ -34,7 +34,7 @@ import { snapshotOpening, pushOpeningUndo } from '../openings/openingEdit.js';
 import { inGutter as isInGutter } from '../layout.js';
 import { commitCLMoveOp } from '../transform/centerLineOps.js';
 import { commitSiteTapLine } from '../transform/siteEdit.js';
-import { RECT_ANCHOR_NODE_NAME } from '../site/siteRectInput.js';
+import { SITE_HIT_NODE_NAME } from '../site/siteLineStyle.js';
 import { canExtendCenterLine, canShortenCenterLine } from '../transform/centerLineExtend.js';
 import { interiorWallSpans } from '../finish/edgeClassify.js';
 import { isEligibleWallSpan } from '../finish/kneeDropWall.js';
@@ -818,18 +818,25 @@ export function usePointerInteraction({
       }
       // タップ確定
       const sm = modeRef.current?.subMode;
+      // 敷地の当たり図形（線・辺・基点の丸）の上のタップは図形側の onClick（選択・切替・再タップ解除）に任せ、
+      // ここでは「空白タップ」の処理をしない（先に解除すると onClick が同じ図形を選び直してしまう）。
+      // 平面図一式の listening な図形（建具記号など）が敷地モードでも描かれるため、ステージ比較では空白判定にならない
+      const hitShape = !!e.target?.hasName?.(SITE_HIT_NODE_NAME);
       if (sm === 'rect') {
+        if (hitShape) return;
         // 長方形入力: 長方形が1つも無く入力も無ければ、タップ点を最初の長方形の左上角に。
-        // それ以外は長方形側の選択解除（三斜側の状態は巻き込まない。辺の選択はレイヤーの onClick。基点の丸のタップは選択を保つ）
+        // それ以外は長方形側の選択解除（三斜側の状態は巻き込まない。辺の選択はレイヤーの onClick）
         if (project.site.rects.length === 0 && !modeRef.current.rectInputState) {
           const w = viewport.screenToWorld(clientX, clientY);
           modeRef.current.startFirstRect(w.x, w.y);
-        } else if (e.target?.name?.() !== RECT_ANCHOR_NODE_NAME) {
+        } else {
           modeRef.current.clearRectState();
         }
         return;
       }
       if (sm !== 'sansha' && sm !== 'other') return;
+      // 三斜の2点目の確定（siteDrawState あり）は従来どおり target を問わない
+      if (hitShape && !modeRef.current.siteDrawState) return;
       const world = viewport.screenToWorld(clientX, clientY);
       if (!modeRef.current.siteDrawState) {
         if (project.site.lines.length === 0) {
