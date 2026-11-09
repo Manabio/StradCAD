@@ -3,6 +3,11 @@
 import { runInAction } from 'mobx';
 import { undoManager } from '../undoManager.js';
 
+// 配置の確定（modes/SiteModeState.js commitPlacement）の拒否理由。siteRectEdit.js の TOAST_ と同じ置き方
+export const TOAST_PLACEMENT_INCOMPLETE   = '頂点2点・通り芯・距離を指定してください';
+export const TOAST_PLACEMENT_DISTANCE_BAD = '距離は 0 より大きい値で指定してください';
+export const TOAST_PLACEMENT_UNSOLVABLE   = '配置を解けませんでした';
+
 /**
  * 敷地の配置を next（null＝配置の解除）へ変える（undo あり）。
  * 参照が同じ値なら何もせず undo も積まない。

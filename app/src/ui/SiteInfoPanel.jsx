@@ -2,7 +2,13 @@
 import { observer } from 'mobx-react-lite';
 import { isSanshaKind, computeLineTriNums, computeOuterLineIds } from '../site/lineClassification.js';
 import { siteLineKindLabel } from '../site/siteLineStyle.js';
-import { SITE_PLACEMENT_SWITCH_LABEL, SITE_PLACEMENT_SHOW_LABEL, SITE_PLACEMENT_HIDE_LABEL } from '../core/constants.js';
+import {
+  SITE_PLACEMENT_SWITCH_LABEL, SITE_PLACEMENT_SHOW_LABEL, SITE_PLACEMENT_HIDE_LABEL, CenterLineType,
+  SITE_PLACEMENT_HINT, SITE_PLACEMENT_VERTEX1_LABEL, SITE_PLACEMENT_VERTEX2_LABEL, SITE_PLACEMENT_CENTER_LINE_LABEL,
+  SITE_PLACEMENT_DISTANCE_LABEL, SITE_PLACEMENT_DISTANCE_NUMPAD_LABEL, SITE_PLACEMENT_FLIP_ROTATION_LABEL,
+  SITE_PLACEMENT_FLIP_SIDE_LABEL, SITE_PLACEMENT_COMMIT_LABEL, SITE_PLACEMENT_CLEAR_LABEL,
+  SITE_PLACEMENT_VERTEX_NONE, SITE_PLACEMENT_VERTEX_SET, SITE_PLACEMENT_STALE_LABEL,
+} from '../core/constants.js';
 import { rowDeleteAction, triangleNumber } from '../site/triangleDeletion.js';
 import {
   buildSanshaAreaRows, buildRectAreaRows, sumAreaM2, rectsOverlap, formatAreaM2,
@@ -77,9 +83,11 @@ const TD_BASE = {
   whiteSpace: 'nowrap',
 };
 
-export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, onConfirmLineLen, onConfirmTriangle, onConfirmRect, onCycleLineKind, onToggleRectRoadSide, onStartRectEdit, onDeleteRect, onDeleteSiteRow }) => {
+export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, onConfirmLineLen, onConfirmTriangle, onConfirmRect, onCycleLineKind, onToggleRectRoadSide, onStartRectEdit, onDeleteRect, onDeleteSiteRow, onToast }) => {
   const subMode   = mode.subMode;
   const placing   = mode.showPlacement; // 配置図の表示中（敷地の入力 UI を出さない）
+  const pin       = mode.placementInput; // 配置の指定入力（placing のときだけ非 null）
+  const reportPlacement = (r) => { if (r?.toast) onToast?.(r.toast); }; // 配置の確定・再配置の拒否理由を App のトーストへ
 
   const sanshaLines = site.orderedLines.filter(l => isSanshaKind(l.lineKind));
   const lineTriNums = computeLineTriNums(site);
@@ -184,6 +192,30 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [mode.rectInputState, mode, subMode, onConfirmRect]);
+
+  // 配置図の距離欄のキーボード（placementDistanceFocused の間だけ。NumPad の onConfirm と同じ確定処理）
+  const distanceEditing = !!(placing && pin && mode.placementDistanceFocused);
+  useEffect(() => {
+    if (!distanceEditing) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        mode.setPlacementDistanceFocused(false);
+      } else if (e.key === 'Enter') {
+        mode.setPlacementDistanceFocused(false);
+        // 拒否理由は App のトーストへ（reportPlacement と同じ処理。依存配列を mode・onToast だけにするため直書き）
+        const r = mode.commitPlacement();
+        if (r?.toast) onToast?.(r.toast);
+      } else {
+        const numpadKey = toNumpadKey(e.key);
+        if (numpadKey != null) {
+          e.preventDefault();
+          mode.setPlacementDistanceValue(applyKeyToNumpadValue(mode.placementInput?.distanceValue ?? '', numpadKey));
+        }
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [distanceEditing, mode, onToast]);
 
   const rectTable = buildRectTableRows(site.rects);
   const outlineRows = buildOutlineRows(site.rects);
@@ -297,12 +329,65 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
       {/* テーブル */}
       <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto' }}>
         {placing ? (
-          // ---- 配置図の表示中: 表は出さず、通知文（読込み中・読めなかった階・屋根伏図なし）があれば1行だけ出す ----
-          mode.placementMessage && (
-            <div style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
-              {mode.placementMessage}
-            </div>
-          )
+          // ---- 配置図の表示中: 表は出さず、配置の指定（頂点2点・通り芯・距離・反転）と、通知文（読込み中・読めなかった階・屋根伏図なし）を出す ----
+          <>
+            {pin && (() => {
+              const st = mode.placementVertexStates;
+              const vertexText = s => (s === 'stale' ? SITE_PLACEMENT_STALE_LABEL : s === 'set' ? SITE_PLACEMENT_VERTEX_SET : SITE_PLACEMENT_VERTEX_NONE);
+              const gridLines = mode.placementRoof?.gridLines ?? [];
+              const lineButton = (l) => {
+                const active = pin.centerLineId === l.id;
+                return (
+                  <button
+                    key={l.id}
+                    onClick={() => mode.setPlacementCenterLine(l.id)}
+                    style={{ ...segmentButtonStyle(active), flex: '0 0 auto', padding: '6px 10px' }}
+                  >{l.label || String(l.value)}</button>
+                );
+              };
+              const actionButton = { padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff', cursor: 'pointer', fontSize: 13 };
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ ...PANEL_ROW_TEXT, color: '#64748b' }}>{SITE_PLACEMENT_HINT}</div>
+                  <div style={PANEL_ROW_TEXT}><span style={PANEL_LABEL}>{SITE_PLACEMENT_VERTEX1_LABEL}：</span>{vertexText(st.v1)}</div>
+                  <div style={PANEL_ROW_TEXT}><span style={PANEL_LABEL}>{SITE_PLACEMENT_VERTEX2_LABEL}：</span>{vertexText(st.v2)}</div>
+                  <div style={PANEL_ROW_TEXT}>
+                    <span style={PANEL_LABEL}>{SITE_PLACEMENT_CENTER_LINE_LABEL}：</span>
+                    {mode.placementCenterLineStale && SITE_PLACEMENT_STALE_LABEL}
+                  </div>
+                  {[CenterLineType.VERTICAL, CenterLineType.HORIZONTAL].map(type => (
+                    <div key={type} style={{ display: 'flex', flexWrap: 'wrap', padding: '0 8px' }}>
+                      {gridLines.filter(l => l.centerLineType === type).map(lineButton)}
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, ...PANEL_ROW_TEXT }}>
+                    <span style={PANEL_LABEL}>{SITE_PLACEMENT_DISTANCE_LABEL}：</span>
+                    <span
+                      style={{ ...FIELD_SPAN, outline: mode.placementDistanceFocused ? '2px solid #22c55e' : 'none' }}
+                      onClick={() => mode.setPlacementDistanceFocused(true)}
+                    >{pin.distanceValue || ' '}</span>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '6px 8px' }}>
+                    <button style={actionButton} onClick={() => reportPlacement(mode.togglePlacementRotation())}>{SITE_PLACEMENT_FLIP_ROTATION_LABEL}</button>
+                    <button style={actionButton} onClick={() => reportPlacement(mode.togglePlacementSide())}>{SITE_PLACEMENT_FLIP_SIDE_LABEL}</button>
+                    <button
+                      style={{ ...actionButton, opacity: mode.placementCanCommit ? 1 : 0.4, cursor: mode.placementCanCommit ? 'pointer' : 'default' }}
+                      disabled={!mode.placementCanCommit}
+                      onClick={() => reportPlacement(mode.commitPlacement())}
+                    >{SITE_PLACEMENT_COMMIT_LABEL}</button>
+                    {site.placement != null && (
+                      <button style={actionButton} onClick={() => mode.clearPlacement()}>{SITE_PLACEMENT_CLEAR_LABEL}</button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+            {mode.placementMessage && (
+              <div style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
+                {mode.placementMessage}
+              </div>
+            )}
+          </>
         ) : subMode === 'sansha' ? (
           // ---- 三斜タブ（1線1行） ----
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -597,6 +682,17 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
           />
         );
       })()}
+      {/* NumPad — 配置図の距離欄の編集中のみ表示 */}
+      {placing && pin && mode.placementDistanceFocused && (
+        <NumPad
+          value={pin.distanceValue}
+          label={SITE_PLACEMENT_DISTANCE_NUMPAD_LABEL}
+          onChange={val => mode.setPlacementDistanceValue(val)}
+          onConfirm={() => { mode.setPlacementDistanceFocused(false); reportPlacement(mode.commitPlacement()); }}
+          onCancel={() => mode.setPlacementDistanceFocused(false)}
+          hideDisplay
+        />
+      )}
       {/* NumPad — 長方形タブで入力中のみ表示 */}
       {!placing && subMode === 'rect' && mode.rectInputState && (
         <NumPad

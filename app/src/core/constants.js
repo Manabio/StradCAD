@@ -512,6 +512,25 @@ export const SITE_PLACEMENT_EMPTY_MESSAGE = '屋根伏図がありません';
 export const SITE_PLACEMENT_READ_ERROR_MESSAGE = '一部の階を読み込めませんでした';
 /** 全採用階の読み込み中の表示文。 */
 export const SITE_PLACEMENT_LOADING_MESSAGE = '読み込み中…';
+/**
+ * 配置指定の頂点（敷地座標の角）の一致判定の許容差（mm）。保存値は角の座標のコピーなので厳密一致が本則で、
+ * 浮動小数の保険としてだけ持つ（site/sitePlacementView.js の samePlacementVertex が唯一の比較口）。
+ */
+export const SITE_PLACEMENT_VERTEX_EPS_MM = 1e-6;
+/** 配置指定 UI（ui/SiteInfoPanel.jsx）の文言。 */
+export const SITE_PLACEMENT_HINT = '配置図の敷地の角をタップ';
+export const SITE_PLACEMENT_VERTEX1_LABEL = '頂点1';
+export const SITE_PLACEMENT_VERTEX2_LABEL = '頂点2';
+export const SITE_PLACEMENT_CENTER_LINE_LABEL = '通り芯';
+export const SITE_PLACEMENT_DISTANCE_LABEL = '距離';
+export const SITE_PLACEMENT_DISTANCE_NUMPAD_LABEL = '通り芯からの距離';
+export const SITE_PLACEMENT_FLIP_ROTATION_LABEL = '回転反転';
+export const SITE_PLACEMENT_FLIP_SIDE_LABEL = '側反転';
+export const SITE_PLACEMENT_COMMIT_LABEL = '配置';
+export const SITE_PLACEMENT_CLEAR_LABEL = '解除';
+export const SITE_PLACEMENT_VERTEX_NONE = '未指定';
+export const SITE_PLACEMENT_VERTEX_SET = '指定済み';
+export const SITE_PLACEMENT_STALE_LABEL = '（失効）';
 /** 敷地モード（modes/SiteModeState.js・site/sitePlacementView.js）のログの接頭辞。 */
 export const SITE_LOG_TAG = '[site]';
 /** 度→ラジアンの換算係数（回転の写像・図形の角度から使う）。 */

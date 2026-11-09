@@ -329,7 +329,7 @@ id の振り直し・付け替えは、参照の種類（壁・開口・他の�
 - 線・辺の当たり幅は倍率・線長に依らず画面 12px 固定（`lineHitWidth`）。`strokeScaleEnabled=false` の Line では Konva が hitStrokeWidth を画面 px として扱うため、実寸に直して渡すと当たりが 1/倍率 に膨らむ（2026-11-09 に実測で判明）。線長で狭める案は、Konva が最前面1本を選ぶので誤選択防止の効果が薄く、短い線が選べなくなる副作用の方が大きい。
 - 選択中の線・辺をもう一度タップすると解除（`toggleLineSelection`・`toggleRectEdge`）。ステージの pointerUp の「空白タップ＝解除」は、敷地の当たり図形（name `SITE_HIT_NODE_NAME`）を押していないときだけ行う——先に解除すると図形の onClick が同じ線を選び直すため。ステージとの比較で空白を判定しない理由は、当たり図形の name で判定する方が、描かれる図形の構成に依存しないため（かつては平面図一式が敷地モードでも描かれていた）。
 
-## 敷地の配置図は「表示専用の別画面」で、屋根伏せ図に敷地の外周を図芯合わせして重ねる
+## 敷地の配置図は「敷地の入力を止める別画面（配置の指定だけ受ける）」で、屋根伏せ図に敷地の外周を図芯合わせして重ねる
 敷地パネルの「配置図：表示｜非表示」（`SiteModeState.showPlacement`。保存しない画面状態）。表示中は、全採用階の屋根伏せ図（下屋＋最上階の主屋根・屋根区画の線。傾斜ラベルは出さない）と、図芯を合わせて平行移動した敷地の外周（三斜＝外周線、長方形＝外周片、角の丸付き）だけを描く。敷地の入力（三斜・長方形の描画・選択・パネルの表と NumPad）は止める。なお敷地モードでは平面図一式（壁・建具・柱・階段・姿図の配置）を、配置図の表示・非表示に関わらず描かない（`shouldShowPlanFigure` が site で false。2026-11-09 ユーザー指示）。非表示側の挙動は変えない。
 - 入力を止める口は1点: pointer 操作は `inputSubMode`（表示中は null）を読み、押下を記録しない（`subMode` は変えない＝非表示に戻すと元のタブ）。パンは効く。表示にした時点で選択・入力・描画中の線を捨てる。
 - 描画の判断は純モジュール `site/sitePlacementView.js` に集め、`SitePlacementLayer` は写すだけ。屋根の region の解決は `structural/roofFramingRegions.js`（storage を推移的に引く）なので modes/ 側で行って渡す。全採用階の収集は立面モードと共有（`modes/adoptedFloors.js`）。graph は変えない読込みなので `uiBusy` は使わない（立面の init と同じ）。読込みは世代番号で、await 中の非表示化・再表示・`dispose` に負けた古い結果を捨てる。
@@ -338,6 +338,15 @@ id の振り直し・付け替えは、参照の種類（壁・開口・他の�
 - **突入時の表示（R2）**: 敷地モードへ入るとき `site.placement` があれば配置図を開いた状態にする（`SiteModeState.init` が `setShowPlacement(true)` を待つ。App.jsx のローダーが `await s.init()`）。痕跡が無ければ従来どおり非表示。
 - **配置を解く純関数 `site/sitePlacementSolve.js computeSitePlacement`**（UI は S4）: 入力＝頂点1・頂点2（敷地座標）・基準の通り芯 `{centerLineType, value}`（VERTICAL＝x=value、HORIZONTAL＝y=value）・距離・回転反転・側反転・建物図芯・前回の変換。手順: (1) 線分 v1→v2 を通り芯に平行にする回転＝平行になる2解のうち絶対値の小さい方（(−90,90]。R3）、回転反転なら半周足して (−180,180]。(2) 頂点1の像の通り芯に直交する座標＝value ± distance。符号は建物図芯の反対側（図芯の当該座標 > value なら −、以外 +。R4）、側反転で逆。**図芯が無いときの既定の側**＝前回の変換で写した頂点1が value に対してある側（同側。ちょうど value 上なら +）。(3) 頂点1の像の通り芯沿いの座標＝前回の変換で写した頂点1の当該座標（R6）。(4) (tx, ty) = 頂点1の像 − R·v1。解けない入力（線分の長さ 0・距離が有限でない／0 以下・通り芯が縦横以外・頂点の座標や通り芯の値が有限でない）は `null`（NaN の変換を保存すると敷地が黙って消えるため）。`input.centerLineId` は文字列（FBS の string は null を持てないので、保存・復元のコピーで未指定は `''` に揃える。頂点が欠けた壊れたデータは null として復元）。
 - 通り芯（線＋両端の丸ラベル）と通り芯どうしの寸法も重ねる（`site/sitePlacementGrid.js`）。通り芯は表示にした時点の写し（`gridLineSnapshot`。表示中に構造側を変えても追従しない）。寸法は隣接間隔の段と、3本以上なら最外どうしの全長の段の2段を、上（X）・左（Y）の片側だけに出す。枠は屋根の外接矩形と通り芯の範囲の和で、敷地の外周は含めない。離れ・文字・丸の大きさは平面のガターと同じ画面注記（固定 px）で、屋根の線の側にだけ出す（敷地の Group の外）。通り芯だけで屋根が無いときも描く（枠の片軸が無い軸は線も寸法も出さない）。図芯の基準（`gridBounds`）は据え置き。既知の差: 図芯の基準（`gridBounds`＝gridXs/gridYs。旧データの labeled ARCH 線を含む）と描く通り芯（`isGridCenterLine`）の集合は旧データで食い違いうる（R7 据え置き・受容）。はなれ寸法（通り芯でない中心線の寸法）は先送り。
+- **配置指定 UI（S4、2026-11-09）**: 入力は `SiteModeState.placementInput`（`{v1, v2, centerLineId, distanceValue, rotationFlipped, sideFlipped}`、v1/v2 は敷地座標）。**保存しない画面状態**にした理由は、保存するのは解いた結果＋再編集用の `site.placement.input` で足り、編集途中の半端な入力（頂点1つだけ等）は保存・undo の対象にすると痕跡と区別できなくなるため。表示にした時点で `site.placement.input` から作り（痕跡が無ければ空）、非表示・`dispose` で null。
+  - 頂点は配置図の敷地の角の丸をタップして指定する（当たりは角の丸だけ。`SitePlacementLayer` の Group の中の透明な丸で、`SITE_HIT_NODE_NAME`＋`HIT_PX_MAX/scale` の当たり幅。`usePointerInteraction` は変えない＝表示中は pointerDown が押下を記録しないので、タップは丸の onClick/onTap だけが拾う）。規則: 選択済みの角のタップは解除／空きへ v1→v2 の順／両方埋まっていれば v2 を置換（頂点1 は距離の基準なので据え置き）。一致判定は `site/sitePlacementView.js` の `samePlacementVertex`・`placementVertexIndex`（EPS＝`SITE_PLACEMENT_VERTEX_EPS_MM`）の1口。選択中は塗り＋番号1・2（選択色 `MEMBER_SELECTION_COLOR`）。
+  - 通り芯は図でなくパネルのラベル一覧（VERTICAL 群・HORIZONTAL 群）でトグル選択（同じ id で解除）。選択中の通り芯は図でも選択色の線。
+  - 確定（`commitPlacement`）は `computeSitePlacement` に **prevTransform＝今の表示の変換（`placementView.siteTransform`）** を渡す（R6 の「前回の表示位置」。配置済みならその変換、未配置なら図芯合わせの変換）。拒否は `{ok:false, toast}`（入力不足・距離不正・解けない。`transform/sitePlacementEdit.js` の `TOAST_PLACEMENT_*`）で、パネルが `onToast`（App の setToast）へ流す。
+  - 回転反転・側反転は、配置済みで確定できる入力なら**即時に再配置**する（切替のたびに undo 1 件）。未配置ならフラグを切り替えるだけ。解除（`clearPlacement`）は `site.placement` を null へ（undo 可）＝図芯合わせへ戻り、入力も空へ戻す。
+  - 失効した頂点はタップで空きとして埋め直せる（頂点1 が set でなければ v1 へ、それ以外は v2 へ。失効から抜け出せなくなるのを防ぐ）。
+  - 距離は NumPad（画面・物理キーボードとも）の式を `ui/numpadUtils.js evalNumpadExpr`（positiveOnly）で評価する（敷地の他の入力と同じ。保存する `distance` は評価後の数値）。NumPad は見出し表示を出さず（hideDisplay）、行の「距離：」のラベルで示す。空文字は入力不足、評価できない・0 以下は距離不正。
+  - undo/redo との同期: `site.placement` が**非 null に変わったとき**（確定・undo/redo による復元）だけ入力を保存値から作り直す（確定直後も同じ値で作り直すだけで、距離は評価後の文字列になる）。null へ変わったとき（確定の undo・解除）は入力を触らない＝「未配置＋入力あり」として整合し、確定の undo で入力した内容が消えないため。
+  - **失効**: 頂点＝指定はあるが今の `placementView.siteCorners` に EPS 以内で一致する角が無い（敷地を編集して角が消えた）。通り芯＝`centerLineId` はあるが表示時点の写し（`placementRoof.gridLines`）に無い。失効した入力は確定できない（`placementCanCommit` が false）。パネルに「（失効）」を出し、**図には印を出さない**（失効した頂点は図に対応する角が無く、出す場所が無い。通り芯も写しに無い線は描かれていない。R9）。
 - 採らなかった案: 配置図を `subMode`（第3のタブ）にする案は、タブの下の表・面積・入力と排他にする分岐が各所に増えるため見送り。viewport は動かさない（表示を切り替えても画面の位置は変わらない）。
 
 ## 近傍検出の優先順位は「画面距離が最も近い1件」で解決する

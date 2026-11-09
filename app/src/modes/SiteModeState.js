@@ -7,10 +7,40 @@ import { withGraphsReadScope } from '../graphReadScope.js';
 import { gridBoundsMm } from '../initialView.js';
 import { isSanshaKind, computeLineTriNums } from '../site/lineClassification.js';
 import { rectEdge, pickRectEdgeAnchor, rectNeighbors, deriveRectAttachment } from '../site/siteRectGeometry.js';
-import { composeSitePlacementView } from '../site/sitePlacementView.js';
+import { composeSitePlacementView, samePlacementVertex, placementVertexIndex } from '../site/sitePlacementView.js';
 import { gridLineSnapshot } from '../site/sitePlacementGrid.js';
+import { evalNumpadExpr } from '../ui/numpadUtils.js';
+import { computeSitePlacement } from '../site/sitePlacementSolve.js';
+import {
+  applySitePlacementWithUndo, TOAST_PLACEMENT_INCOMPLETE, TOAST_PLACEMENT_DISTANCE_BAD, TOAST_PLACEMENT_UNSOLVABLE,
+} from '../transform/sitePlacementEdit.js';
 import { leanToPlanRegions, topRoofPlanRegions } from '../structural/roofFramingRegions.js';
 import { collectAdoptedFloors } from './adoptedFloors.js';
+
+const emptyPlacementInput = () => ({
+  v1: null, v2: null, centerLineId: null, distanceValue: '', rotationFlipped: false, sideFlipped: false,
+});
+
+// 保存済みの配置（site.placement.input）から配置指定の入力を作る。痕跡が無ければ空
+function placementInputFromSite(site) {
+  const input = site.placement?.input;
+  if (!input) return emptyPlacementInput();
+  return {
+    v1: input.v1 ? { x: input.v1.x, y: input.v1.y } : null,
+    v2: input.v2 ? { x: input.v2.x, y: input.v2.y } : null,
+    centerLineId: input.centerLineId || null, // 保存側は未指定を '' に揃える
+    distanceValue: String(input.distance),
+    rotationFlipped: !!input.rotationFlipped,
+    sideFlipped: !!input.sideFlipped,
+  };
+}
+
+// 頂点の状態: 指定なし／指定あり／指定はあるが今の敷地に該当する角が無い（失効）。view が無いときは失効を判定できず 'set'
+function placementVertexState(v, view) {
+  if (!v) return 'none';
+  if (view && !view.siteCorners.some(c => samePlacementVertex(c, v))) return 'stale';
+  return 'set';
+}
 
 export class SiteModeState {
   subMode        = 'sansha'; // 'sansha' | 'rect'（'other'＝その他タブは 2026-11-09 廃止。配置図は subMode でなく showPlacement の切替）
@@ -38,6 +68,10 @@ export class SiteModeState {
   showPlacement    = false;
   placementLoading = false;
   placementRoof    = null; // { floors: [{planeId, regions}], gridBounds, gridLines, readFailed } | null
+  // 配置の指定入力（保存しない画面状態。表示にした時点で site.placement.input から作り、非表示で null）。
+  // { v1:{x,y}|null, v2:{x,y}|null（敷地座標）, centerLineId:string|null, distanceValue:string, rotationFlipped, sideFlipped }
+  placementInput   = null;
+  placementDistanceFocused = false; // 距離欄を編集中（NumPad を出す）
 
   constructor(site, project = null) {
     this.site = site;
@@ -50,6 +84,19 @@ export class SiteModeState {
       placementRoof:      observable.ref,
       placementView:      computed,
       placementMessage:   computed,
+      placementInput:     observable.ref,
+      placementDistanceFocused: observable,
+      placementVertexStates: computed,
+      placementCenterLine: computed,
+      placementCenterLineStale: computed,
+      placementCanCommit: computed,
+      pickPlacementVertex: action,
+      setPlacementCenterLine: action,
+      setPlacementDistanceValue: action,
+      setPlacementDistanceFocused: action,
+      togglePlacementRotation: action,
+      togglePlacementSide: action,
+      clearPlacement:     action,
       inputSubMode:       computed,
       setShowPlacement:   action,
       subMode:            observable,
@@ -89,6 +136,15 @@ export class SiteModeState {
       () => (this.selectedRectEdge != null && !this.site.rectMap.has(this.selectedRectEdge.rectId))
         || (this.rectInputState?.editRectId != null && !this.site.rectMap.has(this.rectInputState.editRectId)),
       (gone) => { if (gone) this.clearRectState(); },
+    );
+    // 配置が非 null に変わったら（確定・undo/redo による復元）入力を保存値から作り直す。null への変化（確定の undo・解除）では触らない
+    this._placementSyncDispose = reaction(
+      () => this.site.placement,
+      (p) => {
+        if (!this.showPlacement || !p) return;
+        this.placementInput = placementInputFromSite(this.site);
+        this.placementDistanceFocused = false; // 打ちかけの距離は保存値に置き換わるので、NumPad は閉じる
+      },
     );
     // 削除・undo 等で選択中の線が消えたら、三斜側の選択・入力を残さない
     this._lineGoneDispose = reaction(
@@ -141,12 +197,125 @@ export class SiteModeState {
     if (on) {
       this.clearSelection();
       this.cancelSiteDraw();
+      this.placementInput = placementInputFromSite(this.site);
       return this._loadPlacement();
     }
+    this.placementInput = null;
+    this.placementDistanceFocused = false;
     this.placementRoof = null;
     this.placementLoading = false;
     this._placementGen++;
     return Promise.resolve();
+  }
+
+  // ---- 配置の指定（頂点2点・通り芯・距離・反転）。入力は placementInput。確定は commitPlacement ----
+
+  // 頂点ごとの状態（'none'|'set'|'stale'）。stale＝指定はあるが今の配置図の角に一致するものが無い
+  get placementVertexStates() {
+    const inp = this.placementInput;
+    const view = this.placementView;
+    return { v1: placementVertexState(inp?.v1, view), v2: placementVertexState(inp?.v2, view) };
+  }
+
+  // 指定中の通り芯（表示時点の写し placementRoof.gridLines から id で引く）。引けなければ null
+  get placementCenterLine() {
+    const id = this.placementInput?.centerLineId;
+    if (!id) return null;
+    return this.placementRoof?.gridLines?.find(g => g.id === id) ?? null;
+  }
+
+  // 通り芯の指定はあるが写しに無い（失効）
+  get placementCenterLineStale() {
+    return !!this.placementInput?.centerLineId && this.placementCenterLine === null;
+  }
+
+  // 距離の入力値（数値。未入力・数値でない場合は NaN）
+  _placementDistance() {
+    const s = this.placementInput?.distanceValue ?? '';
+    // NumPad の式（'1000+500' 等）を敷地の他の入力と同じ評価器で数値にする。0 以下・式でないものは NaN
+    return s.trim() === '' ? NaN : evalNumpadExpr(s, { positiveOnly: true });
+  }
+
+  get placementCanCommit() {
+    const st = this.placementVertexStates;
+    const d = this._placementDistance();
+    return st.v1 === 'set' && st.v2 === 'set' && this.placementCenterLine !== null && Number.isFinite(d) && d > 0;
+  }
+
+  /** 配置図上の敷地の角（敷地座標）をタップ。指定済みの角は解除、それ以外は v1→v2 の順に埋め、両方埋まっていれば v2 を置換する（v1 は距離の基準なので据え置き）。 */
+  pickPlacementVertex(pt) {
+    const inp = this.placementInput;
+    if (!inp) return;
+    const p = { x: pt.x, y: pt.y };
+    const idx = placementVertexIndex(inp, p);
+    if (idx === 1) this.placementInput = { ...inp, v1: null };
+    else if (idx === 2) this.placementInput = { ...inp, v2: null };
+    else if (this.placementVertexStates.v1 !== 'set') this.placementInput = { ...inp, v1: p }; // 空き・失効の頂点1は空きとして埋め直す
+    else this.placementInput = { ...inp, v2: p }; // v2 が空・失効・埋まっていても v2 へ
+  }
+
+  setPlacementCenterLine(id) {
+    const inp = this.placementInput;
+    if (!inp) return;
+    this.placementInput = { ...inp, centerLineId: inp.centerLineId === id ? null : id };
+  }
+
+  setPlacementDistanceValue(str) {
+    if (!this.placementInput) return;
+    this.placementInput = { ...this.placementInput, distanceValue: str };
+  }
+
+  setPlacementDistanceFocused(on) {
+    this.placementDistanceFocused = !!on;
+  }
+
+  togglePlacementRotation() { return this._toggleFlip('rotationFlipped'); }
+
+  togglePlacementSide() { return this._toggleFlip('sideFlipped'); }
+
+  // フラグを切り替える。配置済みで確定できる入力なら即座に再配置する（undo 1 件ずつ）。戻り値は commit の結果、それ以外は {ok:true, toast:null}
+  _toggleFlip(key) {
+    const inp = this.placementInput;
+    if (!inp) return { ok: true, toast: null };
+    this.placementInput = { ...inp, [key]: !inp[key] };
+    if (this.site.placement != null && this.placementCanCommit) return this.commitPlacement();
+    return { ok: true, toast: null };
+  }
+
+  /**
+   * 入力から配置を解いて site.placement に保存する（undo あり）。
+   * 前回の変換（R6 の沿い座標）は今の表示の変換 placementView.siteTransform。
+   * @returns {{ok: boolean, toast: string|null}}
+   */
+  commitPlacement() {
+    const inp = this.placementInput;
+    const view = this.placementView;
+    const cl = this.placementCenterLine;
+    const st = this.placementVertexStates;
+    const raw = inp?.distanceValue ?? '';
+    if (!inp || !view || !cl || st.v1 !== 'set' || st.v2 !== 'set' || raw.trim() === '') {
+      return { ok: false, toast: TOAST_PLACEMENT_INCOMPLETE };
+    }
+    const distance = this._placementDistance();
+    if (!Number.isFinite(distance) || distance <= 0) return { ok: false, toast: TOAST_PLACEMENT_DISTANCE_BAD };
+    const { v1, v2, centerLineId, rotationFlipped, sideFlipped } = inp;
+    const solved = computeSitePlacement({
+      v1, v2, centerLine: { centerLineType: cl.centerLineType, value: cl.value }, distance,
+      rotationFlipped, sideFlipped, buildingCenter: view.buildingCenter, prevTransform: view.siteTransform,
+    });
+    if (!solved) return { ok: false, toast: TOAST_PLACEMENT_UNSOLVABLE };
+    applySitePlacementWithUndo(this.site, {
+      ...solved,
+      input: { v1: { x: v1.x, y: v1.y }, v2: { x: v2.x, y: v2.y }, centerLineId, distance, rotationFlipped, sideFlipped },
+    });
+    return { ok: true, toast: null };
+  }
+
+  /** 配置を解除する（null＝図芯合わせへ戻る。undo あり）。入力も空に戻す。 */
+  clearPlacement() {
+    applySitePlacementWithUndo(this.site, null);
+    this.placementInput = this.showPlacement ? emptyPlacementInput() : null;
+    this.placementDistanceFocused = false;
   }
 
   async _loadPlacement() {
@@ -407,7 +576,10 @@ export class SiteModeState {
     this._disposed = true;
     this._rectGoneDispose?.();
     this._lineGoneDispose?.();
+    this._placementSyncDispose?.();
     this.clearSelection();
     this.cancelSiteDraw();
+    this.placementInput = null;
+    this.placementDistanceFocused = false;
   }
 }

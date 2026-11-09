@@ -8,7 +8,9 @@ import { SitePlacementCenterSource } from '../core/constants.js';
 import {
   roofPlanLines, siteOutlineSegments, siteOutlineCorners, boundsOfPointLists,
   composeSitePlacementView, applySiteTransform, siteTransformGroupProps,
+  samePlacementVertex, placementVertexIndex,
 } from './sitePlacementView.js';
+import { SITE_PLACEMENT_VERTEX_EPS_MM } from '../core/constants.js';
 
 /** 矩形の外形線だけの region（閉路1本）。 */
 const rectRegion = (key, x0, y0, x1, y1) => ({
@@ -225,4 +227,29 @@ test('【失敗系】composeSitePlacementView: placement があれば敷地が�
   const v = composeSitePlacementView({ site, roof: null });
   assert.equal(v.placed, true);
   assert.deepEqual(v.siteTransform, { rotationDeg: -90, tx: 10, ty: 20 });
+});
+
+test('samePlacementVertex: EPS 以内は同じ角（境界を含む）、超えると別の角。x・y どちらが外れても別', () => {
+  const a = { x: 100, y: 200 };
+  assert.equal(samePlacementVertex(a, { x: 100, y: 200 }), true);
+  assert.equal(samePlacementVertex(a, { x: 100 + SITE_PLACEMENT_VERTEX_EPS_MM, y: 200 }), true, '境界は同じ角');
+  assert.equal(samePlacementVertex(a, { x: 100 + SITE_PLACEMENT_VERTEX_EPS_MM * 2, y: 200 }), false);
+  assert.equal(samePlacementVertex(a, { x: 100, y: 200 - SITE_PLACEMENT_VERTEX_EPS_MM * 2 }), false);
+});
+
+test('【失敗系】samePlacementVertex: どちらかが null／undefined なら false（両方 null でも false）', () => {
+  const a = { x: 0, y: 0 };
+  assert.equal(samePlacementVertex(null, a), false);
+  assert.equal(samePlacementVertex(a, undefined), false);
+  assert.equal(samePlacementVertex(null, null), false);
+});
+
+test('placementVertexIndex: v1 なら 1・v2 なら 2・どちらでもなければ null。input が null でも null。両方同じ点なら v1 を優先', () => {
+  const input = { v1: { x: 1, y: 2 }, v2: { x: 3, y: 4 } };
+  assert.equal(placementVertexIndex(input, { x: 1, y: 2 }), 1);
+  assert.equal(placementVertexIndex(input, { x: 3, y: 4 }), 2);
+  assert.equal(placementVertexIndex(input, { x: 5, y: 6 }), null);
+  assert.equal(placementVertexIndex(null, { x: 1, y: 2 }), null);
+  assert.equal(placementVertexIndex({ v1: null, v2: { x: 3, y: 4 } }, { x: 3, y: 4 }), 2, 'v1 が空なら v2 だけを見る');
+  assert.equal(placementVertexIndex({ v1: { x: 1, y: 1 }, v2: { x: 1, y: 1 } }, { x: 1, y: 1 }), 1);
 });

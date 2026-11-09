@@ -161,7 +161,7 @@ export const SceneLayers = observer(({
               />
             )}
             {appMode === 'site' && !sitePlacementShown && <SiteDrawPreview mode={mode} />}
-            {sitePlacementShown && mode.placementView && <SitePlacementLayer view={mode.placementView} viewport={viewport} />}
+            {sitePlacementShown && mode.placementView && <SitePlacementLayer view={mode.placementView} viewport={viewport} mode={mode} didPanEnd={didPanEnd} />}
             {/* 平面図一式（壁・建具・柱）は同じ述語で出し入れする——壁は柱の位置で欠き取られるため、
                 壁だけ描いて柱を描かないモードがあると柱まわりの壁が穴になる（planFigureVisibility.js）。
                 柱は自階graphのもの（構造モードの伏図と違い1つ下の階ではない。その階の平面に立つ柱は

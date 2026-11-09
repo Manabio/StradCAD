@@ -3224,6 +3224,7 @@ const App = observer(() => {
           onStartRectEdit={handleStartRectEdit}
           onDeleteRect={handleDeleteRect}
           onDeleteSiteRow={handleDeleteSiteRow}
+          onToast={msg => setToast({ msg, key: Date.now() })}
         />
       )}
 
