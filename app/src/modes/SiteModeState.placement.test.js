@@ -249,8 +249,8 @@ test('屋根なし・通り芯あり: 図芯の基準は通り芯の範囲の中
   assert.equal(view.roofEmpty, true);
   assert.equal(view.centerSource, SitePlacementCenterSource.GRID);
   assert.deepEqual(view.buildingCenter, { x: 15000, y: 32000 }, '通り芯の範囲 X12000〜18000・Y30000〜34000 の中心');
-  assert.equal(view.siteTransform.dx, 15000 - view.siteCenter.x);
-  assert.equal(view.siteTransform.dy, 32000 - view.siteCenter.y);
+  assert.equal(view.siteTransform.tx, 15000 - view.siteCenter.x);
+  assert.equal(view.siteTransform.ty, 32000 - view.siteCenter.y);
   assert.equal(sm.placementMessage, SITE_PLACEMENT_EMPTY_MESSAGE);
   sm.dispose();
 });
@@ -348,7 +348,7 @@ test('最上階の主屋根の線の外接矩形の中心へ敷地の図芯を�
   assert.deepEqual(view.buildingCenter, roofC);
   assert.deepEqual(view.siteCenter, siteC);
   assert.ok(Math.abs(roofC.x - 23000) < 1000 && Math.abs(roofC.y - 32000) < 1000, '屋根の図芯は建物（X20000〜26000・Y30000〜34000）の中心付近＝原点から離れている');
-  assert.equal(view.siteTransform.dx, roofC.x - siteC.x);
-  assert.equal(view.siteTransform.dy, roofC.y - siteC.y);
+  assert.equal(view.siteTransform.tx, roofC.x - siteC.x);
+  assert.equal(view.siteTransform.ty, roofC.y - siteC.y);
   sm.dispose();
 });

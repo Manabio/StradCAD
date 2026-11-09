@@ -228,7 +228,7 @@ test('composeSitePlacementView: 通り芯の写し（gridLines）は図芯の基
   });
   assert.equal(v.centerSource, SitePlacementCenterSource.NONE);
   assert.equal(v.buildingCenter, null);
-  assert.deepEqual([v.siteTransform.dx, v.siteTransform.dy], [0, 0]);
+  assert.deepEqual([v.siteTransform.tx, v.siteTransform.ty], [0, 0]);
   assert.equal(v.grid.lines.length, 4, '通り芯の線自体は描く');
 });
 

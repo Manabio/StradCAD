@@ -7,8 +7,9 @@
  * 屋根伏せ図は全採用階の下屋＋最上階の主屋根・屋根区画の線（roofPlanRegionFigure の lines。role は捨てて全部同じ細線。傾斜ラベルは出さない）。
  * 敷地は外周（三斜＝computeOuterLineIds の線、長方形＝computeOutlinePieces）と外周の角の丸だけ。内側の線・番号バッジ・赤青端点は出さない。
  * 図芯合わせ: 建物側の図芯＝屋根の線の外接矩形の中心（屋根が無ければ通り芯の範囲の中心・それも無ければ合わせない）、敷地側＝敷地の外周の外接矩形の中心。
- * 敷地を dx,dy だけ平行移動して2つの図芯を重ねる。回転（rotationDeg）は今回 0 固定だが、写像の口（applySiteTransform・siteTransformGroupProps）は
- * 回転を含む形で1つだけ持つ（回転の指定は今後。pivot＝敷地の図芯まわりに回す）。
+ * 配置の指定（site.placement）が無ければ、敷地を tx,ty だけ平行移動して2つの図芯を重ねる（回転 0）。あればその {rotationDeg, tx, ty} を使う（placed:true）。
+ * 写像は p' = R(rotationDeg)·p + (tx, ty)（原点まわりの回転＋平行移動。pivot は持たない＝敷地の図芯は形で動くため）。
+ * 写像の口（applySiteTransform・siteTransformGroupProps）は1つだけ持つ。
  */
 import { SitePlacementCenterSource, SITE_LOG_TAG, DEG_TO_RAD } from '../core/constants.js';
 import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
@@ -104,7 +105,8 @@ const centerOf = b => (b ? { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 
  *   siteSegments: Array<{key:string, points:number[]}>, siteCorners: Array<{key:string, x:number, y:number}>,
  *   buildingCenter: {x:number,y:number}|null, centerSource: string, siteCenter: {x:number,y:number}|null,
  *   grid: ReturnType<typeof composeSitePlacementGrid>,
- *   siteTransform: {dx:number, dy:number, rotationDeg:number, pivotX:number, pivotY:number},
+ *   siteTransform: {rotationDeg:number, tx:number, ty:number},
+ *   placed: boolean,
  * }}
  */
 export function composeSitePlacementView({ site, roof }) {
@@ -121,34 +123,32 @@ export function composeSitePlacementView({ site, roof }) {
   const siteCenter = centerOf(boundsOfPointLists(siteSegments.map(s => s.points)));
 
   const aligned = buildingCenter && siteCenter;
+  const placement = site.placement ?? null;
+  const siteTransform = placement
+    ? { rotationDeg: placement.rotationDeg, tx: placement.tx, ty: placement.ty }
+    : { rotationDeg: 0, tx: aligned ? buildingCenter.x - siteCenter.x : 0, ty: aligned ? buildingCenter.y - siteCenter.y : 0 };
   return {
     roofLines, roofFailedCount, roofEmpty: roofLines.length === 0,
     siteSegments, siteCorners,
     buildingCenter, centerSource, siteCenter,
     // 通り芯の線・丸ラベル・寸法（図芯の基準 gridBounds とは別の入力。ここから図芯は求めない）
     grid: composeSitePlacementGrid({ gridLines: roof?.gridLines ?? [], roofBounds }),
-    siteTransform: {
-      dx: aligned ? buildingCenter.x - siteCenter.x : 0,
-      dy: aligned ? buildingCenter.y - siteCenter.y : 0,
-      rotationDeg: 0,
-      pivotX: siteCenter?.x ?? 0,
-      pivotY: siteCenter?.y ?? 0,
-    },
+    siteTransform,
+    placed: placement !== null,
   };
 }
 
-/** 敷地の座標 pt を配置図の座標へ写す: p → R(p−pivot)+pivot+d（R は rotationDeg の回転。y 下向き正の座標系での標準の回転行列）。 */
+/** 敷地の座標 pt を配置図の座標へ写す: p → R(rotationDeg)·p + (tx, ty)（y 下向き正の座標系での標準の回転行列）。 */
 export function applySiteTransform(pt, t) {
   const rad = t.rotationDeg * DEG_TO_RAD;
   const cos = Math.cos(rad), sin = Math.sin(rad);
-  const rx = pt.x - t.pivotX, ry = pt.y - t.pivotY;
   return {
-    x: t.pivotX + t.dx + rx * cos - ry * sin,
-    y: t.pivotY + t.dy + rx * sin + ry * cos,
+    x: t.tx + pt.x * cos - pt.y * sin,
+    y: t.ty + pt.x * sin + pt.y * cos,
   };
 }
 
-/** applySiteTransform と同じ写像を Konva の Group の props で表す（x,y＝pivot＋d、offset＝pivot で pivot まわりに回す）。 */
+/** applySiteTransform と同じ写像を Konva の Group の props で表す（x,y＝平行移動、rotation＝原点まわりの回転）。 */
 export function siteTransformGroupProps(t) {
-  return { x: t.pivotX + t.dx, y: t.pivotY + t.dy, offsetX: t.pivotX, offsetY: t.pivotY, rotation: t.rotationDeg };
+  return { x: t.tx, y: t.ty, rotation: t.rotationDeg };
 }

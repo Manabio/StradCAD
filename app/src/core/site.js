@@ -98,7 +98,13 @@ export class Site {
     // [1..]:      { type: 'triangle', baseLineId, redLineId, redLen, redKind,
     //               blueLineId, blueLen, blueKind, triangleId, triangleLineKind, side }
     this.history     = observable.array([]);
+    // 配置図での敷地の配置（null＝配置の痕跡なし）。
+    // { rotationDeg, tx, ty, input: { v1:{x,y}, v2:{x,y}, centerLineId, distance, rotationFlipped, sideFlipped } }
+    // 変換: 敷地座標 p → R(rotationDeg)·p + (tx, ty)。input は再編集用（変換は入力から再現できない＝沿い座標は前回の変換に依存）
+    this.placement   = null;
     makeObservable(this, {
+      placement:     observable.ref,
+      setPlacement:  action,
       points:        computed,
       lines:         computed,
       orderedLines:  computed,
@@ -200,8 +206,13 @@ export class Site {
     this.rectMap.delete(id);
   }
 
+  setPlacement(p) {
+    this.placement = p ?? null;
+  }
+
   // 全消去（起動時の復元 restoreSite 専用。undo スタックとは無関係に実体を作り直す）
   clear() {
+    this.placement = null;
     this.pointMap.clear();
     this.lineMap.clear();
     this.triangleMap.clear();

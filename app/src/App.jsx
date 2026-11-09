@@ -785,7 +785,11 @@ const App = observer(() => {
                   await s.init(); // 全採用階の peek・外壁立面の一括構築（決して reject しない）
                   return s;
                 })
-              : import('./modes/SiteModeState.js').then(m => new m.SiteModeState(project.site, project));
+              : import('./modes/SiteModeState.js').then(async m => {
+                  const s = new m.SiteModeState(project.site, project);
+                  await s.init(); // 配置の痕跡があれば配置図を開いた状態で突入（決して reject しない）
+                  return s;
+                });
 
     loader.then(s => {
       if (cancelled) { s.dispose(); return; }

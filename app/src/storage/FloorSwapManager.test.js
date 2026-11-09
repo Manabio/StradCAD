@@ -119,6 +119,18 @@ test('startSiteDirtyTracking: 長方形の追加・寸法変更・削除でmarkD
   mgr.disposeSiteDirtyTracking();
 });
 
+test('startSiteDirtyTracking: 配置（placement）だけが変わる編集でmarkDirtyする', () => {
+  clearDirty();
+  const mgr  = new FloorSwapManager();
+  const site = new Site();
+  mgr.startSiteDirtyTracking(site);
+  assert.equal(isDirty(), false, '前提: 開始直後はdirtyでない');
+
+  site.setPlacement({ rotationDeg: 0, tx: 1, ty: 2, input: { v1: { x: 0, y: 0 }, v2: { x: 1, y: 0 }, centerLineId: 'c', distance: 1, rotationFlipped: false, sideFlipped: false } });
+  assert.equal(isDirty(), true, 'site.placement観測でmarkDirtyされる');
+  mgr.disposeSiteDirtyTracking();
+});
+
 test('startSiteDirtyTracking: 長方形の道路指定だけが変わる編集でmarkDirtyする', () => {
   clearDirty();
   const mgr  = new FloorSwapManager();

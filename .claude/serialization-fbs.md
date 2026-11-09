@@ -58,3 +58,6 @@ CL→壁→開口→部屋→境界エッジ等の順で解決する。新しい
 
 ## 敷地の長方形（`SITE.RECTS=5`→`SRCT{ID,X,Y,W,H}`の vector）はSiteテーブルの末尾追加
 `Site.rects`（敷地モードの長方形入力。2026-11-07。設計は`data-model.md`「敷地の長方形入力」）。旧データはフィールドが無く空配列として読む。外周は保存せず読込み後に導出する。`SRCT.ROAD_SIDES=5`（int8ビット N=1,E=2,S=4,W=8。`RECT_SIDE_BIT`）は道路指定の辺で末尾追加。旧データ（フィールド無し）は0＝指定なし。snapshot（`serializeSite`/`restoreSite`）にも同じ項目を持つ。
+
+## 敷地の配置（`SITE.PLACEMENT=6`→`SPLC`テーブル）はSiteテーブルの末尾追加
+`Site.placement`（敷地の配置図上の配置。2026-11-09。設計は`data-model.md`「敷地の配置図は…」）。`SPLC{ROTATION_DEG:0,TX:1,TY:2,V1X:3,V1Y:4,V2X:5,V2Y:6,CENTER_LINE_ID:7,DISTANCE:8,FLAGS:9}`（float64＋文字列1＋int8）。FLAGSはビット集合（`PLACEMENT_FLAG_BIT`: rotationFlipped=1,sideFlipped=2。readerにboolが無いため`RECT_SIDE_BIT`と同形）。placementがnullなら書かない。旧データ（フィールド無し）は読み側でnull。snapshot（`serializeSite`/`restoreSite`）はdeep copyし、inputの無い壊れたデータはnullとして復元する。

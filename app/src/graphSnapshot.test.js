@@ -2176,6 +2176,59 @@ test('decodeSite → restoreSite: 長方形の無いデータ（旧データ相�
   assert.equal(restored.lines.length, 1);
 });
 
+// ---- 敷地の配置（Site.placement）----
+
+const PLACEMENT_BASE = {
+  rotationDeg: -37.5, tx: 12345.25, ty: -678.5,
+  input: { v1: { x: 100.5, y: -200 }, v2: { x: 3100.5, y: 800.25 }, centerLineId: 'cl-x1', distance: 1820.5, rotationFlipped: false, sideFlipped: false },
+};
+
+test('serializeSite → restoreSite: 配置（全フィールド）の往復。フラグ4通り（なし・回転のみ・側のみ・両方）が独立に戻る', () => {
+  for (const [rotationFlipped, sideFlipped] of [[false, false], [true, false], [false, true], [true, true]]) {
+    const site = new Site();
+    site.setPlacement({ ...PLACEMENT_BASE, input: { ...PLACEMENT_BASE.input, rotationFlipped, sideFlipped } });
+    const restored = new Site();
+    restoreSite(restored, decodeSite(serializeSite(site)));
+    assert.deepEqual(restored.placement, site.placement, `回転反転=${rotationFlipped} 側反転=${sideFlipped}`);
+    assert.notEqual(restored.placement, site.placement, '別オブジェクト（deep copy）');
+  }
+});
+
+test('serializeSite → restoreSite: 配置なし（null）は null のまま往復し、復元で既存の配置も消える', () => {
+  const site = new Site();
+  site.addRect(0, 0, 1000, 600);
+  const data = decodeSite(serializeSite(site));
+  assert.equal(data.placement, null);
+  const restored = new Site();
+  restored.setPlacement({ ...PLACEMENT_BASE });
+  restoreSite(restored, data);
+  assert.equal(restored.placement, null);
+  assert.equal(restored.rects.length, 1);
+});
+
+test('【失敗系】restoreSite: 旧データ（placement キー無し）や input の無い壊れた配置は null として復元される', () => {
+  const site = new Site();
+  site.setPlacement({ ...PLACEMENT_BASE });
+  const data = decodeSite(serializeSite(site));
+  const restored = new Site();
+  restoreSite(restored, { ...data, placement: undefined });
+  assert.equal(restored.placement, null, 'placement キー無し');
+  restored.setPlacement({ ...PLACEMENT_BASE });
+  restoreSite(restored, { ...data, placement: { rotationDeg: 10, tx: 1, ty: 2 } });
+  assert.equal(restored.placement, null, 'input 無し');
+});
+
+test('Site.clear / setPlacement: clear で null に戻り、setPlacement(undefined) は null', () => {
+  const site = new Site();
+  site.setPlacement({ ...PLACEMENT_BASE });
+  assert.notEqual(site.placement, null);
+  site.clear();
+  assert.equal(site.placement, null);
+  site.setPlacement({ ...PLACEMENT_BASE });
+  site.setPlacement(undefined);
+  assert.equal(site.placement, null);
+});
+
 test('serializeSite → restoreSite: 復元後に editSiteLineLength(本番経路) が編集を継続できる', () => {
   const site = new Site();
   const sp = site.addPoint(0, 0);

@@ -475,6 +475,21 @@ export function decodePlanes(bytes) {
 // シリアライズ / デシリアライズ: 敷地（project.site）→ Uint8Array
 // project 単位の独立チャネル（serializePlanes と同形）。
 // ----------------------------------------------------------------
+// 配置の deep copy（保存・復元の両方で使う。null・input や頂点が欠けた壊れたデータは null）。
+// centerLineId は文字列に正規化する（FBS の string は null を持てず '' で戻るため、メモリ上も '' で揃える）
+function copySitePlacement(p) {
+  if (!p?.input?.v1 || !p.input.v2) return null;
+  const { input } = p;
+  return {
+    rotationDeg: p.rotationDeg, tx: p.tx, ty: p.ty,
+    input: {
+      v1: { x: input.v1.x, y: input.v1.y }, v2: { x: input.v2.x, y: input.v2.y },
+      centerLineId: input.centerLineId ?? '', distance: input.distance,
+      rotationFlipped: !!input.rotationFlipped, sideFlipped: !!input.sideFlipped,
+    },
+  };
+}
+
 export function serializeSite(site) {
   return encode({
     site: {
@@ -489,6 +504,7 @@ export function serializeSite(site) {
       lineOrder: [...site.lineOrder],
       history: [...site.history].map(h => ({ ...h })),
       rects: site.rects.map(r => ({ id: r.id, x: r.x, y: r.y, w: r.w, h: r.h, roadSides: [...r.roadSides] })),
+      placement: copySitePlacement(site.placement),
     },
   });
 }
@@ -530,6 +546,7 @@ export function restoreSite(site, data) {
     if (order.length > 0) site.lineOrder.replace(order.filter(id => site.lineMap.has(id)));
     for (const h of data.history ?? []) site.history.push({ ...h });
     for (const d of data.rects ?? []) site.addRect(d.x, d.y, d.w, d.h, d.id, d.roadSides ?? []);
+    site.setPlacement(copySitePlacement(data.placement));
   });
 }
 

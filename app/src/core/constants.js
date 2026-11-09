@@ -852,6 +852,8 @@ export const DXF_SIMILARITY_EPS = 1e-9;
 export const DXF_FULL_TURN_EPS = 1e-9;
 /** 一周（度）。回転角の正規化の法。 */
 export const FULL_TURN_DEG = 360;
+/** 半周（度）。回転角を (−180,180] ・向きを持たない直線の角を (−90,90] へ寄せる法。 */
+export const HALF_TURN_DEG = FULL_TURN_DEG / 2;
 /** 姿図の配置（PlacedFigure）の回転の刻み（度）。回転はこの整数倍だけ許す。 */
 export const PLACED_FIGURE_ROTATION_STEP_DEG = 90;
 /** 姿図の配置で図が解決できないとき配置点に出す印（×）の半幅（画面 px。拡大縮小に依らず画面で一定）。 */

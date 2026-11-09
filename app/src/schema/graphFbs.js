@@ -265,9 +265,14 @@ const PLN = {
   TOP_STORY_HEIGHT: 12,
 };
 
-// Site（敷地図全体）: 6 フィールド
+// Site（敷地図全体）: 7 フィールド
 // 末尾追加（長方形。無い旧データは読み側で空配列）
-const SITE = { POINTS: 0, LINES: 1, TRIANGLES: 2, LINE_ORDER: 3, HISTORY: 4, RECTS: 5 };
+// 末尾追加（配置。無い旧データは読み側で null）
+const SITE = { POINTS: 0, LINES: 1, TRIANGLES: 2, LINE_ORDER: 3, HISTORY: 4, RECTS: 5, PLACEMENT: 6 };
+// SitePlacement（敷地の配置: 変換＋S4 の再編集用の入力）: 10 フィールド。float64 は mm／度、V1/V2 は敷地座標の頂点
+// FLAGS: int8 のビット集合（PLACEMENT_FLAG_BIT。reader に bool が無いため RECT_SIDE_BIT と同形）
+const SPLC = { ROTATION_DEG: 0, TX: 1, TY: 2, V1X: 3, V1Y: 4, V2X: 5, V2Y: 6, CENTER_LINE_ID: 7, DISTANCE: 8, FLAGS: 9 };
+export const PLACEMENT_FLAG_BIT = Object.freeze({ rotationFlipped: 1, sideFlipped: 2 });
 // SiteRect（敷地の長方形）: 5 フィールド。X,Y=左上角 mm、W,H mm（float64）
 // ROAD_SIDES: 道路指定の辺のビット集合（int8。RECT_SIDE_BIT）。旧データ（フィールド無し）は 0＝指定なし
 const SRCT = { ID: 0, X: 1, Y: 2, W: 3, H: 4, ROAD_SIDES: 5 };
@@ -1039,6 +1044,26 @@ function writeSiteRect(b, r) {
   return b.endObject();
 }
 
+function writeSitePlacement(b, p) {
+  if (!p) return 0;
+  const { input } = p;
+  const sClId = b.createString(input.centerLineId ?? '');
+  const flags = (input.rotationFlipped ? PLACEMENT_FLAG_BIT.rotationFlipped : 0)
+    | (input.sideFlipped ? PLACEMENT_FLAG_BIT.sideFlipped : 0);
+  b.startObject(10);
+  b.addFieldFloat64(SPLC.ROTATION_DEG, p.rotationDeg, 0.0);
+  b.addFieldFloat64(SPLC.TX, p.tx, 0.0);
+  b.addFieldFloat64(SPLC.TY, p.ty, 0.0);
+  b.addFieldFloat64(SPLC.V1X, input.v1.x, 0.0);
+  b.addFieldFloat64(SPLC.V1Y, input.v1.y, 0.0);
+  b.addFieldFloat64(SPLC.V2X, input.v2.x, 0.0);
+  b.addFieldFloat64(SPLC.V2Y, input.v2.y, 0.0);
+  b.addFieldOffset(SPLC.CENTER_LINE_ID, sClId, 0);
+  b.addFieldFloat64(SPLC.DISTANCE, input.distance, 0.0);
+  b.addFieldInt8(SPLC.FLAGS, flags, 0);
+  return b.endObject();
+}
+
 function writeSite(b, site) {
   if (!site) return 0;
   const pointsVec    = writeVec(b, site.points    ?? [], writePT);
@@ -1047,14 +1072,16 @@ function writeSite(b, site) {
   const lineOrderVec = writeStrVec(b, site.lineOrder ?? []);
   const historyVec   = writeVec(b, site.history   ?? [], writeSiteHistoryStep);
   const rectsVec     = writeVec(b, site.rects     ?? [], writeSiteRect);
+  const placementOff = writeSitePlacement(b, site.placement);
 
-  b.startObject(6);
+  b.startObject(7);
   b.addFieldOffset(SITE.POINTS,     pointsVec,    0);
   b.addFieldOffset(SITE.LINES,      linesVec,     0);
   b.addFieldOffset(SITE.TRIANGLES,  trianglesVec, 0);
   b.addFieldOffset(SITE.LINE_ORDER, lineOrderVec, 0);
   b.addFieldOffset(SITE.HISTORY,    historyVec,   0);
   b.addFieldOffset(SITE.RECTS,      rectsVec,     0);
+  if (placementOff) b.addFieldOffset(SITE.PLACEMENT, placementOff, 0);
   return b.endObject();
 }
 
@@ -1837,6 +1864,23 @@ function readSiteRect(bb, tablePos) {
   return { id: r.str(SRCT.ID), x: r.f64(SRCT.X), y: r.f64(SRCT.Y), w: r.f64(SRCT.W), h: r.f64(SRCT.H), roadSides };
 }
 
+function readSitePlacement(bb, tablePos) {
+  if (!tablePos) return null;
+  const r = makeReader(bb, tablePos);
+  const flags = r.i8(SPLC.FLAGS);
+  return {
+    rotationDeg: r.f64(SPLC.ROTATION_DEG), tx: r.f64(SPLC.TX), ty: r.f64(SPLC.TY),
+    input: {
+      v1: { x: r.f64(SPLC.V1X), y: r.f64(SPLC.V1Y) },
+      v2: { x: r.f64(SPLC.V2X), y: r.f64(SPLC.V2Y) },
+      centerLineId: r.str(SPLC.CENTER_LINE_ID),
+      distance: r.f64(SPLC.DISTANCE),
+      rotationFlipped: (flags & PLACEMENT_FLAG_BIT.rotationFlipped) !== 0,
+      sideFlipped: (flags & PLACEMENT_FLAG_BIT.sideFlipped) !== 0,
+    },
+  };
+}
+
 function readSite(bb, tablePos) {
   if (!tablePos) return null;
   const r = makeReader(bb, tablePos);
@@ -1847,6 +1891,7 @@ function readSite(bb, tablePos) {
     lineOrder: r.strVec(SITE.LINE_ORDER),
     history:   r.vec(SITE.HISTORY, readSiteHistoryStep),
     rects:     r.vec(SITE.RECTS, readSiteRect),
+    placement: readSitePlacement(bb, r.nested(SITE.PLACEMENT)),
   };
 }
 

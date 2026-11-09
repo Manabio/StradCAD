@@ -97,6 +97,14 @@ export class SiteModeState {
     );
   }
 
+  /**
+   * 突入時の初期化。配置の痕跡（site.placement）があれば配置図を開いた状態にして読込みを待つ。
+   * 決して reject しない（読込みの失敗は placementRoof.readFailed）。
+   */
+  async init() {
+    if (this.site.placement != null) await this.setShowPlacement(true);
+  }
+
   get selectedLine() {
     return this.selectedLineId ? (this.site.lineMap.get(this.selectedLineId) ?? null) : null;
   }

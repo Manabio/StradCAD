@@ -122,8 +122,8 @@ test('composeSitePlacementView: 屋根の外接矩形の図芯へ敷地の図芯
   assert.equal(v.centerSource, SitePlacementCenterSource.ROOF);
   assert.deepEqual(v.buildingCenter, { x: 53000, y: 32000 });
   assert.deepEqual(v.siteCenter, { x: 5000, y: 4000 });
-  assert.equal(v.siteTransform.dx, 48000);
-  assert.equal(v.siteTransform.dy, 28000);
+  assert.equal(v.siteTransform.tx, 48000);
+  assert.equal(v.siteTransform.ty, 28000);
   assert.equal(v.siteTransform.rotationDeg, 0);
   assert.deepEqual(applySiteTransform(v.siteCenter, v.siteTransform), v.buildingCenter);
   // 敷地の角 A(0,0) も同じ平行移動で動く
@@ -139,25 +139,25 @@ test('composeSitePlacementView: 屋根の線が無ければ通り芯の範囲の
   assert.equal(grid.centerSource, SitePlacementCenterSource.GRID);
   assert.deepEqual(grid.buildingCenter, { x: 5000, y: 4000 });
   assert.equal(grid.roofEmpty, true);
-  assert.deepEqual([grid.siteTransform.dx, grid.siteTransform.dy], [0, 0], '図芯が一致しているので移動量は 0');
+  assert.deepEqual([grid.siteTransform.tx, grid.siteTransform.ty], [0, 0], '図芯が一致しているので移動量は 0');
   const grid2 = composeSitePlacementView({ site, roof: { floors: [], gridBounds: { minX: 10000, minY: 10000, maxX: 12000, maxY: 12000 }, readFailed: false } });
-  assert.deepEqual([grid2.siteTransform.dx, grid2.siteTransform.dy], [6000, 7000]);
+  assert.deepEqual([grid2.siteTransform.tx, grid2.siteTransform.ty], [6000, 7000]);
 
   for (const roof of [{ floors: [], gridBounds: null, readFailed: false }, null]) {
     const none = composeSitePlacementView({ site, roof });
     assert.equal(none.centerSource, SitePlacementCenterSource.NONE);
     assert.equal(none.buildingCenter, null);
-    assert.deepEqual([none.siteTransform.dx, none.siteTransform.dy], [0, 0]);
+    assert.deepEqual(none.siteTransform, { rotationDeg: 0, tx: 0, ty: 0 });
     assert.equal(none.roofEmpty, true);
-    assert.deepEqual([none.siteTransform.pivotX, none.siteTransform.pivotY], [5000, 4000], 'pivot は敷地の図芯');
   }
 });
 
-test('【失敗系】composeSitePlacementView: 敷地が空なら敷地側の図芯が無く、dx=dy=0・pivot=(0,0)。屋根は描く', () => {
+test('【失敗系】composeSitePlacementView: 敷地が空なら敷地側の図芯が無く、tx=ty=0。屋根は描く', () => {
   const v = composeSitePlacementView({ site: new Site(), roof: farRoof() });
   assert.equal(v.siteCenter, null);
   assert.deepEqual(v.siteSegments, []);
-  assert.deepEqual(v.siteTransform, { dx: 0, dy: 0, rotationDeg: 0, pivotX: 0, pivotY: 0 });
+  assert.deepEqual(v.siteTransform, { rotationDeg: 0, tx: 0, ty: 0 });
+  assert.equal(v.placed, false);
   assert.equal(v.roofLines.length, 2);
 });
 
@@ -176,17 +176,18 @@ test('【失敗系】composeSitePlacementView: 壊れた region は roofFailedCo
 
 // ---- 変換の口 ----
 
-test('siteTransformGroupProps: Konva の Group（x,y 平行移動 → rotation → −offset）の写像が applySiteTransform と一致する（0°・90°・30°）', () => {
+test('siteTransformGroupProps: Konva の Group（x,y 平行移動 → rotation）の写像が applySiteTransform と一致する（0°・90°・30°）。props は {x,y,rotation} だけ', () => {
   for (const rotationDeg of [0, 90, 30]) {
-    const t = { dx: 700, dy: -300, rotationDeg, pivotX: 5000, pivotY: 4000 };
+    const t = { rotationDeg, tx: 700, ty: -300 };
     const g = siteTransformGroupProps(t);
     const rad = rotationDeg * Math.PI / 180;
-    // Konva の変換: p' = (x,y) + R(rotation)·(p − offset)
+    // Konva の変換: p' = (x,y) + R(rotation)·p
     const konva = p => ({
-      x: g.x + Math.cos(rad) * (p.x - g.offsetX) - Math.sin(rad) * (p.y - g.offsetY),
-      y: g.y + Math.sin(rad) * (p.x - g.offsetX) + Math.cos(rad) * (p.y - g.offsetY),
+      x: g.x + Math.cos(rad) * p.x - Math.sin(rad) * p.y,
+      y: g.y + Math.sin(rad) * p.x + Math.cos(rad) * p.y,
     });
-    assert.equal(g.rotation, rotationDeg);
+    assert.deepEqual(Object.keys(g).sort(), ['rotation', 'x', 'y']);
+    assert.deepEqual([g.x, g.y, g.rotation], [700, -300, rotationDeg]);
     for (const p of [{ x: 0, y: 0 }, { x: 5000, y: 4000 }, { x: 10000, y: 8000 }]) {
       const a = applySiteTransform(p, t), b = konva(p);
       assert.ok(Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6, `${rotationDeg}° ${JSON.stringify(p)}: ${JSON.stringify(a)} vs ${JSON.stringify(b)}`);
@@ -194,10 +195,34 @@ test('siteTransformGroupProps: Konva の Group（x,y 平行移動 → rotation �
   }
 });
 
-test('applySiteTransform: 90° 回転は pivot まわり（pivot 自身は d だけ動き、pivot の右隣は pivot の下隣へ。y 下向き正）', () => {
-  const t = { dx: 100, dy: 200, rotationDeg: 90, pivotX: 1000, pivotY: 1000 };
-  const c = applySiteTransform({ x: 1000, y: 1000 }, t);
-  assert.deepEqual([c.x, c.y], [1100, 1200]);
-  const r = applySiteTransform({ x: 1500, y: 1000 }, t);
-  assert.ok(Math.abs(r.x - 1100) < 1e-9 && Math.abs(r.y - 1700) < 1e-9, JSON.stringify(r));
+test('applySiteTransform: 90° 回転は原点まわり（原点は (tx,ty) へ、(500,0) は原点の下 (tx, ty+500) へ。y 下向き正）', () => {
+  const t = { rotationDeg: 90, tx: 100, ty: 200 };
+  const c = applySiteTransform({ x: 0, y: 0 }, t);
+  assert.deepEqual([c.x, c.y], [100, 200]);
+  const r = applySiteTransform({ x: 500, y: 0 }, t);
+  assert.ok(Math.abs(r.x - 100) < 1e-9 && Math.abs(r.y - 700) < 1e-9, JSON.stringify(r));
+  const d = applySiteTransform({ x: 0, y: 500 }, t);
+  assert.ok(Math.abs(d.x - (-400)) < 1e-9 && Math.abs(d.y - 200) < 1e-9, JSON.stringify(d));
+});
+
+// ---- 配置の指定（site.placement） ----
+
+test('composeSitePlacementView: site.placement があればその {rotationDeg,tx,ty} を使い placed:true（図芯合わせは使わない）。無ければ placed:false', () => {
+  const { site } = makeQuadSite();
+  assert.equal(composeSitePlacementView({ site, roof: farRoof() }).placed, false);
+  const input = { v1: { x: 0, y: 0 }, v2: { x: 10000, y: 0 }, centerLineId: 'c1', distance: 3000, rotationFlipped: false, sideFlipped: false };
+  site.setPlacement({ rotationDeg: 30, tx: 1234, ty: -567, input });
+  const v = composeSitePlacementView({ site, roof: farRoof() });
+  assert.equal(v.placed, true);
+  assert.deepEqual(v.siteTransform, { rotationDeg: 30, tx: 1234, ty: -567 });
+  // 図芯合わせの情報自体は従来どおり返る
+  assert.deepEqual(v.buildingCenter, { x: 53000, y: 32000 });
+});
+
+test('【失敗系】composeSitePlacementView: placement があれば敷地が空・屋根なしでも変換は placement のまま（placed:true）', () => {
+  const site = new Site();
+  site.setPlacement({ rotationDeg: -90, tx: 10, ty: 20, input: { v1: { x: 0, y: 0 }, v2: { x: 1, y: 0 }, centerLineId: 'c', distance: 1, rotationFlipped: true, sideFlipped: true } });
+  const v = composeSitePlacementView({ site, roof: null });
+  assert.equal(v.placed, true);
+  assert.deepEqual(v.siteTransform, { rotationDeg: -90, tx: 10, ty: 20 });
 });

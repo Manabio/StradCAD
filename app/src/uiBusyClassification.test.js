@@ -257,7 +257,9 @@ const ANON_IIFE_COUNT = 3;
 // （天伏 S3 と同じく、モード切替 effect のローダーで EXEMPT。入力の関門は通らない）。
 // 部分詳細図ヘルパー S4 で openDetailHelperPanel（GATED。openCatalogMaintenancePanel と同区分——動的 import の完了を待つ
 // 全画面パネルの open で、await 後にグラフ／IDB は書かない）の runBusy( コールバックが1件加わったため49→50。
-const ANON_CALLBACK_COUNT = 50;
+// 敷地モード（配置 S3）のローダー .then(async m => { ... await s.init() ... }) が加わったため50→51
+// （立面・天伏と同じく、モード切替 effect のローダーで EXEMPT。入力の関門は通らない）。
+const ANON_CALLBACK_COUNT = 51;
 const ANON_TOTAL_COUNT = ANON_IIFE_COUNT + ANON_CALLBACK_COUNT;
 
 function findNamedAsyncFunctions(code) {
