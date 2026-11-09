@@ -28,7 +28,10 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd })
   const hitW = HIT_PX_MAX / viewport.scaleX; // 角の当たり幅（SiteRectsLayer の anchorCircle と同じ）
   const numFontSize = NUM_FONT_PX / viewport.scaleX;
   const input = mode.placementInput;
-  const selectedGridKey = input?.centerLineId ? view.grid.lines.find(l => l.id === input.centerLineId)?.key ?? null : null;
+  const selectedGridId = mode.placementCenterLine?.id ?? null;
+  const selectedAlongId = mode.placementAlongCenterLine?.id ?? null;
+  const selectedGridKey = selectedGridId ? view.grid.lines.find(l => l.id === selectedGridId)?.key ?? null : null;
+  const selectedAlongKey = selectedAlongId ? view.grid.lines.find(l => l.id === selectedAlongId)?.key ?? null : null;
   const siteWidth = viewport.lineWeightsPx[siteLineWeightKey(true, false)];
   const g = layoutSitePlacementGrid(view.grid, viewport.scaleX);
   const gridLineWidth = viewport.lineWeightsPx[SITE_PLACEMENT_GRID_LINE_WEIGHT];
@@ -39,7 +42,7 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd })
         <Line
           key={l.key}
           points={l.points}
-          stroke={l.key === selectedGridKey ? MEMBER_SELECTION_COLOR : originColor(SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY)}
+          stroke={l.key === selectedGridKey || l.key === selectedAlongKey ? MEMBER_SELECTION_COLOR : originColor(SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY)}
           strokeWidth={gridLineWidth}
           dash={gridLineDash(gridLineWidth)}
           strokeScaleEnabled={false}

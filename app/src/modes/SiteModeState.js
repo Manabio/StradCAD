@@ -2,6 +2,7 @@ import { makeObservable, observable, action, computed, reaction, runInAction } f
 import { SiteLineKind } from '@core';
 import {
   SITE_PLACEMENT_EMPTY_MESSAGE, SITE_PLACEMENT_READ_ERROR_MESSAGE, SITE_PLACEMENT_LOADING_MESSAGE, SITE_LOG_TAG,
+  SitePlacementAlongVertex, CenterLineType,
 } from '../core/constants.js';
 import { withGraphsReadScope } from '../graphReadScope.js';
 import { gridBoundsMm } from '../initialView.js';
@@ -13,18 +14,35 @@ import { evalNumpadExpr } from '../ui/numpadUtils.js';
 import { computeSitePlacement } from '../site/sitePlacementSolve.js';
 import {
   applySitePlacementWithUndo, TOAST_PLACEMENT_INCOMPLETE, TOAST_PLACEMENT_DISTANCE_BAD, TOAST_PLACEMENT_UNSOLVABLE,
+  TOAST_PLACEMENT_ALONG_INCOMPLETE, TOAST_PLACEMENT_ALONG_AXIS,
 } from '../transform/sitePlacementEdit.js';
 import { leanToPlanRegions, topRoofPlanRegions } from '../structural/roofFramingRegions.js';
 import { collectAdoptedFloors } from './adoptedFloors.js';
 
+// 2 段目「位置」の入力バッファ（vertex＝共有点 1|2。保存値は {vertex, centerLineId, distance, sideFlipped}）
+const emptyAlongInput = () => ({
+  vertex: SitePlacementAlongVertex.V1, centerLineId: null, distanceValue: '', sideFlipped: false,
+});
+
 const emptyPlacementInput = () => ({
   v1: null, v2: null, centerLineId: null, distanceValue: '', rotationFlipped: false, sideFlipped: false,
+  along: emptyAlongInput(),
 });
+
+// 1 段目の通り芯の軸と直交する軸（縦⇄横）。それ以外（放射など）は直交する軸なし
+const ORTHOGONAL_AXIS = Object.freeze({
+  [CenterLineType.VERTICAL]: CenterLineType.HORIZONTAL,
+  [CenterLineType.HORIZONTAL]: CenterLineType.VERTICAL,
+});
+
+// 距離の入力文字列（NumPad の式 '1000+500' 等を敷地の他の入力と同じ評価器で数値に）。未入力・0 以下・式でないものは NaN
+const evalPlacementDistance = (s) => (s.trim() === '' ? NaN : evalNumpadExpr(s, { positiveOnly: true }));
 
 // 保存済みの配置（site.placement.input）から配置指定の入力を作る。痕跡が無ければ空
 function placementInputFromSite(site) {
   const input = site.placement?.input;
   if (!input) return emptyPlacementInput();
+  const a = input.along;
   return {
     v1: input.v1 ? { x: input.v1.x, y: input.v1.y } : null,
     v2: input.v2 ? { x: input.v2.x, y: input.v2.y } : null,
@@ -32,6 +50,9 @@ function placementInputFromSite(site) {
     distanceValue: String(input.distance),
     rotationFlipped: !!input.rotationFlipped,
     sideFlipped: !!input.sideFlipped,
+    along: a
+      ? { vertex: a.vertex, centerLineId: a.centerLineId, distanceValue: String(a.distance), sideFlipped: !!a.sideFlipped }
+      : emptyAlongInput(),
   };
 }
 
@@ -69,9 +90,11 @@ export class SiteModeState {
   placementLoading = false;
   placementRoof    = null; // { floors: [{planeId, regions}], gridBounds, gridLines, readFailed } | null
   // 配置の指定入力（保存しない画面状態。表示にした時点で site.placement.input から作り、非表示で null）。
-  // { v1:{x,y}|null, v2:{x,y}|null（敷地座標）, centerLineId:string|null, distanceValue:string, rotationFlipped, sideFlipped }
+  // { v1:{x,y}|null, v2:{x,y}|null（敷地座標）, centerLineId:string|null, distanceValue:string, rotationFlipped, sideFlipped,
+  //   along:{vertex:1|2, centerLineId:string|null, distanceValue:string, sideFlipped}（2 段目「位置」の入力バッファ）}
   placementInput   = null;
   placementDistanceFocused = false; // 距離欄を編集中（NumPad を出す）
+  placementAlongDistanceFocused = false; // 位置の離れ欄を編集中（NumPad を出す。距離欄の編集とは排他）
 
   constructor(site, project = null) {
     this.site = site;
@@ -86,10 +109,22 @@ export class SiteModeState {
       placementMessage:   computed,
       placementInput:     observable.ref,
       placementDistanceFocused: observable,
+      placementAlongDistanceFocused: observable,
       placementVertexStates: computed,
       placementCenterLine: computed,
       placementCenterLineStale: computed,
+      placementAlongCenterLines: computed,
+      placementAlongCenterLine: computed,
+      placementAlongStale: computed,
+      placementAlongState: computed,
+      placementAlongVertexStale: computed,
       placementCanCommit: computed,
+      setPlacementAlongVertex: action,
+      setPlacementAlongCenterLine: action,
+      setPlacementAlongDistanceValue: action,
+      setPlacementAlongDistanceFocused: action,
+      togglePlacementAlongSide: action,
+      clearPlacementAlong: action,
       pickPlacementVertex: action,
       setPlacementCenterLine: action,
       setPlacementDistanceValue: action,
@@ -144,6 +179,7 @@ export class SiteModeState {
         if (!this.showPlacement || !p) return;
         this.placementInput = placementInputFromSite(this.site);
         this.placementDistanceFocused = false; // 打ちかけの距離は保存値に置き換わるので、NumPad は閉じる
+        this.placementAlongDistanceFocused = false;
       },
     );
     // 削除・undo 等で選択中の線が消えたら、三斜側の選択・入力を残さない
@@ -202,6 +238,7 @@ export class SiteModeState {
     }
     this.placementInput = null;
     this.placementDistanceFocused = false;
+    this.placementAlongDistanceFocused = false;
     this.placementRoof = null;
     this.placementLoading = false;
     this._placementGen++;
@@ -231,15 +268,60 @@ export class SiteModeState {
 
   // 距離の入力値（数値。未入力・数値でない場合は NaN）
   _placementDistance() {
-    const s = this.placementInput?.distanceValue ?? '';
-    // NumPad の式（'1000+500' 等）を敷地の他の入力と同じ評価器で数値にする。0 以下・式でないものは NaN
-    return s.trim() === '' ? NaN : evalNumpadExpr(s, { positiveOnly: true });
+    return evalPlacementDistance(this.placementInput?.distanceValue ?? '');
+  }
+
+  // 位置（2 段目）の離れの入力値（数値。未入力・数値でない場合は NaN）
+  _placementAlongDistance() {
+    return evalPlacementDistance(this.placementInput?.along?.distanceValue ?? '');
+  }
+
+  // 位置の通り芯の候補＝1 段目の通り芯の軸と直交する軸の線（表示時点の写し）。1 段目が未選択・縦横以外なら []
+  get placementAlongCenterLines() {
+    const orthogonal = ORTHOGONAL_AXIS[this.placementCenterLine?.centerLineType];
+    if (!orthogonal) return [];
+    return (this.placementRoof?.gridLines ?? []).filter(g => g.centerLineType === orthogonal);
+  }
+
+  // 指定中の位置の通り芯（候補の中から id で引く。軸が 1 段目と同じ・写しに無ければ null）
+  get placementAlongCenterLine() {
+    const id = this.placementInput?.along?.centerLineId;
+    if (!id) return null;
+    return this.placementAlongCenterLines.find(g => g.id === id) ?? null;
+  }
+
+  // 位置の通り芯の指定はあるが引けない（失効。写しに無い・1 段目の軸が変わって同じ軸になった等）
+  get placementAlongStale() {
+    return !!this.placementInput?.along?.centerLineId && this.placementAlongCenterLine === null;
+  }
+
+  // 位置の入力の状態: 'none'＝通り芯も離れも空（共有点・側は数えない）／'ready'＝両方入力あり／'partial'＝片方だけ
+  get placementAlongState() {
+    const a = this.placementInput?.along;
+    if (!a) return 'none';
+    const hasLine = !!a.centerLineId;
+    const hasDistance = a.distanceValue.trim() !== '';
+    if (!hasLine && !hasDistance) return 'none';
+    return hasLine && hasDistance ? 'ready' : 'partial';
+  }
+
+  // 位置の共有点（1 段目の頂点 k）が指定済みでない。位置を指定しているときだけ true（未指定の入力で常に失効と出さない）
+  get placementAlongVertexStale() {
+    const a = this.placementInput?.along;
+    if (!a || this.placementAlongState === 'none') return false;
+    return this.placementVertexStates[a.vertex === SitePlacementAlongVertex.V2 ? 'v2' : 'v1'] !== 'set';
   }
 
   get placementCanCommit() {
     const st = this.placementVertexStates;
     const d = this._placementDistance();
-    return st.v1 === 'set' && st.v2 === 'set' && this.placementCenterLine !== null && Number.isFinite(d) && d > 0;
+    const firstOk = st.v1 === 'set' && st.v2 === 'set' && this.placementCenterLine !== null && Number.isFinite(d) && d > 0;
+    if (!firstOk) return false;
+    const along = this.placementAlongState;
+    if (along === 'partial') return false;
+    if (along === 'none') return true;
+    const ad = this._placementAlongDistance();
+    return this.placementAlongCenterLine !== null && !this.placementAlongVertexStale && Number.isFinite(ad) && ad > 0;
   }
 
   /** 配置図上の敷地の角（敷地座標）をタップ。指定済みの角は解除、それ以外は v1→v2 の順に埋め、両方埋まっていれば v2 を置換する（v1 は距離の基準なので据え置き）。 */
@@ -267,6 +349,51 @@ export class SiteModeState {
 
   setPlacementDistanceFocused(on) {
     this.placementDistanceFocused = !!on;
+    if (on) this.placementAlongDistanceFocused = false; // NumPad は 1 つだけ
+  }
+
+  // ---- 2 段目「位置」の入力 ----
+
+  setPlacementAlongVertex(vertex) {
+    const inp = this.placementInput;
+    if (!inp || (vertex !== SitePlacementAlongVertex.V1 && vertex !== SitePlacementAlongVertex.V2)) return;
+    this.placementInput = { ...inp, along: { ...inp.along, vertex } };
+  }
+
+  setPlacementAlongCenterLine(id) {
+    const inp = this.placementInput;
+    if (!inp) return;
+    this.placementInput = { ...inp, along: { ...inp.along, centerLineId: inp.along.centerLineId === id ? null : id } };
+  }
+
+  setPlacementAlongDistanceValue(str) {
+    const inp = this.placementInput;
+    if (!inp) return;
+    this.placementInput = { ...inp, along: { ...inp.along, distanceValue: str } };
+  }
+
+  setPlacementAlongDistanceFocused(on) {
+    this.placementAlongDistanceFocused = !!on;
+    if (on) this.placementDistanceFocused = false; // NumPad は 1 つだけ
+  }
+
+  togglePlacementAlongSide() {
+    const inp = this.placementInput;
+    if (!inp) return { ok: true, toast: null };
+    const next = { ...inp, along: { ...inp.along, sideFlipped: !inp.along.sideFlipped } };
+    if (this.placementAlongState === 'none') { // 位置なしでは側は配置に効かない。フラグだけ切り替える
+      this.placementInput = next;
+      return { ok: true, toast: null };
+    }
+    return this._updateAndReplace(next);
+  }
+
+  /** 位置の入力を既定へ戻す。配置済みで確定できる入力なら即座に再配置する（沿い座標は前回の変換の据え置きに戻る）。 */
+  clearPlacementAlong() {
+    const inp = this.placementInput;
+    if (!inp) return { ok: true, toast: null };
+    this.placementAlongDistanceFocused = false;
+    return this._updateAndReplace({ ...inp, along: emptyAlongInput() });
   }
 
   togglePlacementRotation() { return this._toggleFlip('rotationFlipped'); }
@@ -277,7 +404,12 @@ export class SiteModeState {
   _toggleFlip(key) {
     const inp = this.placementInput;
     if (!inp) return { ok: true, toast: null };
-    this.placementInput = { ...inp, [key]: !inp[key] };
+    return this._updateAndReplace({ ...inp, [key]: !inp[key] });
+  }
+
+  // 入力を差し替え、配置済みで確定できる入力なら即座に再配置する
+  _updateAndReplace(next) {
+    this.placementInput = next;
     if (this.site.placement != null && this.placementCanCommit) return this.commitPlacement();
     return { ok: true, toast: null };
   }
@@ -299,16 +431,42 @@ export class SiteModeState {
     const distance = this._placementDistance();
     if (!Number.isFinite(distance) || distance <= 0) return { ok: false, toast: TOAST_PLACEMENT_DISTANCE_BAD };
     const { v1, v2, centerLineId, rotationFlipped, sideFlipped } = inp;
+    const along = this._resolveAlong(cl);
+    if (along.toast) return { ok: false, toast: along.toast };
     const solved = computeSitePlacement({
       v1, v2, centerLine: { centerLineType: cl.centerLineType, value: cl.value }, distance,
       rotationFlipped, sideFlipped, buildingCenter: view.buildingCenter, prevTransform: view.siteTransform,
+      along: along.solve,
     });
     if (!solved) return { ok: false, toast: TOAST_PLACEMENT_UNSOLVABLE };
     applySitePlacementWithUndo(this.site, {
       ...solved,
-      input: { v1: { x: v1.x, y: v1.y }, v2: { x: v2.x, y: v2.y }, centerLineId, distance, rotationFlipped, sideFlipped },
+      input: {
+        v1: { x: v1.x, y: v1.y }, v2: { x: v2.x, y: v2.y }, centerLineId, distance, rotationFlipped, sideFlipped,
+        along: along.saved,
+      },
     });
     return { ok: true, toast: null };
+  }
+
+  // 位置（2 段目）の入力を解への引数と保存値に直す。none → 両方 null、拒否理由があれば toast（partial・失効・距離不正・1 段目と同じ軸）
+  _resolveAlong(firstCl) {
+    const none = { solve: null, saved: null, toast: null };
+    const state = this.placementAlongState;
+    if (state === 'none') return none;
+    if (state === 'partial') return { ...none, toast: TOAST_PLACEMENT_ALONG_INCOMPLETE };
+    const a = this.placementInput.along;
+    const raw = this.placementRoof?.gridLines?.find(g => g.id === a.centerLineId) ?? null;
+    if (raw && raw.centerLineType === firstCl.centerLineType) return { ...none, toast: TOAST_PLACEMENT_ALONG_AXIS };
+    const line = this.placementAlongCenterLine;
+    if (!line || this.placementAlongVertexStale) return { ...none, toast: TOAST_PLACEMENT_INCOMPLETE };
+    const distance = this._placementAlongDistance();
+    if (!Number.isFinite(distance) || distance <= 0) return { ...none, toast: TOAST_PLACEMENT_DISTANCE_BAD };
+    return {
+      solve: { vertex: a.vertex, centerLine: { centerLineType: line.centerLineType, value: line.value }, distance, sideFlipped: a.sideFlipped },
+      saved: { vertex: a.vertex, centerLineId: a.centerLineId, distance, sideFlipped: a.sideFlipped },
+      toast: null,
+    };
   }
 
   /** 配置を解除する（null＝図芯合わせへ戻る。undo あり）。入力も空に戻す。 */
@@ -316,6 +474,7 @@ export class SiteModeState {
     applySitePlacementWithUndo(this.site, null);
     this.placementInput = this.showPlacement ? emptyPlacementInput() : null;
     this.placementDistanceFocused = false;
+    this.placementAlongDistanceFocused = false;
   }
 
   async _loadPlacement() {
@@ -581,5 +740,6 @@ export class SiteModeState {
     this.cancelSiteDraw();
     this.placementInput = null;
     this.placementDistanceFocused = false;
+    this.placementAlongDistanceFocused = false;
   }
 }

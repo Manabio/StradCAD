@@ -66,8 +66,9 @@ test('SitePlacementLayer: 選択中の頂点は placementVertexIndex で引き�
   assert.match(layer, /const numFontSize = NUM_FONT_PX \/ viewport\.scaleX;/);
   assert.match(layer, /fill=\{MEMBER_SELECTION_COLOR\}/, '番号の文字も選択色');
   assert.match(layer, /rotation=\{-view\.siteTransform\.rotationDeg\}/, 'Group の回転を打ち消して正立');
-  assert.match(layer, /view\.grid\.lines\.find\(l => l\.id === input\.centerLineId\)/);
-  assert.match(layer, /stroke=\{l\.key === selectedGridKey \? MEMBER_SELECTION_COLOR : originColor\(SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY\)\}/);
+  assert.match(layer, /const selectedGridId = mode\.placementCenterLine\?\.id \?\? null;/, '失効した通り芯は印を出さない（R9）');
+  assert.match(layer, /view\.grid\.lines\.find\(l => l\.id === selectedGridId\)/);
+  assert.match(layer, /stroke=\{l\.key === selectedGridKey \|\| l\.key === selectedAlongKey \? MEMBER_SELECTION_COLOR : originColor\(SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY\)\}/);
   assert.ok(!/Math\.abs\(/.test(layer), '一致判定を描画側に書かない（純モジュールの口だけ）');
 });
 
@@ -162,6 +163,49 @@ test('SiteInfoPanel: 距離欄の物理キーボードは placementDistanceFocus
   assert.match(panel, /mode\.setPlacementDistanceValue\(applyKeyToNumpadValue\(mode\.placementInput\?\.distanceValue \?\? '', numpadKey\)\)/);
   // Enter は確定の拒否理由を onToast へ直接流す（reportPlacement を effect の依存に入れないため inline）
   assert.match(panel, /e\.key === 'Enter'\) \{\s*mode\.setPlacementDistanceFocused\(false\);\s*const r = mode\.commitPlacement\(\);\s*if \(r\?\.toast\) onToast\?\.\(r\.toast\);/);
+});
+
+test('SitePlacementLayer: 位置（2 段目）の通り芯B は input.along.centerLineId から引き、1 段目の通り芯と同じ選択色で描く', () => {
+  assert.match(layer, /const selectedAlongId = mode\.placementAlongCenterLine\?\.id \?\? null;/, '失効した通り芯Bは印を出さない（R9）');
+  assert.match(layer, /view\.grid\.lines\.find\(l => l\.id === selectedAlongId\)/);
+  assert.equal(count(layer, /selectedAlongKey/g), 2, '定義と色の判定の 2 か所だけ');
+});
+
+test('SiteInfoPanel: 位置の段（共有点の切替・通り芯B の一覧・離れ・側反転・解除）が SiteModeState の口と文言定数に配線されている', () => {
+  for (const name of [
+    'SITE_PLACEMENT_ALONG_LABEL', 'SITE_PLACEMENT_ALONG_VERTEX_LABEL', 'SITE_PLACEMENT_ALONG_HINT',
+    'SITE_PLACEMENT_ALONG_DISTANCE_LABEL', 'SITE_PLACEMENT_ALONG_DISTANCE_NUMPAD_LABEL',
+    'SITE_PLACEMENT_ALONG_FLIP_SIDE_LABEL', 'SITE_PLACEMENT_ALONG_CLEAR_LABEL', 'SitePlacementAlongVertex',
+  ]) {
+    assert.ok(count(panel, new RegExp(`\\{?${name}\\b`, 'g')) >= 2, `${name} を import して使う`);
+  }
+  assert.match(panel, /\[\[SitePlacementAlongVertex\.V1, SITE_PLACEMENT_VERTEX1_LABEL\], \[SitePlacementAlongVertex\.V2, SITE_PLACEMENT_VERTEX2_LABEL\]\]/);
+  assert.match(panel, /onClick=\{\(\) => mode\.setPlacementAlongVertex\(v\)\}/);
+  assert.match(panel, /\{mode\.placementAlongVertexStale && SITE_PLACEMENT_STALE_LABEL\}/);
+  assert.match(panel, /const alongLines = mode\.placementAlongCenterLines;/);
+  assert.match(panel, /mode\.placementCenterLine === null \? \(\s*<div style=\{\{ \.\.\.PANEL_ROW_TEXT, color: '#64748b' \}\}>\{SITE_PLACEMENT_ALONG_HINT\}<\/div>/, '案内文は 1 段目の通り芯が未選択のときだけ');
+  assert.match(panel, /onClick=\{\(\) => mode\.setPlacementAlongCenterLine\(l\.id\)\}/);
+  assert.match(panel, /\{mode\.placementAlongStale && /);
+  assert.match(panel, /onClick=\{\(\) => mode\.setPlacementAlongDistanceFocused\(true\)\}/);
+  assert.match(panel, /\{mode\.placementAlongState !== 'none' && \(\s*<>\s*<button style=\{actionButton\} onClick=\{\(\) => reportPlacement\(mode\.togglePlacementAlongSide\(\)\)\}>[^<]*<\/button>\s*<button style=\{actionButton\} onClick=\{\(\) => reportPlacement\(mode\.clearPlacementAlong\(\)\)\}>/, '側反転（位置）・位置の解除は位置が none でないときだけ');
+  // 位置の段は 1 段目の最終ボタン列（回転反転・側反転・配置・解除）の前
+  assert.ok(panel.indexOf('SITE_PLACEMENT_ALONG_LABEL}</div>') < panel.indexOf('mode.togglePlacementRotation()'));
+});
+
+test('SiteInfoPanel: 位置の離れの NumPad は placementAlongDistanceFocused の間だけ出し、変更・確定（commit）・取消が配線されている', () => {
+  assert.match(panel, /\{placing && pin && mode\.placementAlongDistanceFocused && \(\s*<NumPad\s+value=\{pin\.along\.distanceValue\}\s+label=\{SITE_PLACEMENT_ALONG_DISTANCE_NUMPAD_LABEL\}/);
+  assert.match(panel, /onChange=\{val => mode\.setPlacementAlongDistanceValue\(val\)\}/);
+  assert.match(panel, /onConfirm=\{\(\) => \{ mode\.setPlacementAlongDistanceFocused\(false\); reportPlacement\(mode\.commitPlacement\(\)\); \}\}/);
+  assert.match(panel, /onCancel=\{\(\) => mode\.setPlacementAlongDistanceFocused\(false\)\}/);
+});
+
+test('SiteInfoPanel: 位置の離れ欄の物理キーボードは placementAlongDistanceFocused の間だけ（Escape で解除・Enter で確定・数字と演算子は位置の離れの値へ）', () => {
+  assert.match(panel, /const alongDistanceEditing = !!\(placing && pin && mode\.placementAlongDistanceFocused\);/);
+  assert.match(panel, /if \(!alongDistanceEditing\) return;/);
+  assert.match(panel, /mode\.setPlacementAlongDistanceValue\(applyKeyToNumpadValue\(mode\.placementInput\?\.along\?\.distanceValue \?\? '', numpadKey\)\)/);
+  assert.match(panel, /e\.key === 'Enter'\) \{\s*mode\.setPlacementAlongDistanceFocused\(false\);\s*const r = mode\.commitPlacement\(\);\s*if \(r\?\.toast\) onToast\?\.\(r\.toast\);/);
+  assert.match(panel, /\}, \[alongDistanceEditing, mode, onToast\]\);/);
+  assert.equal(count(panel, /document\.addEventListener\('keydown', onKey\)/g), 4, '三斜・長方形・距離欄・位置の離れ欄の 4 つの effect');
 });
 
 test('App: SiteInfoPanel へ onToast を渡す（配置の拒否理由を既存の setToast 経路に乗せる）', () => {

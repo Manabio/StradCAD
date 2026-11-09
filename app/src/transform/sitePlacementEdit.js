@@ -7,6 +7,8 @@ import { undoManager } from '../undoManager.js';
 export const TOAST_PLACEMENT_INCOMPLETE   = '頂点2点・通り芯・距離を指定してください';
 export const TOAST_PLACEMENT_DISTANCE_BAD = '距離は 0 より大きい値で指定してください';
 export const TOAST_PLACEMENT_UNSOLVABLE   = '配置を解けませんでした';
+export const TOAST_PLACEMENT_ALONG_INCOMPLETE = '位置は共有点・通り芯・離れをそろえて指定してください';
+export const TOAST_PLACEMENT_ALONG_AXIS   = '位置の通り芯は 1 段目と直交する軸から選んでください';
 
 /**
  * 敷地の配置を next（null＝配置の解除）へ変える（undo あり）。

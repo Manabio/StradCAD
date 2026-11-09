@@ -347,6 +347,14 @@ id の振り直し・付け替えは、参照の種類（壁・開口・他の�
   - 距離は NumPad（画面・物理キーボードとも）の式を `ui/numpadUtils.js evalNumpadExpr`（positiveOnly）で評価する（敷地の他の入力と同じ。保存する `distance` は評価後の数値）。NumPad は見出し表示を出さず（hideDisplay）、行の「距離：」のラベルで示す。空文字は入力不足、評価できない・0 以下は距離不正。
   - undo/redo との同期: `site.placement` が**非 null に変わったとき**（確定・undo/redo による復元）だけ入力を保存値から作り直す（確定直後も同じ値で作り直すだけで、距離は評価後の文字列になる）。null へ変わったとき（確定の undo・解除）は入力を触らない＝「未配置＋入力あり」として整合し、確定の undo で入力した内容が消えないため。
   - **失効**: 頂点＝指定はあるが今の `placementView.siteCorners` に EPS 以内で一致する角が無い（敷地を編集して角が消えた）。通り芯＝`centerLineId` はあるが表示時点の写し（`placementRoof.gridLines`）に無い。失効した入力は確定できない（`placementCanCommit` が false）。パネルに「（失効）」を出し、**図には印を出さない**（失効した頂点は図に対応する角が無く、出す場所が無い。通り芯も写しに無い線は描かれていない。R9）。
+- **2 段目「位置」（S5、2026-11-09）**: 1 段目（頂点2点＋通り芯A＋距離）は回転と「A に直交する座標」だけを決め、A に沿う位置は R6 で前回の表示位置に据え置く。2 段目はその沿い位置を、A と直交する軸の通り芯B からの離れで拘束する。入力・保存は `placementInput.along`（バッファ `{vertex, centerLineId, distanceValue, sideFlipped}`）と `site.placement.input.along`（`null | {vertex: 1|2, centerLineId, distance, sideFlipped}`。null＝2 段目なし＝従来どおり R6）。
+  - **意味**: 回転は変えず、通り芯沿いの位置（平行移動の沿い成分）だけを決める。共有点＝1 段目の頂点1／頂点2のどちらか（`SitePlacementAlongVertex.V1/V2`）。共有点の像の「B に直交する座標」＝B.value ± 離れ。符号は 1 段目と同じ規則（建物図芯の当該座標 > B.value なら −、以外 +。図芯が無ければ前回の変換で写した共有点と同じ側。`along.sideFlipped` で反転）。共有点が頂点2のときは、頂点1の沿い座標＝その値 − R·(v2−v1) の沿い成分（R·(v2−v1) は A に平行なので沿い方向だけ）。以降の (tx, ty)＝頂点1の像 − R·v1 は 1 段目と同じ。
+  - **通り芯B は 1 段目と直交する軸の線だけ**（`placementAlongCenterLines`。1 段目が未選択・縦横以外なら空）。同じ軸の線を選べないのは過剰拘束になるため（A と同じ軸の離れは A に直交する座標を二重に決める）。`computeSitePlacement` も同じ軸・離れが不正・共有点が 1/2 以外は null で防御し、`commitPlacement` は同じ軸なら `TOAST_PLACEMENT_ALONG_AXIS`。1 段目の通り芯を変えて軸が同じになると失効扱い（`placementAlongStale`）。
+  - **解ける理由**: 1 段目の 2 点が A に平行な辺で隣り合っていなくても、2 段目が 1 段目の線と直交していなくても解ける。1 段目からは線分の向きだけを仮想直線の向きとして使い（回転）、2 段目は平行移動 1 自由度だけを共有点 1 点の拘束で決めるため、拘束と未知数が 1 対 1 で、点の位置関係に依存しない。
+  - **状態**: `placementAlongState`＝'none'（通り芯も離れも空。共有点・側だけの変更は数えない）｜'partial'（片方だけ）｜'ready'。`placementCanCommit` は 1 段目の条件 ∧ partial でない ∧（ready なら通り芯が引ける・共有点が set・離れが 0 より大きい）。partial の確定は `TOAST_PLACEMENT_ALONG_INCOMPLETE`、ready で失効（通り芯が引けない・共有点の頂点が set でない）は `TOAST_PLACEMENT_INCOMPLETE`、離れ不正は `TOAST_PLACEMENT_DISTANCE_BAD`。共有点の失効表示（`placementAlongVertexStale`）は位置が none のときは出さない（未入力の初期状態で常に「（失効）」と出さないため）。
+  - 側反転（位置）・位置の解除は、配置済みで確定できる入力なら即時に再配置する（1 件ずつ undo）。解除は along を既定へ戻して R6 の据え置きへ（`clearPlacementAlong`。配置そのものの解除 `clearPlacement` とは別）。距離欄と位置の離れ欄の NumPad は排他（片方を開くともう片方は閉じる）。undo/redo 同期は along も保存値から作り直す。
+  - 位置が none のときは側反転（位置）を出さない（押せても配置は変わらないため。アクションもフラグだけ切り替えて再配置しない）。失効した通り芯（1 段目・通り芯B とも）は図に選択色を出さない（R9）。案内文「先に 1 段目の通り芯を選ぶ」は 1 段目の通り芯が未選択のときだけ。
+  - **扱わない**: 2 点それぞれの離れで傾きまで決める方式（回転を通り芯への平行から外す）は別課題。
 - 採らなかった案: 配置図を `subMode`（第3のタブ）にする案は、タブの下の表・面積・入力と排他にする分岐が各所に増えるため見送り。viewport は動かさない（表示を切り替えても画面の位置は変わらない）。
 
 ## 近傍検出の優先順位は「画面距離が最も近い1件」で解決する

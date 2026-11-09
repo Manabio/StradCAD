@@ -2180,8 +2180,9 @@ test('decodeSite → restoreSite: 長方形の無いデータ（旧データ相�
 
 const PLACEMENT_BASE = {
   rotationDeg: -37.5, tx: 12345.25, ty: -678.5,
-  input: { v1: { x: 100.5, y: -200 }, v2: { x: 3100.5, y: 800.25 }, centerLineId: 'cl-x1', distance: 1820.5, rotationFlipped: false, sideFlipped: false },
+  input: { v1: { x: 100.5, y: -200 }, v2: { x: 3100.5, y: 800.25 }, centerLineId: 'cl-x1', distance: 1820.5, rotationFlipped: false, sideFlipped: false, along: null },
 };
+const PLACEMENT_ALONG = { vertex: 2, centerLineId: 'cl-y2', distance: 455.75, sideFlipped: true };
 
 test('serializeSite → restoreSite: 配置（全フィールド）の往復。フラグ4通り（なし・回転のみ・側のみ・両方）が独立に戻る', () => {
   for (const [rotationFlipped, sideFlipped] of [[false, false], [true, false], [false, true], [true, true]]) {
@@ -2191,6 +2192,49 @@ test('serializeSite → restoreSite: 配置（全フィールド）の往復。�
     restoreSite(restored, decodeSite(serializeSite(site)));
     assert.deepEqual(restored.placement, site.placement, `回転反転=${rotationFlipped} 側反転=${sideFlipped}`);
     assert.notEqual(restored.placement, site.placement, '別オブジェクト（deep copy）');
+  }
+});
+
+test('serializeSite → restoreSite: 2 段目「位置」（along）あり・なしの往復。共有点 1/2・側反転の有無が独立に戻り、along なしは null', () => {
+  for (const [vertex, sideFlipped] of [[1, false], [1, true], [2, false], [2, true]]) {
+    const site = new Site();
+    site.setPlacement({ ...PLACEMENT_BASE, input: { ...PLACEMENT_BASE.input, along: { ...PLACEMENT_ALONG, vertex, sideFlipped } } });
+    const restored = new Site();
+    restoreSite(restored, decodeSite(serializeSite(site)));
+    assert.deepEqual(restored.placement, site.placement, `共有点=${vertex} 側反転=${sideFlipped}`);
+    assert.notEqual(restored.placement.input.along, site.placement.input.along, 'along も deep copy');
+  }
+  const plain = new Site();
+  plain.setPlacement({ ...PLACEMENT_BASE });
+  const restored = new Site();
+  restoreSite(restored, decodeSite(serializeSite(plain)));
+  assert.equal(restored.placement.input.along, null);
+});
+
+test('【失敗系】along の旧データ（ALONG 無し）は null・共有点が 1/2 以外（0・3）や通り芯 id 欠落の壊れた along は null（配置本体は残る）', () => {
+  // 旧データ: ALONG_VERTEX を書かない（along: null で書いた FBS）→ 読みは null
+  const legacy = decodeSite(encode({ site: { placement: { ...PLACEMENT_BASE } } }));
+  assert.equal(legacy.placement.input.along, null);
+  assert.equal(legacy.placement.input.distance, 1820.5, '1 段目は無傷');
+  // FBS に 0 や 3 が書かれていても読みは null（encode へ直接渡して serialize の正規化を通さない）
+  for (const vertex of [0, 3]) {
+    const bytes = encode({ site: { placement: { ...PLACEMENT_BASE, input: { ...PLACEMENT_BASE.input, along: { ...PLACEMENT_ALONG, vertex } } } } });
+    assert.equal(decodeSite(bytes).placement.input.along, null, `FBS の共有点=${vertex}`);
+  }
+  // メモリ上のコピー（serialize・restore 共通）も同じ規則
+  for (const bad of [
+    { ...PLACEMENT_ALONG, vertex: 0 }, { ...PLACEMENT_ALONG, vertex: 3 },
+    { ...PLACEMENT_ALONG, centerLineId: undefined }, { ...PLACEMENT_ALONG, centerLineId: '' },
+  ]) {
+    const site = new Site();
+    site.setPlacement({ ...PLACEMENT_BASE, input: { ...PLACEMENT_BASE.input, along: bad } });
+    const restored = new Site();
+    restoreSite(restored, decodeSite(serializeSite(site)));
+    assert.ok(restored.placement, '配置本体は残る');
+    assert.equal(restored.placement.input.along, null, JSON.stringify(bad));
+    restored.setPlacement(null);
+    restoreSite(restored, { ...decodeSite(serializeSite(new Site())), placement: { ...PLACEMENT_BASE, input: { ...PLACEMENT_BASE.input, along: bad } } });
+    assert.equal(restored.placement.input.along, null, `restore ${JSON.stringify(bad)}`);
   }
 });
 

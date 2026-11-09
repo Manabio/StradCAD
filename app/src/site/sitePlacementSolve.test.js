@@ -130,6 +130,114 @@ test('沿い座標: 前回の変換（回転あり）で写した頂点1の通�
   close(p.y, 400); close(p.x, 11000);
 });
 
+// ---- 2 段目「位置」（along） ----
+
+const near = (p, x, y, msg) => { close(p.x, x, `${msg ?? ''} x`); close(p.y, y, `${msg ?? ''} y`); };
+const along = (vertex, centerLine, distance, sideFlipped = false) => ({ vertex, centerLine, distance, sideFlipped });
+
+test('along 縦A×横B・共有点=頂点1: v1=(0,0)・v2=(0,5000)・A=x10000 距離3000・B=y2000 離れ500・図芯(20000,0) → v1 の像 (7000,2500)・v2 の像 (7000,7500)。t=(7000,2500)', () => {
+  const r = computeSitePlacement({
+    ...base, v1: { x: 0, y: 0 }, v2: { x: 0, y: 5000 }, centerLine: V(10000), distance: 3000,
+    buildingCenter: { x: 20000, y: 0 }, along: along(1, H(2000), 500),
+  });
+  close(r.rotationDeg, 0); close(r.tx, 7000); close(r.ty, 2500);
+  near(applySiteTransform({ x: 0, y: 0 }, r), 7000, 2500, 'v1（共有点 y=B+500）');
+  near(applySiteTransform({ x: 0, y: 5000 }, r), 7000, 7500, 'v2（1 段目の拘束 x=7000 は保たれる）');
+});
+
+test('along 縦A×横B・共有点=頂点2: 同じ入力で共有点が v2 → v2 の像が (7000,2500)・v1 の像が (7000,−2500)。t=(7000,−2500)', () => {
+  const r = computeSitePlacement({
+    ...base, v1: { x: 0, y: 0 }, v2: { x: 0, y: 5000 }, centerLine: V(10000), distance: 3000,
+    buildingCenter: { x: 20000, y: 0 }, along: along(2, H(2000), 500),
+  });
+  close(r.rotationDeg, 0); close(r.tx, 7000); close(r.ty, -2500);
+  near(applySiteTransform({ x: 0, y: 5000 }, r), 7000, 2500, 'v2（共有点）');
+  near(applySiteTransform({ x: 0, y: 0 }, r), 7000, -2500, 'v1');
+});
+
+test('along 横A×縦B・共有点=頂点1（回転 90 度）: v1=(100,50)・v2=(100,5050)・A=y4000 距離1000・B=x9000 離れ800・図芯(0,10000) → v1 の像 (9800,3000)・v2 の像 (4800,3000)。t=(9850,2900)', () => {
+  const r = computeSitePlacement({
+    ...base, v1: { x: 100, y: 50 }, v2: { x: 100, y: 5050 }, centerLine: H(4000), distance: 1000,
+    buildingCenter: { x: 0, y: 10000 }, along: along(1, V(9000), 800),
+  });
+  close(r.rotationDeg, 90); close(r.tx, 9850); close(r.ty, 2900);
+  near(applySiteTransform({ x: 100, y: 50 }, r), 9800, 3000, 'v1（共有点 x=B+800）');
+  near(applySiteTransform({ x: 100, y: 5050 }, r), 4800, 3000, 'v2（1 段目の拘束 y=3000 は保たれる）');
+});
+
+test('along 横A×縦B・共有点=頂点2（回転 90 度）: v2 の像が (9800,3000)・v1 の像が (14800,3000)。t=(14850,2900)', () => {
+  const r = computeSitePlacement({
+    ...base, v1: { x: 100, y: 50 }, v2: { x: 100, y: 5050 }, centerLine: H(4000), distance: 1000,
+    buildingCenter: { x: 0, y: 10000 }, along: along(2, V(9000), 800),
+  });
+  close(r.rotationDeg, 90); close(r.tx, 14850); close(r.ty, 2900);
+  near(applySiteTransform({ x: 100, y: 5050 }, r), 9800, 3000, 'v2（共有点）');
+  near(applySiteTransform({ x: 100, y: 50 }, r), 14800, 3000, 'v1');
+});
+
+test('along: 回転は along が無いときと同じ（位置は平行移動だけを決める）。rotationFlipped でも共有点が B から離れ分の位置にある', () => {
+  const args = {
+    ...base, v1: { x: 0, y: 0 }, v2: { x: 0, y: 5000 }, centerLine: V(10000), distance: 3000,
+    buildingCenter: { x: 20000, y: 0 }, rotationFlipped: true,
+  };
+  const without = computeSitePlacement(args);
+  const withAlong = computeSitePlacement({ ...args, along: along(2, H(2000), 500) });
+  close(withAlong.rotationDeg, without.rotationDeg); close(withAlong.rotationDeg, 180);
+  // 回転 180: R·(v2−v1)=(0,−5000) → v1 の沿い座標 = 2500 − (−5000) = 7500。v2 の像は (7000, 2500)
+  near(applySiteTransform({ x: 0, y: 0 }, withAlong), 7000, 7500, 'v1');
+  near(applySiteTransform({ x: 0, y: 5000 }, withAlong), 7000, 2500, 'v2（共有点）');
+});
+
+test('along.sideFlipped: B のどちら側かが反転する（図芯が B の手前 → 通常は B+離れ、反転で B−離れ）。1 段目の側は変わらない', () => {
+  const args = {
+    ...base, v1: { x: 0, y: 0 }, v2: { x: 0, y: 5000 }, centerLine: V(10000), distance: 3000, buildingCenter: { x: 20000, y: 0 },
+  };
+  near(applySiteTransform({ x: 0, y: 0 }, computeSitePlacement({ ...args, along: along(1, H(2000), 500) })), 7000, 2500);
+  near(applySiteTransform({ x: 0, y: 0 }, computeSitePlacement({ ...args, along: along(1, H(2000), 500, true) })), 7000, 1500);
+  // 図芯が B より大きい側（y=3000）なら通常は B−離れ
+  const south = computeSitePlacement({ ...args, buildingCenter: { x: 20000, y: 3000 }, along: along(1, H(2000), 500) });
+  near(applySiteTransform({ x: 0, y: 0 }, south), 7000, 1500);
+});
+
+test('along・図芯なし: 前回の変換で写した共有点と同じ側に置く（B=y2000: 前回の像 y=1000 → B−500=1500／y=5000 → B+500=2500）。sideFlipped で反対側', () => {
+  const args = {
+    ...base, v1: { x: 0, y: 0 }, v2: { x: 0, y: 5000 }, centerLine: V(10000), distance: 3000, along: along(1, H(2000), 500),
+  };
+  const below = computeSitePlacement({ ...args, prevTransform: { rotationDeg: 0, tx: 8000, ty: 1000 } });
+  near(applySiteTransform({ x: 0, y: 0 }, below), 7000, 1500, '前回の像が B の手前');
+  const above = computeSitePlacement({ ...args, prevTransform: { rotationDeg: 0, tx: 8000, ty: 5000 } });
+  near(applySiteTransform({ x: 0, y: 0 }, above), 7000, 2500, '前回の像が B の向こう');
+  const flipped = computeSitePlacement({ ...args, prevTransform: { rotationDeg: 0, tx: 8000, ty: 1000 }, along: along(1, H(2000), 500, true) });
+  near(applySiteTransform({ x: 0, y: 0 }, flipped), 7000, 2500, 'sideFlipped');
+  // 共有点が v2 のときは v2 の前回の像で側を決める（v2 の前回の像 y=1000+5000=6000 → B の向こう → +）
+  const k2 = computeSitePlacement({ ...args, along: along(2, H(2000), 500), prevTransform: { rotationDeg: 0, tx: 8000, ty: 1000 } });
+  near(applySiteTransform({ x: 0, y: 5000 }, k2), 7000, 2500, '共有点 v2 の前回の像で判定');
+});
+
+test('along が無い（省略・null）: 沿い座標は従来どおり前回の像のまま（R6。v1 の前回の像 y=700）', () => {
+  const args = { ...base, v1: { x: 0, y: 0 }, v2: { x: 0, y: 5000 }, centerLine: V(10000), distance: 3000, prevTransform: { rotationDeg: 0, tx: 8000, ty: 700 } };
+  const omitted = computeSitePlacement(args);
+  const nulled = computeSitePlacement({ ...args, along: null });
+  near(applySiteTransform({ x: 0, y: 0 }, omitted), 7000, 700);
+  assert.deepEqual(nulled, omitted);
+});
+
+test('【失敗系】along: 1 段目と同じ軸の通り芯（過剰拘束）・離れが 0 以下／非有限・共有点が 1/2 以外・種別不明・値が非有限は null', () => {
+  const ok = { ...base, v1: { x: 0, y: 0 }, v2: { x: 0, y: 5000 }, centerLine: V(10000), distance: 3000, along: along(1, H(2000), 500) };
+  assert.notEqual(computeSitePlacement(ok), null);
+  assert.equal(computeSitePlacement({ ...ok, along: along(1, V(2000), 500) }), null, '1 段目と同じ縦');
+  assert.equal(computeSitePlacement({ ...ok, centerLine: H(10000), along: along(1, H(2000), 500) }), null, '1 段目が横で B も横');
+  for (const distance of [0, -1, NaN, Infinity, undefined]) {
+    assert.equal(computeSitePlacement({ ...ok, along: along(1, H(2000), distance) }), null, `離れ=${distance}`);
+  }
+  for (const vertex of [0, 3, undefined]) {
+    assert.equal(computeSitePlacement({ ...ok, along: along(vertex, H(2000), 500) }), null, `共有点=${vertex}`);
+  }
+  assert.equal(computeSitePlacement({ ...ok, along: along(1, { centerLineType: CenterLineType.RADIAL, value: 45 }, 500) }), null, '放射');
+  assert.equal(computeSitePlacement({ ...ok, along: along(1, null, 500) }), null, '通り芯なし');
+  assert.equal(computeSitePlacement({ ...ok, along: along(1, H(NaN), 500) }), null, '通り芯の値が NaN');
+});
+
 // ---- 解けない入力 ----
 
 test('【失敗系】解けない入力は null（線分の長さ 0・距離が 0 以下／非有限・通り芯の種別が不明）', () => {

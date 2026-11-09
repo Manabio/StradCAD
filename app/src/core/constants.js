@@ -531,6 +531,16 @@ export const SITE_PLACEMENT_CLEAR_LABEL = '解除';
 export const SITE_PLACEMENT_VERTEX_NONE = '未指定';
 export const SITE_PLACEMENT_VERTEX_SET = '指定済み';
 export const SITE_PLACEMENT_STALE_LABEL = '（失効）';
+/** 配置の 2 段目「位置」（通り芯沿いの位置の拘束）の UI 文言。 */
+export const SITE_PLACEMENT_ALONG_LABEL = '位置';
+export const SITE_PLACEMENT_ALONG_VERTEX_LABEL = '共有点';
+export const SITE_PLACEMENT_ALONG_HINT = '先に 1 段目の通り芯を選ぶ';
+export const SITE_PLACEMENT_ALONG_DISTANCE_LABEL = '離れ';
+export const SITE_PLACEMENT_ALONG_DISTANCE_NUMPAD_LABEL = '共有点から通り芯までの離れ';
+export const SITE_PLACEMENT_ALONG_FLIP_SIDE_LABEL = '側反転（位置）';
+export const SITE_PLACEMENT_ALONG_CLEAR_LABEL = '位置の解除';
+/** 配置の 2 段目の共有点（1 段目の頂点1／頂点2 のどちら）。FBS の int8（NONE＝無し）と UI の切替で共用。メモリ上の along.vertex は V1|V2。 */
+export const SitePlacementAlongVertex = Object.freeze({ NONE: 0, V1: 1, V2: 2 });
 /** 敷地モード（modes/SiteModeState.js・site/sitePlacementView.js）のログの接頭辞。 */
 export const SITE_LOG_TAG = '[site]';
 /** 度→ラジアンの換算係数（回転の写像・図形の角度から使う）。 */

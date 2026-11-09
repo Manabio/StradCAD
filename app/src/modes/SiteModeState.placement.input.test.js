@@ -9,6 +9,7 @@ import { undoManager } from '../undoManager.js';
 import { SITE_PLACEMENT_VERTEX_EPS_MM } from '../core/constants.js';
 import {
   TOAST_PLACEMENT_INCOMPLETE, TOAST_PLACEMENT_DISTANCE_BAD, TOAST_PLACEMENT_UNSOLVABLE,
+  TOAST_PLACEMENT_ALONG_INCOMPLETE, TOAST_PLACEMENT_ALONG_AXIS,
 } from '../transform/sitePlacementEdit.js';
 import { applySiteTransform } from '../site/sitePlacementView.js';
 import { SiteModeState } from './SiteModeState.js';
@@ -32,6 +33,10 @@ async function openPlacement(project = makeProject()) {
   return sm;
 }
 
+const EMPTY_ALONG = { vertex: 1, centerLineId: null, distanceValue: '', sideFlipped: false };
+const gridY0 = sm => sm.placementRoof.gridLines.find(g => g.centerLineType === CenterLineType.HORIZONTAL && g.value === 0);
+const gridY4000 = sm => sm.placementRoof.gridLines.find(g => g.centerLineType === CenterLineType.HORIZONTAL && g.value === 4000);
+
 const corners = sm => sm.placementView.siteCorners.map(c => ({ x: c.x, y: c.y }));
 const gridX0 = sm => sm.placementRoof.gridLines.find(g => g.centerLineType === CenterLineType.VERTICAL && g.value === 0);
 
@@ -50,7 +55,7 @@ function fillInput(sm, { distance = '1000' } = {}) {
 test('setShowPlacement(true): 痕跡が無ければ入力は空。非表示にすると null・距離欄のフォーカスも解く', async () => {
   const sm = await openPlacement();
   assert.deepEqual(sm.placementInput, {
-    v1: null, v2: null, centerLineId: null, distanceValue: '', rotationFlipped: false, sideFlipped: false,
+    v1: null, v2: null, centerLineId: null, distanceValue: '', rotationFlipped: false, sideFlipped: false, along: EMPTY_ALONG,
   });
   sm.setPlacementDistanceFocused(true);
   await sm.setShowPlacement(false);
@@ -71,7 +76,7 @@ test('init: site.placement.input があれば入力を復元する（距離は�
   assert.equal(sm.showPlacement, true);
   assert.deepEqual(sm.placementInput, {
     v1: { x: 10000, y: 0 }, v2: { x: 13000, y: 0 }, centerLineId: 'cl-1', distanceValue: '1250.5',
-    rotationFlipped: true, sideFlipped: false,
+    rotationFlipped: true, sideFlipped: false, along: EMPTY_ALONG,
   });
   assert.notEqual(sm.placementInput.v1, saved.v1, '保存値の座標オブジェクトを共有しない');
   sm.dispose();
@@ -194,7 +199,7 @@ test('commitPlacement: 成功すると site.placement に変換と入力（頂�
   assert.ok(p);
   assert.ok(Number.isFinite(p.rotationDeg) && Number.isFinite(p.tx) && Number.isFinite(p.ty));
   assert.deepEqual(p.input, {
-    v1: a, v2: b, centerLineId: gridX0(sm).id, distance: 1000, rotationFlipped: false, sideFlipped: false,
+    v1: a, v2: b, centerLineId: gridX0(sm).id, distance: 1000, rotationFlipped: false, sideFlipped: false, along: null,
   });
   assert.notEqual(p.input.v1, sm.placementInput.v1, '入力と保存値の座標オブジェクトを共有しない');
   assert.equal(sm.placementView.placed, true, '表示も配置の変換に切り替わる');
@@ -333,7 +338,7 @@ test('clearPlacement: 配置を null へ（undo で戻る）、入力を空に�
   assert.equal(sm.site.placement, null);
   assert.equal(sm.placementView.placed, false, '図芯合わせへ戻る');
   assert.deepEqual(sm.placementInput, {
-    v1: null, v2: null, centerLineId: null, distanceValue: '', rotationFlipped: false, sideFlipped: false,
+    v1: null, v2: null, centerLineId: null, distanceValue: '', rotationFlipped: false, sideFlipped: false, along: EMPTY_ALONG,
   });
   assert.equal(sm.placementDistanceFocused, false);
   undoManager.undo();
@@ -399,7 +404,7 @@ test('undo/redo との同期: 解除→undo で入力が保存値から復元さ
   undoManager.undo();
   assert.ok(sm.site.placement);
   assert.deepEqual(sm.placementInput, {
-    v1: a, v2: b, centerLineId: gridX0(sm).id, distanceValue: '1000', rotationFlipped: false, sideFlipped: false,
+    v1: a, v2: b, centerLineId: gridX0(sm).id, distanceValue: '1000', rotationFlipped: false, sideFlipped: false, along: EMPTY_ALONG,
   });
   assert.equal(sm.placementDistanceFocused, false, '入力が保存値に置き換わるので NumPad の編集状態は閉じる');
   sm.dispose();
@@ -414,4 +419,312 @@ test('undo/redo との同期: 確定→undo で placement は null、入力は�
   assert.deepEqual(sm.placementInput.v1, a, '入力は残る');
   assert.equal(sm.placementInput.distanceValue, '1000');
   sm.dispose();
+});
+
+// ---- 2 段目「位置」（S5） ----
+// 配置: 敷地 (10000,0)-(13000,0)-… を v1=(10000,0)・v2=(13000,0)。1 段目＝縦 X0（x=0）距離 1000 → 回転 90 度・図芯 (3000,2000) が x=0 の東 → 像の x=−1000。
+// 2 段目＝横 Y4000（y=4000）離れ 500・図芯 y=2000 が y=4000 の北 → 共有点の像の y=4500。R(90)·(v2−v1)=(0,3000)。
+
+const imageOf = (sm, p) => applySiteTransform(p, sm.placementView.siteTransform);
+const nearPt = (p, x, y, msg) => { assert.ok(Math.abs(p.x - x) < 1e-6 && Math.abs(p.y - y) < 1e-6, `${msg ?? ''} (${p.x}, ${p.y}) ≠ (${x}, ${y})`); };
+
+/** 位置の入力（共有点・横 Y4000・離れ）を揃える。 */
+function fillAlong(sm, { vertex = 1, distance = '500' } = {}) {
+  sm.setPlacementAlongVertex(vertex);
+  sm.setPlacementAlongCenterLine(gridY4000(sm).id);
+  sm.setPlacementAlongDistanceValue(distance);
+}
+
+test('placementAlongCenterLines: 1 段目が未選択なら空・縦を選ぶと横だけ・横を選ぶと縦だけ（同じ軸は候補に出ない）', async () => {
+  const sm = await openPlacement();
+  assert.deepEqual(sm.placementAlongCenterLines, []);
+  sm.setPlacementCenterLine(gridX0(sm).id);
+  assert.deepEqual(sm.placementAlongCenterLines.map(g => [g.centerLineType, g.value]),
+    [[CenterLineType.HORIZONTAL, 0], [CenterLineType.HORIZONTAL, 4000]]);
+  sm.setPlacementCenterLine(gridY0(sm).id);
+  assert.deepEqual(sm.placementAlongCenterLines.map(g => [g.centerLineType, g.value]),
+    [[CenterLineType.VERTICAL, 0], [CenterLineType.VERTICAL, 6000]]);
+  sm.dispose();
+});
+
+test('placementAlongState: 通り芯も離れも空なら none（共有点・側だけの変更は none）・片方だけなら partial・両方で ready', async () => {
+  const sm = await openPlacement();
+  sm.setPlacementCenterLine(gridX0(sm).id);
+  assert.equal(sm.placementAlongState, 'none');
+  sm.setPlacementAlongVertex(2);
+  sm.togglePlacementAlongSide();
+  assert.equal(sm.placementAlongState, 'none', '共有点・側は数えない');
+  sm.setPlacementAlongDistanceValue('500');
+  assert.equal(sm.placementAlongState, 'partial', '離れだけ');
+  sm.setPlacementAlongCenterLine(gridY4000(sm).id);
+  assert.equal(sm.placementAlongState, 'ready');
+  sm.setPlacementAlongDistanceValue('');
+  assert.equal(sm.placementAlongState, 'partial', '通り芯だけ');
+  sm.setPlacementAlongCenterLine(gridY4000(sm).id); // 解除
+  assert.equal(sm.placementAlongState, 'none');
+  sm.dispose();
+});
+
+test('位置のアクション: 共有点は 1/2 だけ受ける・通り芯は同じ id で解除・離れは文字列をそのまま持つ。配置図を開いていなければ何もしない', async () => {
+  const sm = await openPlacement();
+  sm.setPlacementAlongVertex(2);
+  assert.equal(sm.placementInput.along.vertex, 2);
+  sm.setPlacementAlongVertex(3);
+  sm.setPlacementAlongVertex(0);
+  assert.equal(sm.placementInput.along.vertex, 2, '1/2 以外は無視');
+  const id = gridY4000(sm).id;
+  sm.setPlacementAlongCenterLine(id);
+  assert.equal(sm.placementInput.along.centerLineId, id);
+  sm.setPlacementAlongCenterLine(id);
+  assert.equal(sm.placementInput.along.centerLineId, null);
+  sm.setPlacementAlongDistanceValue('12+3');
+  assert.equal(sm.placementInput.along.distanceValue, '12+3');
+  sm.dispose();
+
+  const closed = new SiteModeState(makeProject().site);
+  closed.setPlacementAlongVertex(2);
+  closed.setPlacementAlongCenterLine('x');
+  closed.setPlacementAlongDistanceValue('5');
+  assert.equal(closed.placementInput, null);
+  assert.deepEqual(closed.togglePlacementAlongSide(), { ok: true, toast: null });
+  assert.deepEqual(closed.clearPlacementAlong(), { ok: true, toast: null });
+  closed.dispose();
+});
+
+test('【失敗系】位置が partial: placementCanCommit は false・commitPlacement は TOAST_PLACEMENT_ALONG_INCOMPLETE で配置も undo も変えない（1 段目が揃っていても）', async () => {
+  const sm = await openPlacement();
+  fillInput(sm);
+  assert.equal(sm.placementCanCommit, true, '位置なしなら確定できる');
+  const before = undoManager.peekUndo();
+  sm.setPlacementAlongDistanceValue('500'); // 通り芯なし
+  assert.equal(sm.placementAlongState, 'partial');
+  assert.equal(sm.placementCanCommit, false);
+  assert.deepEqual(sm.commitPlacement(), { ok: false, toast: TOAST_PLACEMENT_ALONG_INCOMPLETE });
+  sm.setPlacementAlongDistanceValue('');
+  sm.setPlacementAlongCenterLine(gridY4000(sm).id); // 離れなし
+  assert.equal(sm.placementCanCommit, false);
+  assert.deepEqual(sm.commitPlacement(), { ok: false, toast: TOAST_PLACEMENT_ALONG_INCOMPLETE });
+  assert.equal(sm.site.placement, null);
+  assert.equal(undoManager.peekUndo(), before);
+  sm.dispose();
+});
+
+test('commitPlacement: 位置あり（共有点=頂点1）→ 保存される along は {vertex, centerLineId, distance（式を評価した数値）, sideFlipped}。共有点の像の y=4000+500、v2 の像の x は 1 段目の拘束どおり', async () => {
+  const sm = await openPlacement();
+  const [v1, v2] = fillInput(sm, { distance: '1000' });
+  nearPt(v1, 10000, 0); nearPt(v2, 13000, 0);
+  fillAlong(sm, { vertex: 1, distance: '400+100' });
+  assert.equal(sm.placementCanCommit, true);
+  assert.deepEqual(sm.commitPlacement(), { ok: true, toast: null });
+  assert.deepEqual(sm.site.placement.input.along, { vertex: 1, centerLineId: gridY4000(sm).id, distance: 500, sideFlipped: false });
+  assert.equal(sm.site.placement.rotationDeg, 90);
+  nearPt(imageOf(sm, v1), -1000, 4500, '共有点 v1（y=Y4000+500）');
+  nearPt(imageOf(sm, v2), -1000, 7500, 'v2（x=−1000 の拘束が保たれる）');
+  assert.equal(sm.placementInput.along.distanceValue, '500', '保存値から作り直した入力は評価後の文字列');
+  sm.dispose();
+});
+
+test('commitPlacement: 位置あり（共有点=頂点2）→ v2 の像の y=4500・v1 の像の y=1500（R·(v2−v1)=(0,3000) を引く）', async () => {
+  const sm = await openPlacement();
+  const [v1, v2] = fillInput(sm, { distance: '1000' });
+  fillAlong(sm, { vertex: 2, distance: '500' });
+  assert.equal(sm.commitPlacement().ok, true);
+  assert.equal(sm.site.placement.input.along.vertex, 2);
+  nearPt(imageOf(sm, v2), -1000, 4500, '共有点 v2');
+  nearPt(imageOf(sm, v1), -1000, 1500, 'v1');
+  sm.dispose();
+});
+
+test('【失敗系】commitPlacement: 位置の離れが 0 以下・式でないなら TOAST_PLACEMENT_DISTANCE_BAD（canCommit も false）', async () => {
+  const sm = await openPlacement();
+  fillInput(sm);
+  fillAlong(sm);
+  for (const bad of ['0', '-10', '1+', 'abc']) {
+    sm.setPlacementAlongDistanceValue(bad);
+    assert.equal(sm.placementAlongState, 'ready');
+    assert.equal(sm.placementCanCommit, false, `離れ「${bad}」`);
+    assert.deepEqual(sm.commitPlacement(), { ok: false, toast: TOAST_PLACEMENT_DISTANCE_BAD }, `離れ「${bad}」`);
+  }
+  assert.equal(sm.site.placement, null);
+  sm.dispose();
+});
+
+test('【失敗系】commitPlacement: 位置の通り芯が 1 段目と同じ軸なら TOAST_PLACEMENT_ALONG_AXIS・写しに無い id（失効）なら TOAST_PLACEMENT_INCOMPLETE。どちらも保存しない', async () => {
+  const sm = await openPlacement();
+  fillInput(sm); // 1 段目＝縦 X0
+  const x6000 = sm.placementRoof.gridLines.find(g => g.centerLineType === CenterLineType.VERTICAL && g.value === 6000);
+  sm.setPlacementAlongCenterLine(x6000.id); // 一覧では選べないが、アクションは受ける（防御）
+  sm.setPlacementAlongDistanceValue('500');
+  assert.equal(sm.placementAlongCenterLine, null, '候補は直交する軸だけ');
+  assert.equal(sm.placementCanCommit, false);
+  assert.deepEqual(sm.commitPlacement(), { ok: false, toast: TOAST_PLACEMENT_ALONG_AXIS });
+  sm.setPlacementAlongCenterLine(x6000.id); // 解除
+  sm.setPlacementAlongCenterLine('gone');
+  assert.equal(sm.placementAlongStale, true);
+  assert.equal(sm.placementCanCommit, false);
+  assert.deepEqual(sm.commitPlacement(), { ok: false, toast: TOAST_PLACEMENT_INCOMPLETE });
+  assert.equal(sm.site.placement, null);
+  sm.dispose();
+});
+
+test('1 段目の通り芯を縦→横へ変えると、選んでいた横の位置の通り芯は同じ軸になり失効扱い（placementAlongCenterLine=null・stale=true・canCommit=false）', async () => {
+  const sm = await openPlacement();
+  fillInput(sm);
+  fillAlong(sm);
+  assert.equal(sm.placementAlongCenterLine?.value, 4000);
+  assert.equal(sm.placementAlongStale, false);
+  sm.setPlacementCenterLine(gridY0(sm).id); // 1 段目を横 Y0 へ
+  assert.equal(sm.placementAlongCenterLine, null);
+  assert.equal(sm.placementAlongStale, true);
+  assert.equal(sm.placementCanCommit, false);
+  sm.dispose();
+});
+
+test('1 段目の頂点を解除すると、その頂点を共有点にした位置は失効（placementAlongVertexStale・canCommit=false・commit は INCOMPLETE）。位置が none なら失効扱いにしない', async () => {
+  const sm = await openPlacement();
+  const [, v2] = fillInput(sm);
+  assert.equal(sm.placementAlongVertexStale, false);
+  sm.pickPlacementVertex(v2); // 頂点2を解除
+  assert.equal(sm.placementAlongVertexStale, false, '位置が none');
+  assert.equal(sm.placementCanCommit, false, '1 段目の頂点2が無い');
+  sm.pickPlacementVertex(v2); // 戻す
+  fillAlong(sm, { vertex: 2 });
+  assert.equal(sm.placementCanCommit, true);
+  sm.pickPlacementVertex(v2); // 共有点の頂点2を解除
+  assert.equal(sm.placementAlongVertexStale, true);
+  assert.equal(sm.placementCanCommit, false);
+  assert.deepEqual(sm.commitPlacement(), { ok: false, toast: TOAST_PLACEMENT_INCOMPLETE });
+  sm.setPlacementAlongVertex(1); // 共有点を頂点1（set）へ変えれば失効でなくなる（1 段目は頂点2なしで canCommit 不可のまま）
+  assert.equal(sm.placementAlongVertexStale, false);
+  sm.dispose();
+});
+
+test('togglePlacementAlongSide: 配置済みなら即時に再配置（共有点の像 y=4500→3500。undo 1 件）。未配置ならフラグだけ（配置も undo も増えない）', async () => {
+  const sm = await openPlacement();
+  const [v1] = fillInput(sm);
+  fillAlong(sm);
+  const before = undoManager.peekUndo();
+  assert.deepEqual(sm.togglePlacementAlongSide(), { ok: true, toast: null });
+  assert.equal(sm.placementInput.along.sideFlipped, true);
+  assert.equal(sm.site.placement, null);
+  assert.equal(undoManager.peekUndo(), before);
+  sm.togglePlacementAlongSide(); // 戻す
+  assert.equal(sm.commitPlacement().ok, true);
+  nearPt(imageOf(sm, v1), -1000, 4500);
+  const first = sm.site.placement;
+  assert.deepEqual(sm.togglePlacementAlongSide(), { ok: true, toast: null });
+  assert.equal(sm.site.placement.input.along.sideFlipped, true);
+  nearPt(imageOf(sm, v1), -1000, 3500, '側反転で B の手前へ');
+  undoManager.undo();
+  assert.equal(sm.site.placement, first, '側反転の 1 件だけ戻る');
+  sm.dispose();
+});
+
+test('togglePlacementAlongSide: 配置済みでも位置が none なら再配置せずフラグだけ切り替える（{ok:true}・undo 件数不変・site.placement は同じ参照）', async () => {
+  const sm = await openPlacement();
+  fillInput(sm);
+  assert.equal(sm.commitPlacement().ok, true);
+  const placed = sm.site.placement;
+  const before = undoManager.peekUndo();
+  assert.equal(sm.placementAlongState, 'none');
+  assert.deepEqual(sm.togglePlacementAlongSide(), { ok: true, toast: null });
+  assert.equal(sm.placementInput.along.sideFlipped, true);
+  assert.equal(sm.site.placement, placed);
+  assert.equal(undoManager.peekUndo(), before);
+  sm.dispose();
+});
+
+test('clearPlacementAlong: 位置を既定へ戻し、配置済みなら即時に再配置して沿い座標を前回の像へ据え置く（R6）。undo で位置ありの配置へ戻る', async () => {
+  const sm = await openPlacement();
+  const [v1] = fillInput(sm);
+  fillAlong(sm, { vertex: 2 });
+  sm.setPlacementAlongDistanceFocused(true);
+  assert.equal(sm.commitPlacement().ok, true);
+  const withAlong = sm.site.placement;
+  nearPt(imageOf(sm, v1), -1000, 1500, '位置あり（共有点 v2 → v1 の y=1500）');
+  assert.deepEqual(sm.clearPlacementAlong(), { ok: true, toast: null });
+  assert.deepEqual(sm.placementInput.along, EMPTY_ALONG);
+  assert.equal(sm.placementAlongDistanceFocused, false);
+  assert.equal(sm.site.placement.input.along, null, '保存される along も null');
+  assert.notEqual(sm.site.placement, withAlong);
+  nearPt(imageOf(sm, v1), -1000, 1500, 'R6: 沿い座標は直前の像のまま');
+  undoManager.undo();
+  assert.equal(sm.site.placement, withAlong);
+  sm.dispose();
+});
+
+test('clearPlacementAlong: 未配置なら入力を既定に戻すだけ（配置も undo も増えない）。1 段目が不完全な配置済みでも再配置しない', async () => {
+  const sm = await openPlacement();
+  fillInput(sm);
+  fillAlong(sm);
+  const before = undoManager.peekUndo();
+  assert.deepEqual(sm.clearPlacementAlong(), { ok: true, toast: null });
+  assert.deepEqual(sm.placementInput.along, EMPTY_ALONG);
+  assert.equal(sm.site.placement, null);
+  assert.equal(undoManager.peekUndo(), before);
+  fillAlong(sm);
+  sm.commitPlacement();
+  const placed = sm.site.placement;
+  sm.setPlacementDistanceValue('0'); // 1 段目の距離が不正 → canCommit=false
+  assert.deepEqual(sm.clearPlacementAlong(), { ok: true, toast: null });
+  assert.equal(sm.site.placement, placed, '再配置しない');
+  sm.dispose();
+});
+
+test('undo/redo との同期: 位置あり→解除→undo で位置の入力（共有点・通り芯・離れ・側）も保存値から復元され、位置の NumPad は閉じる', async () => {
+  const sm = await openPlacement();
+  fillInput(sm);
+  fillAlong(sm, { vertex: 2, distance: '500' });
+  sm.togglePlacementAlongSide();
+  sm.commitPlacement();
+  sm.clearPlacement();
+  assert.deepEqual(sm.placementInput.along, EMPTY_ALONG);
+  sm.setPlacementAlongDistanceFocused(true);
+  undoManager.undo();
+  assert.deepEqual(sm.placementInput.along, { vertex: 2, centerLineId: gridY4000(sm).id, distanceValue: '500', sideFlipped: true });
+  assert.equal(sm.placementAlongDistanceFocused, false);
+  sm.dispose();
+});
+
+test('init: site.placement.input.along があれば位置の入力を復元する（離れは文字列）。無ければ既定', async () => {
+  const project = makeProject();
+  const input = {
+    v1: { x: 10000, y: 0 }, v2: { x: 13000, y: 0 }, centerLineId: 'cl-1', distance: 1000, rotationFlipped: false, sideFlipped: false,
+    along: { vertex: 2, centerLineId: 'cl-2', distance: 250.5, sideFlipped: true },
+  };
+  project.site.setPlacement({ rotationDeg: 90, tx: 0, ty: 0, input });
+  const sm = new SiteModeState(project.site, project);
+  await sm.init();
+  assert.deepEqual(sm.placementInput.along, { vertex: 2, centerLineId: 'cl-2', distanceValue: '250.5', sideFlipped: true });
+  sm.dispose();
+  project.site.setPlacement({ rotationDeg: 90, tx: 0, ty: 0, input: { ...input, along: null } });
+  const sm2 = new SiteModeState(project.site, project);
+  await sm2.init();
+  assert.deepEqual(sm2.placementInput.along, EMPTY_ALONG);
+  sm2.dispose();
+});
+
+test('NumPad のフォーカスの排他: 距離欄と位置の離れ欄は同時に true にならない（true にした側だけが残り、false は相手に触れない）。非表示・dispose で両方解く', async () => {
+  const sm = await openPlacement();
+  sm.setPlacementDistanceFocused(true);
+  sm.setPlacementAlongDistanceFocused(true);
+  assert.deepEqual([sm.placementDistanceFocused, sm.placementAlongDistanceFocused], [false, true]);
+  sm.setPlacementDistanceFocused(true);
+  assert.deepEqual([sm.placementDistanceFocused, sm.placementAlongDistanceFocused], [true, false]);
+  sm.setPlacementAlongDistanceFocused(true);
+  sm.setPlacementDistanceFocused(false);
+  assert.equal(sm.placementAlongDistanceFocused, true, 'false は相手を触らない');
+  sm.setPlacementAlongDistanceFocused(false);
+  sm.setPlacementDistanceFocused(true);
+  sm.setPlacementAlongDistanceFocused(false);
+  assert.equal(sm.placementDistanceFocused, true, 'false は相手を触らない');
+  sm.setPlacementAlongDistanceFocused(true);
+  await sm.setShowPlacement(false);
+  assert.deepEqual([sm.placementDistanceFocused, sm.placementAlongDistanceFocused], [false, false]);
+  sm.dispose();
+
+  const sm2 = await openPlacement();
+  sm2.setPlacementAlongDistanceFocused(true);
+  sm2.dispose();
+  assert.equal(sm2.placementAlongDistanceFocused, false);
 });

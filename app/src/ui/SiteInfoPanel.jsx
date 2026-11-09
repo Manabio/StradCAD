@@ -8,6 +8,9 @@ import {
   SITE_PLACEMENT_DISTANCE_LABEL, SITE_PLACEMENT_DISTANCE_NUMPAD_LABEL, SITE_PLACEMENT_FLIP_ROTATION_LABEL,
   SITE_PLACEMENT_FLIP_SIDE_LABEL, SITE_PLACEMENT_COMMIT_LABEL, SITE_PLACEMENT_CLEAR_LABEL,
   SITE_PLACEMENT_VERTEX_NONE, SITE_PLACEMENT_VERTEX_SET, SITE_PLACEMENT_STALE_LABEL,
+  SITE_PLACEMENT_ALONG_LABEL, SITE_PLACEMENT_ALONG_VERTEX_LABEL, SITE_PLACEMENT_ALONG_HINT,
+  SITE_PLACEMENT_ALONG_DISTANCE_LABEL, SITE_PLACEMENT_ALONG_DISTANCE_NUMPAD_LABEL,
+  SITE_PLACEMENT_ALONG_FLIP_SIDE_LABEL, SITE_PLACEMENT_ALONG_CLEAR_LABEL, SitePlacementAlongVertex,
 } from '../core/constants.js';
 import { rowDeleteAction, triangleNumber } from '../site/triangleDeletion.js';
 import {
@@ -217,6 +220,29 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
     return () => document.removeEventListener('keydown', onKey);
   }, [distanceEditing, mode, onToast]);
 
+  // 配置図の位置（2 段目）の離れ欄のキーボード（placementAlongDistanceFocused の間だけ。距離欄と同じ作り）
+  const alongDistanceEditing = !!(placing && pin && mode.placementAlongDistanceFocused);
+  useEffect(() => {
+    if (!alongDistanceEditing) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        mode.setPlacementAlongDistanceFocused(false);
+      } else if (e.key === 'Enter') {
+        mode.setPlacementAlongDistanceFocused(false);
+        const r = mode.commitPlacement();
+        if (r?.toast) onToast?.(r.toast);
+      } else {
+        const numpadKey = toNumpadKey(e.key);
+        if (numpadKey != null) {
+          e.preventDefault();
+          mode.setPlacementAlongDistanceValue(applyKeyToNumpadValue(mode.placementInput?.along?.distanceValue ?? '', numpadKey));
+        }
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [alongDistanceEditing, mode, onToast]);
+
   const rectTable = buildRectTableRows(site.rects);
   const outlineRows = buildOutlineRows(site.rects);
   const rectIn     = mode.rectInputState;
@@ -346,6 +372,15 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                 );
               };
               const actionButton = { padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff', cursor: 'pointer', fontSize: 13 };
+              const along = pin.along;
+              const alongLines = mode.placementAlongCenterLines;
+              const alongLineButton = (l) => (
+                <button
+                  key={l.id}
+                  onClick={() => mode.setPlacementAlongCenterLine(l.id)}
+                  style={{ ...segmentButtonStyle(along.centerLineId === l.id), flex: '0 0 auto', padding: '6px 10px' }}
+                >{l.label || String(l.value)}</button>
+              );
               return (
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                   <div style={{ ...PANEL_ROW_TEXT, color: '#64748b' }}>{SITE_PLACEMENT_HINT}</div>
@@ -366,6 +401,39 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                       style={{ ...FIELD_SPAN, outline: mode.placementDistanceFocused ? '2px solid #22c55e' : 'none' }}
                       onClick={() => mode.setPlacementDistanceFocused(true)}
                     >{pin.distanceValue || ' '}</span>
+                  </div>
+                  <div style={{ ...PANEL_ROW_TEXT, fontWeight: 600 }}>{SITE_PLACEMENT_ALONG_LABEL}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', ...PANEL_ROW_TEXT }}>
+                    <span style={PANEL_LABEL}>{SITE_PLACEMENT_ALONG_VERTEX_LABEL}：</span>
+                    {[[SitePlacementAlongVertex.V1, SITE_PLACEMENT_VERTEX1_LABEL], [SitePlacementAlongVertex.V2, SITE_PLACEMENT_VERTEX2_LABEL]].map(([v, label]) => (
+                      <button
+                        key={v}
+                        onClick={() => mode.setPlacementAlongVertex(v)}
+                        style={{ ...segmentButtonStyle(along.vertex === v), flex: '0 0 auto', padding: '6px 10px' }}
+                      >{label}</button>
+                    ))}
+                    {mode.placementAlongVertexStale && SITE_PLACEMENT_STALE_LABEL}
+                  </div>
+                  {mode.placementCenterLine === null ? (
+                    <div style={{ ...PANEL_ROW_TEXT, color: '#64748b' }}>{SITE_PLACEMENT_ALONG_HINT}</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', padding: '0 8px' }}>{alongLines.map(alongLineButton)}</div>
+                  )}
+                  {mode.placementAlongStale && <div style={PANEL_ROW_TEXT}>{SITE_PLACEMENT_CENTER_LINE_LABEL}：{SITE_PLACEMENT_STALE_LABEL}</div>}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, ...PANEL_ROW_TEXT }}>
+                    <span style={PANEL_LABEL}>{SITE_PLACEMENT_ALONG_DISTANCE_LABEL}：</span>
+                    <span
+                      style={{ ...FIELD_SPAN, outline: mode.placementAlongDistanceFocused ? '2px solid #22c55e' : 'none' }}
+                      onClick={() => mode.setPlacementAlongDistanceFocused(true)}
+                    >{along.distanceValue || ' '}</span>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '6px 8px' }}>
+                    {mode.placementAlongState !== 'none' && (
+                      <>
+                        <button style={actionButton} onClick={() => reportPlacement(mode.togglePlacementAlongSide())}>{SITE_PLACEMENT_ALONG_FLIP_SIDE_LABEL}</button>
+                        <button style={actionButton} onClick={() => reportPlacement(mode.clearPlacementAlong())}>{SITE_PLACEMENT_ALONG_CLEAR_LABEL}</button>
+                      </>
+                    )}
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '6px 8px' }}>
                     <button style={actionButton} onClick={() => reportPlacement(mode.togglePlacementRotation())}>{SITE_PLACEMENT_FLIP_ROTATION_LABEL}</button>
@@ -690,6 +758,17 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
           onChange={val => mode.setPlacementDistanceValue(val)}
           onConfirm={() => { mode.setPlacementDistanceFocused(false); reportPlacement(mode.commitPlacement()); }}
           onCancel={() => mode.setPlacementDistanceFocused(false)}
+          hideDisplay
+        />
+      )}
+      {/* NumPad — 配置図の位置（2 段目）の離れ欄の編集中のみ表示 */}
+      {placing && pin && mode.placementAlongDistanceFocused && (
+        <NumPad
+          value={pin.along.distanceValue}
+          label={SITE_PLACEMENT_ALONG_DISTANCE_NUMPAD_LABEL}
+          onChange={val => mode.setPlacementAlongDistanceValue(val)}
+          onConfirm={() => { mode.setPlacementAlongDistanceFocused(false); reportPlacement(mode.commitPlacement()); }}
+          onCancel={() => mode.setPlacementAlongDistanceFocused(false)}
           hideDisplay
         />
       )}

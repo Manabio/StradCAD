@@ -2,6 +2,7 @@ import { runInAction } from 'mobx';
 import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, SiteLineKind, isDefaultRoofSpec, restoreCeilingZones, restoreRoofZones, restorePlacedFigures } from '@core';
 import { encode, decode, countClEccentricities } from './schema/graphFbs.js';
 import { normalizeDetailRefs } from './core/detailRefs.js';
+import { SitePlacementAlongVertex } from './core/constants.js';
 import { kneeDropFrontSideOf } from './core/kneeDropRecord.js';
 import { normalizeBasementStructure } from './structural/structureRules.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
@@ -486,8 +487,15 @@ function copySitePlacement(p) {
       v1: { x: input.v1.x, y: input.v1.y }, v2: { x: input.v2.x, y: input.v2.y },
       centerLineId: input.centerLineId ?? '', distance: input.distance,
       rotationFlipped: !!input.rotationFlipped, sideFlipped: !!input.sideFlipped,
+      along: copyPlacementAlong(input.along),
     },
   };
+}
+
+// 2 段目「位置」の deep copy。無い・共有点が 1/2 でない・通り芯 id が無いものは null（centerLineId は '' に正規化しない）
+function copyPlacementAlong(a) {
+  const ok = a && (a.vertex === SitePlacementAlongVertex.V1 || a.vertex === SitePlacementAlongVertex.V2) && a.centerLineId;
+  return ok ? { vertex: a.vertex, centerLineId: a.centerLineId, distance: a.distance, sideFlipped: !!a.sideFlipped } : null;
 }
 
 export function serializeSite(site) {
