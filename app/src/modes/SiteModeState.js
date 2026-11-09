@@ -4,7 +4,7 @@ import { isSanshaKind, computeLineTriNums } from '../site/lineClassification.js'
 import { rectEdge, pickRectEdgeAnchor, rectNeighbors, deriveRectAttachment } from '../site/siteRectGeometry.js';
 
 export class SiteModeState {
-  subMode        = 'sansha'; // 'sansha' | 'other' | 'placement' | 'rect'
+  subMode        = 'sansha'; // 'sansha' | 'placement' | 'rect'（'other'＝その他タブは 2026-11-09 廃止）
   selectedLineId = null;     // 選択中の SiteLine ID
   siteDrawState  = null;     // { startWorld: {x,y}, endWorld: {x,y} } | null
   // 三斜入力中の数値入力状態

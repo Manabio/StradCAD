@@ -320,7 +320,7 @@ test('commitSiteTapLine: タップ確定でSitePoint×2+SiteLine+history(base)�
   const project = { site };
   const viewport = { worldToScreen: (x, y) => ({ x, y }) };
 
-  const { lineId } = commitSiteTapLine(project, viewport, 'sansha', { x: 0, y: 0 }, { x: 1000, y: 0 });
+  const { lineId } = commitSiteTapLine(project, viewport, { x: 0, y: 0 }, { x: 1000, y: 0 });
 
   assert.equal(site.lines.length, 1);
   assert.equal(site.history.length, 1);
@@ -331,16 +331,6 @@ test('commitSiteTapLine: タップ確定でSitePoint×2+SiteLine+history(base)�
   assert.equal(site.lines.length, 0, 'undoで線分が消える');
   assert.equal(site.points.length, 0, 'undoで端点も消える');
   assert.equal(site.history.length, 0, 'undoでhistoryも巻き戻る');
-});
-
-test('commitSiteTapLine: subMode="other"はSiteLineKind.OTHERとして追加される', () => {
-  const site     = new Site();
-  const project  = { site };
-  const viewport = { worldToScreen: (x, y) => ({ x, y }) };
-
-  const { lineId } = commitSiteTapLine(project, viewport, 'other', { x: 0, y: 0 }, { x: 500, y: 500 });
-
-  assert.equal(site.lineMap.get(lineId).lineKind, SiteLineKind.OTHER);
 });
 
 // ---- deleteSiteTriangle / deleteSiteBaseLine ----
@@ -453,7 +443,7 @@ test('deleteSiteTriangle【失敗系】: 他の三角形の底辺になってい
 
 test('deleteSiteBaseLine: 三角形が無い最初の1本を消して空に戻し、undoで同idの線・点・historyが戻り、redoで再削除', () => {
   const site = new Site();
-  const { lineId } = commitSiteTapLine({ site }, { worldToScreen: (x, y) => ({ x, y }) }, 'sansha', { x: 0, y: 0 }, { x: 1000, y: 0 });
+  const { lineId } = commitSiteTapLine({ site }, { worldToScreen: (x, y) => ({ x, y }) }, { x: 0, y: 0 }, { x: 1000, y: 0 });
   const before = dumpSite(site);
 
   assert.deepEqual(deleteSiteBaseLine(site), { ok: true, toast: null });

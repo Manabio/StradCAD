@@ -80,7 +80,7 @@ test('【不変条件】usePointerInteraction: 仕上げ・天伏の pointerDown
   assert.match(ceiling, /^\s*longPress\.begin\(clientX, clientY\);\s*$/m);
   // 敷地: 描画エリアはサブモードによらず drag.current を立てる（配置サブモードでもパンできる）
   const site = branch(down, "if (appMode === 'site') {");
-  assert.match(site, /^\s*if \(sm === 'sansha' \|\| sm === 'other' \|\| sm === 'rect'\) siteDrawDownRef\.current = \{ x: clientX, y: clientY \};\s*$/m);
+  assert.match(site, /^\s*if \(sm === 'sansha' \|\| sm === 'rect'\) siteDrawDownRef\.current = \{ x: clientX, y: clientY \};\s*$/m);
   assert.match(site, /^\s*drag\.current = \{ lastX: clientX, lastY: clientY \};\s*$/m);
   assert.ok(!/if \(sm === [^)]*\) \{/.test(site), 'drag.current の設定がサブモードの条件の中にある');
 });
@@ -89,7 +89,7 @@ test("【不変条件】usePointerInteraction: pointerUp の rect 分岐は、�
   const src = stripComments(readSrc('./usePointerInteraction.js'));
   const up = src.slice(src.indexOf('const handlePointerUp = '));
   const rectStart = up.indexOf("if (sm === 'rect') {");
-  const sansha = up.indexOf("if (sm !== 'sansha' && sm !== 'other') return;");
+  const sansha = up.indexOf("if (sm !== 'sansha') return;");
   assert.ok(rectStart > 0 && sansha > rectStart, 'rect 分岐は三斜の分岐より前');
   const b = up.slice(rectStart, sansha);
   assert.match(b, /^\s*if \(project\.site\.rects\.length === 0 && !modeRef\.current\.rectInputState\) \{\s*$/m);

@@ -330,7 +330,7 @@ export function usePointerInteraction({
       } else {
         const sm = modeRef.current?.subMode;
         // ドラッグかタップかを pointerUp で判定するために記録（線分を入力するサブモードだけ）
-        if (sm === 'sansha' || sm === 'other' || sm === 'rect') siteDrawDownRef.current = { x: clientX, y: clientY };
+        if (sm === 'sansha' || sm === 'rect') siteDrawDownRef.current = { x: clientX, y: clientY };
         drag.current = { lastX: clientX, lastY: clientY };
       }
       return;
@@ -834,7 +834,7 @@ export function usePointerInteraction({
         }
         return;
       }
-      if (sm !== 'sansha' && sm !== 'other') return;
+      if (sm !== 'sansha') return;
       // 三斜の2点目の確定（siteDrawState あり）は従来どおり target を問わない
       if (hitShape && !modeRef.current.siteDrawState) return;
       const world = viewport.screenToWorld(clientX, clientY);
@@ -853,7 +853,7 @@ export function usePointerInteraction({
         const result = modeRef.current.commitSiteDraw();
         if (result) {
           const { startWorld, endWorld } = result;
-          const { lineId } = commitSiteTapLine(project, viewport, sm, startWorld, endWorld);
+          const { lineId } = commitSiteTapLine(project, viewport, startWorld, endWorld);
           // 三斜入力: 線分aを自動選択し、線分長さ入力欄にフォーカス
           if (sm === 'sansha') {
             modeRef.current.selectLine(lineId);

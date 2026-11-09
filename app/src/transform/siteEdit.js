@@ -227,13 +227,13 @@ export function cycleSiteLineKind(site, lineId) {
 // ---- 敷地線分描画のタップ確定（2点目のタップで SitePoint×2 + SiteLine を追加）----
 // ジェスチャー判定（ドラッグかタップかの判別）・1点目の確定/選択解除・siteDrawState の
 // 更新/クリアは呼び出し側（App.jsx, handlePointerUp）が担う。
-// sm: modeRef.current.subMode（'sansha' | 'other'）
+// 線種は常に無指定（SURVEY）。「その他」タブ（OTHER 線種の入力）は 2026-11-09 に廃止した。
 // undo 登録は本関数内（selectLine 呼び出しより前）で完結する——選択状態（selectedLineId／
 // inputState）は undo の対象に含めていない（contextProvider がモード内選択状態を含まない現状に
 // 依存する。呼び出し側が戻り値の lineId で modeRef.current.selectLine() するのは副作用の外）。
 // @returns {{ lineId: string }}  lineId: 三斜サブモードで直後に選択すべき線分ID
-export function commitSiteTapLine(project, viewport, sm, startWorld, endWorld) {
-  const lineKind = sm === 'other' ? SiteLineKind.OTHER : SiteLineKind.SURVEY;
+export function commitSiteTapLine(project, viewport, startWorld, endWorld) {
+  const lineKind = SiteLineKind.SURVEY;
   let spId, epId, lineId, redPointId, sx, sy, ex, ey;
   runInAction(() => {
     const sp   = project.site.addPoint(startWorld.x, startWorld.y);

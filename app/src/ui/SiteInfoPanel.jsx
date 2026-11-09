@@ -1,7 +1,5 @@
 ﻿import { useEffect, useRef, useState } from 'react';
 import { observer } from 'mobx-react-lite';
-import { SiteLineKind } from '@core';
-import { getSiteLineRedBlue } from '../site/siteGeometry.js';
 import { isSanshaKind, computeLineTriNums, computeOuterLineIds } from '../site/lineClassification.js';
 import { siteLineKindLabel } from '../site/siteLineStyle.js';
 import { rowDeleteAction, triangleNumber } from '../site/triangleDeletion.js';
@@ -15,16 +13,6 @@ import { BottomSheet } from './BottomSheet.jsx';
 import {
   buildRectTableRows, buildOutlineRows, rectInputRowDefs, rectFocusedValue, rectNumpadLabel, rectEnterAction, rectAnchorLabel, rectEditCell, rectEditColumnValue,
 } from '../site/siteRectInput.js';
-
-const KIND_LABEL = {
-  // 三斜の線種表記は siteLineKindLabel（外周=隣地/道路・内側=-）。ここは「その他」タブの種別だけ
-  [SiteLineKind.ROAD_WIDTH]: '道路幅員',
-  [SiteLineKind.OTHER]:      'その他',
-};
-
-function makePointIndex(site) {
-  return new Map([...site.pointMap.keys()].map((id, i) => [id, i + 1]));
-}
 
 // 式文字列を評価して数値を返す。無効なら NaN
 const evalExpr = (s) => evalNumpadExpr(s, { positiveOnly: true });
@@ -76,10 +64,8 @@ const TD_BASE = {
 
 export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, onConfirmLineLen, onConfirmTriangle, onConfirmRect, onCycleLineKind, onToggleRectRoadSide, onStartRectEdit, onDeleteRect, onDeleteSiteRow }) => {
   const subMode   = mode.subMode;
-  const ptIdx     = makePointIndex(site);
 
   const sanshaLines = site.orderedLines.filter(l => isSanshaKind(l.lineKind));
-  const otherLines  = site.orderedLines.filter(l => !isSanshaKind(l.lineKind));
   const lineTriNums = computeLineTriNums(site);
   const outerIds    = computeOuterLineIds(site);
   // 面積行（三斜・長方形タブ共通）。▶ の内訳は三斜だけ（長方形は表自体が求積表＝内訳を兼ねる）
@@ -211,7 +197,6 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
         {[
           { key: 'sansha', label: '三斜' },
           { key: 'rect',   label: '長方形' },
-          { key: 'other',  label: 'その他' },
         ].map(tab => (
           <button
             key={tab.key}
@@ -557,51 +542,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
             </table>
           )}
           </>
-        ) : (
-          // ---- その他タブ ----
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th style={TH_BASE}>番号</th>
-                <th style={{ ...TH_BASE, background: '#fee2e2', color: '#dc2626' }}>赤端点</th>
-                <th style={TH_BASE}>線分長さ</th>
-                <th style={{ ...TH_BASE, background: '#dbeafe', color: '#2563eb' }}>青端点</th>
-                <th style={TH_BASE}>線種</th>
-              </tr>
-            </thead>
-            <tbody>
-              {otherLines.map((line, idx) => {
-                const isSelected = line.id === mode.selectedLineId;
-                const rowBg = isSelected ? '#eff6ff' : undefined;
-                const td    = { ...TD_BASE, background: rowBg };
-                const tdR   = { ...td, background: isSelected ? '#fce7f3' : '#fff1f2' };
-                const tdB   = { ...td, background: isSelected ? '#dbeafe' : '#eff6ff' };
-                const { red, blue } = getSiteLineRedBlue(line);
-
-                return (
-                  <tr
-                    key={line.id}
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => onSelectLine?.(line.id)}
-                  >
-                    <td style={td}>{idx + 1}</td>
-                    <td style={tdR}>P{ptIdx.get(red.id)  ?? '-'}</td>
-                    <td style={td}>{line.length.toFixed(0)}</td>
-                    <td style={tdB}>P{ptIdx.get(blue.id) ?? '-'}</td>
-                    <td style={td}>{KIND_LABEL[line.lineKind]}</td>
-                  </tr>
-                );
-              })}
-              {otherLines.length === 0 && (
-                <tr>
-                  <td colSpan={5} style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
-                    線分がありません
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        )}
+        ) : null /* 'placement' など表を持たないサブモード（「その他」タブは 2026-11-09 廃止） */}
       </div>
 
       {/* NumPad — 三斜タブで行選択中のみ表示 */}
