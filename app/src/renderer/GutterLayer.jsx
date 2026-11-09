@@ -5,6 +5,7 @@ import { CenterLinesLayer, clExtent } from './CenterLinesLayer.jsx';
 import { DIMENSION_LINE_WEIGHT, NUM_FONT_PX, TEXT_GAP_PX } from './dimensionStyle.js';
 import { gutterEdgeCoord, labelCircle, dimensionRow } from './gutterPrimitives.jsx';
 import { INSET } from '../layout.js';
+import { GRID_DIM_COLOR, GRID_DIM_DOT_RADIUS_PX } from '../core/constants.js';
 import {
   gridLineBounds, columnAxisPush, buildColumnAxisAnchors, columnAxisLabelCoords,
   drawingAreaBounds, isCenterDimensionTarget, rowDotIds, buildCenterRowAnchors, isClInDrawingBand,
@@ -62,14 +63,12 @@ const GRID_LINE_INSET   = 4;   // 上・左右: 線のガター内端からの�
 const GRID_NUM_INSET    = 12;  // 上・左右: 数字中心のガター内端からの距離 (px)
 const GRID_B_NUM_INSET  = 8;   // 下: 数字中心のガター内端からの距離 (px)
 const GRID_B_LINE_INSET = 14;  // 下: 線のガター内端からの距離 (px)
-const GRID_DOT_RADIUS_PX = 2;
 const GRID_NUM_FONT_PX   = 11;
 const GRID_NUM_GAP_PX    = 2;   // オーバーフロー時の数値とびだし用ギャップ (px、寸法線の新しい仕様)
-const GRID_LINE_COLOR    = '#475569';
 
 const GridDimensions = observer(({ graph, viewport, width, height }) => {
   if (!graph) return null;
-  const dotR        = GRID_DOT_RADIUS_PX / viewport.scaleX;
+  const dotR        = GRID_DIM_DOT_RADIUS_PX / viewport.scaleX;
   const fontSize    = GRID_NUM_FONT_PX / viewport.scaleX;
   const strokeWidth = viewport.lineWeightsPx[DIMENSION_LINE_WEIGHT];
   const gap         = GRID_NUM_GAP_PX / viewport.scaleX;
@@ -91,11 +90,11 @@ const GridDimensions = observer(({ graph, viewport, width, height }) => {
       const segs2 = segs.map(s => ({ v1: Math.min(s.from.value, s.to.value), v2: Math.max(s.from.value, s.to.value), length: s.length }));
       const { line, labels } = dimensionRow({
         keyBase: d.id, axis: 'X', side: d.side, lineCoord: lineY, normalNumCoord: numY,
-        segments: segs2, color: GRID_LINE_COLOR, strokeWidth, fontSize, gap,
+        segments: segs2, color: GRID_DIM_COLOR, strokeWidth, fontSize, gap,
       });
       const els = [line];
       values.forEach((x, i) => els.push(
-        <Circle key={`${d.id}-dot-${i}`} x={x} y={lineY} radius={dotR} fill={GRID_LINE_COLOR} listening={false} />
+        <Circle key={`${d.id}-dot-${i}`} x={x} y={lineY} radius={dotR} fill={GRID_DIM_COLOR} listening={false} />
       ));
       els.push(...labels);
       xEls.push(...els);
@@ -111,11 +110,11 @@ const GridDimensions = observer(({ graph, viewport, width, height }) => {
       const segs2 = segs.map(s => ({ v1: Math.min(s.from.value, s.to.value), v2: Math.max(s.from.value, s.to.value), length: s.length }));
       const { line, labels } = dimensionRow({
         keyBase: d.id, axis: 'Y', side: d.side, lineCoord: lineX, normalNumCoord: numX,
-        segments: segs2, color: GRID_LINE_COLOR, strokeWidth, fontSize, gap,
+        segments: segs2, color: GRID_DIM_COLOR, strokeWidth, fontSize, gap,
       });
       const els = [line];
       values.forEach((y, i) => els.push(
-        <Circle key={`${d.id}-dot-${i}`} x={lineX} y={y} radius={dotR} fill={GRID_LINE_COLOR} listening={false} />
+        <Circle key={`${d.id}-dot-${i}`} x={lineX} y={y} radius={dotR} fill={GRID_DIM_COLOR} listening={false} />
       ));
       els.push(...labels);
       yEls.push(...els);

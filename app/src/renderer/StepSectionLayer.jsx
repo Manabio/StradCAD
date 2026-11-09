@@ -6,7 +6,7 @@ import { stepSectionProfileRenderProps } from '../finish/stepSectionLineJoin.js'
 
 const STEP_SECTION_STROKE = '#1e293b'; // 断面線の色（StairLayerの階段断面と同系）
 const HATCH_COLOR         = '#94a3b8'; // ハッチ線色
-const DIM_COLOR           = '#475569'; // 寸法線・寸法値色（GutterLayer の GRID_LINE_COLOR と同系）
+const DIM_COLOR           = '#475569'; // 寸法線・寸法値色（GRID_DIM_COLOR（core/constants.js）と同系）
 const DIM_FONT_SIZE_PX    = 11;        // 寸法値のスクリーン基準フォントサイズ(px)
 // 寸法線を寸法値の中心から「文字の下」へずらす量(px)。文字高の半分＋わずかな余白。
 // 断面の向き（高低差が左右/上下どちらでも）に依らず、常に寸法値の直下に寸法線が来る。

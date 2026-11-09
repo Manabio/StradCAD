@@ -518,6 +518,10 @@ export const SITE_LOG_TAG = '[site]';
 export const DEG_TO_RAD = Math.PI / 180;
 /** 屋根伏せ図の線の太さ（viewport.lineWeightsPx のキー。下屋の平面表示と同じ細い実線）。 */
 export const SITE_PLACEMENT_ROOF_LINE_WEIGHT = 'thin';
+/** 通り芯の寸法（ガターの GRID 寸法・配置図の通り芯寸法）の寸法線・寸法値・点の色。 */
+export const GRID_DIM_COLOR = '#475569';
+/** 通り芯の寸法の、寸法線上の点（通り芯との交点）の半径（画面 px）。 */
+export const GRID_DIM_DOT_RADIUS_PX = 2;
 /** 配置図の図芯合わせで、建物側の基準にした情報源（屋根の線の外接矩形／通り芯の範囲／基準なし）。 */
 export const SitePlacementCenterSource = Object.freeze({ ROOF: 'roof', GRID: 'grid', NONE: 'none' });
 /** 立面の入力組み立て（facade/facadeInputs.js）で階を飛ばした理由。 */
