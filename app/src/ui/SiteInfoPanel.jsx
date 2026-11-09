@@ -251,21 +251,24 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                 <thead>
                   <tr>
                     <th style={{ ...TH_BASE, width: 48 }}>番号</th>
-                    <th style={TH_BASE}>計算式</th>
-                    <th style={{ ...TH_BASE, width: 80 }}>面積(㎡)</th>
+                    <th style={{ ...TH_BASE, textAlign: 'right' }}>計算式</th>
+                    <th style={{ ...TH_BASE, width: 16 }} />
+                    <th style={{ ...TH_BASE, width: 80, textAlign: 'right' }}>小計(㎡)</th>
                   </tr>
                 </thead>
                 <tbody>
                   {areaRows.map(({ num, formula, areaM2 }) => (
                     <tr key={num}>
                       <td style={TD_BASE}>{num}</td>
-                      <td style={TD_BASE}>{formula}</td>
-                      <td style={TD_BASE}>{formatAreaM2(areaM2)}</td>
+                      {/* 求積表の書式: 「底辺 × 高さ × 1/2 ＝ 小計」。式は = に寄せて右揃え、小計は等幅数字で桁を揃える */}
+                      <td style={{ ...TD_BASE, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formula}</td>
+                      <td style={{ ...TD_BASE, padding: '4px 2px' }}>=</td>
+                      <td style={{ ...TD_BASE, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatAreaM2(areaM2)}</td>
                     </tr>
                   ))}
                   {areaRows.length === 0 && (
                     <tr>
-                      <td colSpan={3} style={{ ...TD_BASE, color: '#94a3b8', padding: '12px', textAlign: 'center' }}>
+                      <td colSpan={4} style={{ ...TD_BASE, color: '#94a3b8', padding: '12px', textAlign: 'center' }}>
                         {subMode === 'rect' ? '長方形がありません' : '三角形がありません'}
                       </td>
                     </tr>

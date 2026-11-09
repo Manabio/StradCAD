@@ -14,7 +14,8 @@ export function truncateAreaM2(m2) {
 
 /**
  * 三斜の内訳行。番号は三角番号（site.lines 順に底辺を持つ三角形へ 1 始まり。triangleNumber・computeLineTriNums と同じ採番）。
- * formula の高さは切り捨て前の面積から逆算し mm 整数へ丸めて表示する（長方形の w×h も同じ）。
+ * formula は求積表の書式「底辺 × 高さ × 1/2」（長方形は「よこ × たて」）。「=」と小計は表の別セルに出す。
+ * 高さは切り捨て前の面積から逆算し mm 整数へ丸めて表示する（長方形の w×h も同じ）。
  * 入力は mm 整数が常用なので、式を手計算した値と切り捨て後の面積が端数入力で食い違うことは受容（リード裁定 2026-11-09）。areaM2 は切り捨て後。
  * @returns {{ num:number, formula:string, areaM2:number }[]}
  */
@@ -29,7 +30,7 @@ export function buildSanshaAreaRows(site) {
     const base = line.length;
     const area = tri.area;
     const height = base > 1e-6 ? (area * 2_000_000) / base : 0;
-    rows.push({ num, formula: `${base.toFixed(0)} × ${height.toFixed(0)} ÷ 2`, areaM2: truncateAreaM2(area) });
+    rows.push({ num, formula: `${base.toFixed(0)} × ${height.toFixed(0)} × 1/2`, areaM2: truncateAreaM2(area) });
   }
   return rows;
 }

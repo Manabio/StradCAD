@@ -48,7 +48,7 @@ test('buildSanshaAreaRows: 番号は三角番号（triangleNumber・computeLineT
   assert.deepEqual([...triNums.values()].flat().filter((n, i, a) => a.indexOf(n) === i).sort(), [1, 2]);
   assert.equal(rows[0].areaM2, truncateAreaM2(t1.area));
   assert.equal(rows[1].areaM2, truncateAreaM2(t2.area));
-  assert.match(rows[0].formula, /^1000 × \d+ ÷ 2$/);
+  assert.match(rows[0].formula, /^1000 × \d+ × 1\/2$/, '求積表の書式（÷ 2 ではなく × 1/2）');
   assert.ok(rows[0].areaM2 <= t1.area && t1.area - rows[0].areaM2 < 0.01, '切り捨ては 0.01 ㎡未満の差');
 });
 
