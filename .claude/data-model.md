@@ -325,6 +325,8 @@ id の振り直し・付け替えは、参照の種類（壁・開口・他の�
 - 外周を外れたら無指定へ格下げする。実行点は位相が変わる操作だけ（三斜＝`confirmSiteTriangle`、四角＝`commitAttachedRect`）。格下げは同じ undo エントリに含め、undo で指定が戻る。
 - 新しい辺（三斜の赤辺・青辺）の初期線種は常に無指定。道路指定は外周になった線へユーザーが明示的に行う。
 - 描画規則の唯一の供給源は`site/siteLineStyle.js`（三斜の`SiteLinesLayer`・四角の`SiteRectsLayer`）。値を各レイヤーへ書かない。受容した限界: 一点鎖線は`figureLineJoin`の角閉じの対象外で、隙間は角の丸が覆う。
+- 線・辺の当たり幅は倍率・線長に依らず画面 12px 固定（`lineHitWidth`）。`strokeScaleEnabled=false` の Line では Konva が hitStrokeWidth を画面 px として扱うため、実寸に直して渡すと当たりが 1/倍率 に膨らむ（2026-11-09 に実測で判明）。線長で狭める案は、Konva が最前面1本を選ぶので誤選択防止の効果が薄く、短い線が選べなくなる副作用の方が大きい。
+- 選択中の線・辺をもう一度タップすると解除（`toggleLineSelection`・`toggleRectEdge`）。ステージの pointerUp の「空白タップ＝解除」は、敷地の当たり図形（name `SITE_HIT_NODE_NAME`）を押していないときだけ行う——先に解除すると図形の onClick が同じ線を選び直すため。ステージとの比較で空白を判定しない理由は、平面図一式の listening な図形（建具記号など）が敷地モードでも描かれるから。
 
 ## 近傍検出の優先順位は「画面距離が最も近い1件」で解決する
 交点・CL・開口・壁の近傍判定（8px圏内）は固定優先順位にすると常に同じ種別が勝つ（部屋の壁は軸CLから近いため）。`snap.js resolvePointerTargets`が3者を独立に検出した上で画面距離が最も近い1件を選び残りをnullにし、その結果を`interaction/usePointerInteraction.js`が`detectContext`へ渡す。交点のみ常に最優先。
