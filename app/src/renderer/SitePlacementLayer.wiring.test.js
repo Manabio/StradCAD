@@ -38,8 +38,30 @@ test('SitePlacementLayer: 屋根線は PLAN_SOLIDS_COLOR・細線、敷地は SI
   assert.match(layer, /radius=\{markR\}/);
   assert.match(layer, /const markR = SITE_CORNER_MARK_RADIUS_PX \/ viewport\.scaleX;/);
   const shapes = count(layer, /<(Line|Circle|Group)\b/g);
-  assert.equal(shapes, 4, 'Line×2・Circle・Group');
+  assert.equal(shapes, 6, '通り芯の Line・屋根の Line・敷地の Line・寸法線上の点の Circle・角の Circle・Group');
   assert.equal(count(layer, /listening=\{false\}/g), shapes, '全図形が listening={false}');
+});
+
+test('SitePlacementLayer: 通り芯（線・寸法・丸ラベル）は layoutSitePlacementGrid の結果を敷地の Group の外に描く', () => {
+  assert.match(layer, /const g = layoutSitePlacementGrid\(view\.grid, viewport\.scaleX\);/);
+  const groupAt = layer.indexOf('<Group ');
+  const groupEndAt = layer.indexOf('</Group>');
+  const lineAt = layer.indexOf('g.lines.map');
+  const rowsAt = layer.indexOf('g.rows.flatMap');
+  const labelsAt = layer.indexOf('g.labels.flatMap');
+  assert.ok(lineAt > 0 && rowsAt > 0 && labelsAt > 0, 'g.lines・g.rows・g.labels を描く');
+  assert.ok(lineAt < groupAt, '通り芯の線は Group より前（外）');
+  assert.ok(rowsAt > groupEndAt && labelsAt > groupEndAt, '寸法行・丸ラベルは Group の後（外）');
+  assert.ok(lineAt < layer.indexOf('view.roofLines.map'), '通り芯の線は屋根線より下（先に描く）');
+  assert.ok(rowsAt < labelsAt, '丸ラベルは寸法行より上（後に描く）');
+  assert.match(layer, /dimensionRow\(\{/);
+  assert.match(layer, /g\.labels\.flatMap\(l => labelCircle\(l\.key, l\.x, l\.y, l\.label, viewport\)\)/);
+  assert.match(layer, /stroke=\{originColor\(SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY\)\}/);
+  assert.match(layer, /dash=\{gridLineDash\(gridLineWidth\)\}/);
+  assert.match(layer, /const gridLineWidth = viewport\.lineWeightsPx\[SITE_PLACEMENT_GRID_LINE_WEIGHT\];/);
+  assert.match(layer, /color: GRID_DIM_COLOR, strokeWidth: viewport\.lineWeightsPx\[DIMENSION_LINE_WEIGHT\]/);
+  assert.match(layer, /fontSize: NUM_FONT_PX \/ viewport\.scaleX, gap: TEXT_GAP_PX \/ viewport\.scaleX/);
+  assert.match(layer, /const dimDotR = GRID_DIM_DOT_RADIUS_PX \/ viewport\.scaleX;/);
 });
 
 test('SceneLayers: 配置図の表示中（sitePlacementShown）は敷地の3レイヤと自階の平面図一式を出さず、SitePlacementLayer を出す', () => {

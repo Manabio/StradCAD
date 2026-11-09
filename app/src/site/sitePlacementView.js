@@ -14,6 +14,7 @@ import { SitePlacementCenterSource, SITE_LOG_TAG, DEG_TO_RAD } from '../core/con
 import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { computeOuterLineIds, computeOuterCornerPoints } from './lineClassification.js';
 import { computeOutlinePieces, computeOutlineCorners } from './siteRectGeometry.js';
+import { composeSitePlacementGrid } from './sitePlacementGrid.js';
 
 // Konva の key の組み立て部品。種別ごとの id 空間の衝突を避けるためだけに付け、比較には使わない。
 const SITE_PLACEMENT_KEY_PREFIX = Object.freeze({ LEAN: 'l', RECT: 'r', POINT: 'p', CORNER: 'c' });
@@ -97,11 +98,12 @@ const centerOf = b => (b ? { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 
  * 配置図の描画プリミティブ一式。
  * @param {object} p
  * @param {object} p.site 敷地（lines・points・rects）
- * @param {{floors: Array<{planeId:string, regions:object[]}>, gridBounds: {minX,minY,maxX,maxY}|null, readFailed:boolean}|null} p.roof
+ * @param {{floors: Array<{planeId:string, regions:object[]}>, gridBounds: {minX,minY,maxX,maxY}|null, gridLines?: object[], readFailed:boolean}|null} p.roof
  * @returns {{
  *   roofLines: Array<{key:string, points:number[], closed:boolean}>, roofFailedCount: number, roofEmpty: boolean,
  *   siteSegments: Array<{key:string, points:number[]}>, siteCorners: Array<{key:string, x:number, y:number}>,
  *   buildingCenter: {x:number,y:number}|null, centerSource: string, siteCenter: {x:number,y:number}|null,
+ *   grid: ReturnType<typeof composeSitePlacementGrid>,
  *   siteTransform: {dx:number, dy:number, rotationDeg:number, pivotX:number, pivotY:number},
  * }}
  */
@@ -123,6 +125,8 @@ export function composeSitePlacementView({ site, roof }) {
     roofLines, roofFailedCount, roofEmpty: roofLines.length === 0,
     siteSegments, siteCorners,
     buildingCenter, centerSource, siteCenter,
+    // 通り芯の線・丸ラベル・寸法（図芯の基準 gridBounds とは別の入力。ここから図芯は求めない）
+    grid: composeSitePlacementGrid({ gridLines: roof?.gridLines ?? [], roofBounds }),
     siteTransform: {
       dx: aligned ? buildingCenter.x - siteCenter.x : 0,
       dy: aligned ? buildingCenter.y - siteCenter.y : 0,

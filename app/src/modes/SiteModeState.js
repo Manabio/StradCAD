@@ -8,6 +8,7 @@ import { gridBoundsMm } from '../initialView.js';
 import { isSanshaKind, computeLineTriNums } from '../site/lineClassification.js';
 import { rectEdge, pickRectEdgeAnchor, rectNeighbors, deriveRectAttachment } from '../site/siteRectGeometry.js';
 import { composeSitePlacementView } from '../site/sitePlacementView.js';
+import { gridLineSnapshot } from '../site/sitePlacementGrid.js';
 import { leanToPlanRegions, topRoofPlanRegions } from '../structural/roofFramingRegions.js';
 import { collectAdoptedFloors } from './adoptedFloors.js';
 
@@ -36,7 +37,7 @@ export class SiteModeState {
   // 世代 _placementGen: 読込みの await 中に 非表示→再表示 や dispose が起きたとき、古い結果を捨てるため。
   showPlacement    = false;
   placementLoading = false;
-  placementRoof    = null; // { floors: [{planeId, regions}], gridBounds, readFailed } | null
+  placementRoof    = null; // { floors: [{planeId, regions}], gridBounds, gridLines, readFailed } | null
 
   constructor(site, project = null) {
     this.site = site;
@@ -163,11 +164,12 @@ export class SiteModeState {
       roof = {
         floors: regionFloors,
         gridBounds: project?.structGraph ? gridBoundsMm(project.structGraph) : null,
+        gridLines: gridLineSnapshot(project?.structGraph),
         readFailed: readFailed || regionFailed,
       };
     } catch (err) {
       console.error(`${SITE_LOG_TAG} 配置図の読込みに失敗:`, err);
-      roof = { floors: [], gridBounds: null, readFailed: true };
+      roof = { floors: [], gridBounds: null, gridLines: [], readFailed: true };
     }
     if (this._disposed || gen !== this._placementGen || !this.showPlacement) return;
     runInAction(() => {

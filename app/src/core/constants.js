@@ -522,6 +522,16 @@ export const SITE_PLACEMENT_ROOF_LINE_WEIGHT = 'thin';
 export const GRID_DIM_COLOR = '#475569';
 /** 通り芯の寸法の、寸法線上の点（通り芯との交点）の半径（画面 px）。 */
 export const GRID_DIM_DOT_RADIUS_PX = 2;
+/** 配置図の通り芯の寸法: 通り芯の枠の端から1段目の寸法線までの離れ（画面 px）。 */
+export const SITE_PLACEMENT_GRID_DIM_OFFSET_PX = 16;
+/** 配置図の通り芯の寸法: 1段目から2段目（全長）の寸法線までの離れ（画面 px。数値帯 13＋余白）。 */
+export const SITE_PLACEMENT_GRID_DIM_ROW_GAP_PX = 24;
+/** 配置図の通り芯の寸法で、全長の段を足す最小の通り芯本数（2本では間隔＝全長）。 */
+export const SITE_PLACEMENT_GRID_TOTAL_MIN_LINES = 3;
+/** 配置図の通り芯の線の由来色キー（canvasStyle.js の originColor へ渡す。平面の通り芯と同じ）。 */
+export const SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY = 'grid';
+/** 配置図の通り芯の線の太さ（viewport.lineWeightsPx のキー。平面の通り芯と同じ細線）。 */
+export const SITE_PLACEMENT_GRID_LINE_WEIGHT = 'thin';
 /** 配置図の図芯合わせで、建物側の基準にした情報源（屋根の線の外接矩形／通り芯の範囲／基準なし）。 */
 export const SitePlacementCenterSource = Object.freeze({ ROOF: 'roof', GRID: 'grid', NONE: 'none' });
 /** 立面の入力組み立て（facade/facadeInputs.js）で階を飛ばした理由。 */

@@ -275,6 +275,58 @@ test('【失敗系】通知文の優先: 他の階を全部読めず自階に屋
   } finally { console.warn = warn; }
 });
 
+test('通り芯の写し: placementRoof.gridLines は本数・昇順・ラベル付き（中心線は含めない）で、配置図の grid に線と寸法が出る。図芯の基準は据え置き', async () => {
+  const project = makeProject(3);
+  seedSite(project);
+  const st = { labeled: true, discipline: Discipline.STRUCT };
+  for (const v of [12000, 9000, 15000]) project.structGraph.addCenterLine(CenterLineType.VERTICAL, v, st); // 昇順でない順
+  for (const v of [-2000, 1000]) project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, v, st);
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 13000, { labeled: false, discipline: Discipline.ARCH }); // 中心線は通り芯でない
+  await withPeek(async plane => project.graphMap.get(plane.id), async () => {
+    const sm = new SiteModeState(project.site, project);
+    await sm.setShowPlacement(true);
+    const lines = sm.placementRoof.gridLines;
+    assert.deepEqual(lines.map(l => [l.centerLineType, l.value, l.label]), [
+      [CenterLineType.VERTICAL, 9000, 'X1'], [CenterLineType.VERTICAL, 12000, 'X2'], [CenterLineType.VERTICAL, 15000, 'X3'],
+      [CenterLineType.HORIZONTAL, -2000, 'Y2'], [CenterLineType.HORIZONTAL, 1000, 'Y1'], // Y は下（y 大）から Y1
+    ]);
+    const view = sm.placementView;
+    assert.equal(view.grid.lines.length, 5);
+    assert.equal(view.grid.rows.length, 3, 'X=間隔＋全長・Y=間隔');
+    assert.equal(view.centerSource, SitePlacementCenterSource.ROOF);
+    sm.dispose();
+  });
+});
+
+test('【失敗系】通り芯の写し: project 無しは gridLines が [] で reject せず、配置図の grid は空', async () => {
+  const project = makeProject(1);
+  seedSite(project);
+  const sm = new SiteModeState(project.site); // project 引数なし
+  await sm.setShowPlacement(true);
+  assert.deepEqual(sm.placementRoof.gridLines, []);
+  assert.deepEqual(sm.placementView.grid.lines, []);
+  assert.deepEqual(sm.placementView.grid.rows, []);
+  sm.dispose();
+});
+
+test('【失敗系】通り芯の写し: 読込み全体が例外（catch 経路）でも reject せず、gridLines は [] で readFailed', async () => {
+  const project = makeProject(2);
+  seedSite(project);
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 9000, { labeled: true, discipline: Discipline.STRUCT });
+  const broken = new Proxy(project, { get(t, k) { if (k === 'planes') throw new Error('planes boom'); return Reflect.get(t, k, t); } });
+  const err = console.error;
+  console.error = () => {};
+  try {
+    const sm = new SiteModeState(project.site, broken);
+    await sm.setShowPlacement(true); // reject しない
+    assert.equal(sm.placementRoof.readFailed, true);
+    assert.deepEqual(sm.placementRoof.gridLines, []);
+    assert.deepEqual(sm.placementView.grid.lines, []);
+    assert.equal(sm.placementMessage, SITE_PLACEMENT_READ_ERROR_MESSAGE);
+    sm.dispose();
+  } finally { console.error = err; }
+});
+
 test('最上階の主屋根の線の外接矩形の中心へ敷地の図芯を合わせる（原点から離した建物・dx,dy を数値で検証）', async () => {
   const project = new Project('proj', 'test');
   const { graph } = project.addPlane(0, '1階', 'p1');
