@@ -4,6 +4,7 @@ import { SiteLineKind } from '@core';
 import { getSiteLineRedBlue } from '../site/siteGeometry.js';
 import { isSanshaKind, computeLineTriNums, computeOuterLineIds } from '../site/lineClassification.js';
 import { siteLineKindLabel } from '../site/siteLineStyle.js';
+import { rowDeleteAction, triangleNumber } from '../site/triangleDeletion.js';
 import { NumPad } from './NumPad.jsx';
 import { applyKeyToNumpadValue, toNumpadKey, evalNumpadExpr } from './numpadUtils.js';
 import { ModePanel } from './ModePanel.jsx';
@@ -52,7 +53,13 @@ const TH_BASE = {
   fontWeight: 600,
   fontSize: 11,
 };
-// 表内の小さなアイコンボタン（三斜の ✎・長方形の 🗑）
+// タップで編集を始める数値フィールド（三斜の線分長さ・長方形のよこ/たて）
+const FIELD_SPAN = {
+  display: 'inline-block', minWidth: 32,
+  border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff',
+  padding: '2px 6px', cursor: 'pointer',
+};
+// 表内の小さなアイコンボタン（三斜・長方形の 🗑）
 const ICON_BTN = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   width: 22, height: 22, padding: 0,
@@ -81,7 +88,7 @@ const TD_BASE = {
   whiteSpace: 'nowrap',
 };
 
-export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, onConfirmLineLen, onConfirmTriangle, onConfirmRect, onCycleLineKind, onToggleRectRoadSide, onStartRectEdit, onDeleteRect }) => {
+export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, onConfirmLineLen, onConfirmTriangle, onConfirmRect, onCycleLineKind, onToggleRectRoadSide, onStartRectEdit, onDeleteRect, onDeleteSiteRow }) => {
   const subMode   = mode.subMode;
   const ptIdx     = makePointIndex(site);
 
@@ -134,7 +141,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
           onConfirmTriangle?.();
         }
       } else if (e.key === 'Tab') {
-        // バッヂ1個（線分b）の線分を巡回。編集ボタン経由のロック解除中は対象外
+        // バッヂ1個（線分b）の線分を巡回。長さセルのタップによるロック解除中は対象外
         if (mode.inputState.lenEditing) return;
         const candidates = sanshaLines.filter(l => (lineTriNums.get(l.id)?.length ?? 0) === 1);
         if (candidates.length === 0) return;
@@ -244,9 +251,9 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
               <tr>
                 <th style={{ ...TH_BASE, width: 32 }}>番号</th>
                 <th style={TH_BASE}>線分長さ</th>
-                <th style={{ ...TH_BASE, width: 40 }}>編集</th>
                 <th style={TH_BASE}>線種</th>
                 <th style={{ ...TH_BASE, width: 56 }}>三角番号</th>
+                <th style={{ ...TH_BASE, width: 40 }} title="削除">{TRASH_ICON}</th>
               </tr>
             </thead>
             <tbody>
@@ -285,10 +292,20 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                   onCycleLineKind?.(line.id);
                 };
 
-                // 編集ボタン：長さフィールドのロックを解除
+                // 長さセルのタップ：長さフィールドのロックを解除
                 const handleEditClick = e => {
                   e.stopPropagation();
                   mode.startLenEdit(line.id);
+                };
+
+                // 削除（端の三角形の赤辺・青辺の行、または三角形が無いときの最初の1本だけ）
+                const delAction = rowDeleteAction(site, line.id);
+                const delTitle = delAction?.type === 'triangle'
+                  ? `三角形 ${triangleNumber(site, delAction.triangleId)} を削除`
+                  : '線分を削除';
+                const handleDeleteClick = e => {
+                  e.stopPropagation();
+                  onDeleteSiteRow?.(line.id);
                 };
 
                 const rows = [
@@ -299,18 +316,13 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                     style={{ cursor: 'pointer' }}
                   >
                     <td style={{ ...td, fontWeight: 600 }}>{idx + 1}</td>
-                    <td style={tdLen} ref={lenFocused ? lenFieldRef : undefined}>{lenDisplay}</td>
-                    <td style={td}>
-                      {triNums.length > 0 && !lenEditing && (
-                        <button
-                          onClick={handleEditClick}
-                          style={ICON_BTN}
-                          title="長さを編集"
-                        >
-                          ✎
-                        </button>
-                      )}
-                    </td>
+                    {triNums.length > 0 && !lenEditing && !lenFocused ? (
+                      <td style={td}>
+                        <span onClick={handleEditClick} style={FIELD_SPAN} title="長さを編集">{lenDisplay}</span>
+                      </td>
+                    ) : (
+                      <td style={tdLen} ref={lenFocused ? lenFieldRef : undefined}>{lenDisplay}</td>
+                    )}
                     <td style={tdKind} onClick={isOuter ? handleKindClick : undefined}>{kindLabel}</td>
                     <td style={td}>
                       {triNums.length === 0 ? '-' : triNums.map(n => (
@@ -321,6 +333,11 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                           fontSize: 9, lineHeight: 1,
                         }}>{n}</span>
                       ))}
+                    </td>
+                    <td style={td}>
+                      {delAction && (
+                        <button onClick={handleDeleteClick} style={ICON_BTN} title={delTitle}>{TRASH_ICON}</button>
+                      )}
                     </td>
                   </tr>,
                 ];
@@ -355,11 +372,11 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                           outline:    focused ? `2px solid ${label === '赤' ? '#ef4444' : '#3b82f6'}` : 'none',
                           cursor:     'pointer',
                         }}>{inp[lenKey] || ' '}</td>
-                        <td style={TD_BASE} />
                         <td style={tdKind} onClick={e => { e.stopPropagation(); mode.cycleEdgeKind(color); }}>
                           {siteLineKindLabel(true, inp[kindKey])}
                         </td>
                         <td style={TD_BASE}>{badge(label === '赤' ? '#ef4444' : '#3b82f6')}</td>
+                        <td style={TD_BASE} />
                       </tr>
                     );
                   };
@@ -448,11 +465,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                       <td style={td}>
                         <span
                           onClick={() => onStartRectEdit?.(row.id, col)}
-                          style={{
-                            display: 'inline-block', minWidth: 32,
-                            border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff',
-                            padding: '2px 6px', cursor: 'pointer',
-                          }}
+                          style={FIELD_SPAN}
                         >{value}</span>
                       </td>
                     );

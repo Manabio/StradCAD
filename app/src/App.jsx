@@ -85,7 +85,7 @@ import { SaveFileDialog } from './ui/SaveFileDialog.jsx';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
 import { CeilingPanel }        from './ceiling/CeilingPanel.jsx';
 import {
-  confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind,
+  confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind, deleteSiteRow,
 } from './transform/siteEdit.js';
 import { confirmSiteRect } from './transform/siteRectConfirm.js';
 import { toggleRectRoadSide, deleteRect } from './transform/siteRectEdit.js';
@@ -2199,6 +2199,12 @@ const App = observer(() => {
     if (toast) setToast({ msg: toast, key: Date.now() });
   }
 
+  // ---- 三斜表の行の削除（端の三角形、または三角形が無いときの最初の1本。実処理は transform/siteEdit.js） ----
+  function handleDeleteSiteRow(lineId) {
+    const { toast } = deleteSiteRow(project.site, modeRef.current, lineId);
+    if (toast) setToast({ msg: toast, key: Date.now() });
+  }
+
   // カタログ保守パネルは使うときだけ動的importする（モードと同じ考え方。.claude/mode-system.md）。
   // React.lazy+SuspenseはErrorBoundary無しではチャンク読込み失敗時にroot全体が白画面になるため
   // 不採用——EccentricityDialog.jsx等と同じ「import().then().catch()」型ではなくasync/awaitで揃える。
@@ -3213,6 +3219,7 @@ const App = observer(() => {
           onToggleRectRoadSide={handleToggleRectRoadSide}
           onStartRectEdit={handleStartRectEdit}
           onDeleteRect={handleDeleteRect}
+          onDeleteSiteRow={handleDeleteSiteRow}
         />
       )}
 

@@ -6,7 +6,11 @@ import { Site, SiteLineKind } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import {
   editSiteLineLength, confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind, commitSiteTapLine,
+  deleteSiteTriangle, deleteSiteBaseLine, deleteSiteRow, TOAST_TRI_DELETE_LOCKED, TOAST_BASE_DELETE_LOCKED,
 } from './siteEdit.js';
+import { SiteModeState } from '../modes/SiteModeState.js';
+import { cloneHistory, computePendingQueue } from './siteHistory.js';
+import { computeLineTriNums, computeOuterLineIds } from '../site/lineClassification.js';
 
 const evalExpr = (s) => Number(s);
 
@@ -337,4 +341,143 @@ test('commitSiteTapLine: subMode="other"はSiteLineKind.OTHERとして追加さ�
   const { lineId } = commitSiteTapLine(project, viewport, 'other', { x: 0, y: 0 }, { x: 500, y: 500 });
 
   assert.equal(site.lineMap.get(lineId).lineKind, SiteLineKind.OTHER);
+});
+
+// ---- deleteSiteTriangle / deleteSiteBaseLine ----
+// base(A-B) → tri1（頂点C）→ tri2（底辺＝tri1 の赤辺。頂点D）→ tri3（底辺＝tri1 の青辺。頂点E）。
+// tri2 は history の中間（index 2）・lineMap の中間にある端の三角形。
+function buildThree() {
+  const site = new Site();
+  const A = site.addPoint(0, 0), B = site.addPoint(1000, 0);
+  const base = site.addLine(A, B, SiteLineKind.SURVEY);
+  site.history.push({ type: 'base', lineId: base.id, length: 1000 });
+  const addTri = (baseLine, p, q, apex, side) => {
+    const ap = site.addPoint(apex.x, apex.y);
+    const t = site.addTriangle(baseLine, ap, SiteLineKind.SURVEY);
+    const red = site.addLine(p, ap, SiteLineKind.SURVEY);
+    const blue = site.addLine(q, ap, SiteLineKind.SURVEY);
+    site.history.push({
+      type: 'triangle', baseLineId: baseLine.id,
+      redLineId: red.id, redLen: red.length, redKind: SiteLineKind.SURVEY,
+      blueLineId: blue.id, blueLen: blue.length, blueKind: SiteLineKind.SURVEY,
+      triangleId: t.id, triangleLineKind: SiteLineKind.SURVEY, side,
+    });
+    return { t, red, blue, ap };
+  };
+  const t1 = addTri(base, A, B, { x: 640, y: 480 }, 1);
+  const t2 = addTri(t1.red, A, t1.ap, { x: -200, y: 600 }, -1);
+  const t3 = addTri(t1.blue, B, t1.ap, { x: 1300, y: 700 }, 1);
+  return { site, base, t1, t2, t3 };
+}
+
+function dumpSite(site) {
+  return {
+    lines: site.lines.map(l => [l.id, l.startPoint.id, l.endPoint.id, l.lineKind, l.redPointId]),
+    lineOrder: [...site.lineOrder],
+    history: cloneHistory(site.history),
+    triNums: [...computeLineTriNums(site)].map(([k, v]) => [k, [...v]]),
+    pending: computePendingQueue(site),
+    // triangleMap・pointMap の並びは三角番号にも表の順にも使われない（底辺の lineMap 順・lineOrder が使われる）ので id 順で比べる
+    tris: site.triangles.map(t => [t.id, t.baseLine.id, t.apexPoint.id, t.apexPoint.x, t.apexPoint.y, t.lineKind]).sort((a, b) => (a[0] < b[0] ? -1 : 1)),
+    points: site.points.map(p => p.id).sort(),
+  };
+}
+
+test('deleteSiteTriangle: 中間の端の三角形を消し、undoで lineMap順・lineOrder・history・三角番号・候補キューまで完全復元、redoで再削除', () => {
+  const { site, t1, t2 } = buildThree();
+  const before = dumpSite(site);
+
+  const result = deleteSiteTriangle(site, t2.t.id);
+  assert.deepEqual(result, { ok: true, toast: null });
+  assert.equal(site.triangleMap.has(t2.t.id), false);
+  assert.equal(site.lineMap.has(t2.red.id) || site.lineMap.has(t2.blue.id), false);
+  assert.equal(site.pointMap.has(t2.ap.id), false);
+  assert.equal(site.history.length, 3, 'base + tri1 + tri3');
+  assert.equal(site.lineMap.has(t1.red.id), true, '底辺だった線は残る');
+  const after = dumpSite(site);
+
+  undoManager.undo();
+  assert.deepEqual(dumpSite(site), before);
+
+  undoManager.redo();
+  assert.deepEqual(dumpSite(site), after);
+
+  undoManager.undo();
+  assert.deepEqual(dumpSite(site), before, '再undoでも完全復元');
+});
+
+test('deleteSiteTriangle: 底辺の線種は触らない（削除で外周に戻っても道路指定を自動復活しない）', () => {
+  const { site, t1, t2 } = buildThree();
+  t1.red.lineKind = SiteLineKind.SURVEY; // tri2 の底辺（内側＝格下げ済み）
+  deleteSiteTriangle(site, t2.t.id);
+  assert.ok(computeOuterLineIds(site).has(t1.red.id), '削除後は外周へ戻っている');
+  assert.equal(t1.red.lineKind, SiteLineKind.SURVEY);
+});
+
+test('deleteSiteRow: 削除でバッヂが減った選択線は入力行が作り直され（red フォーカス）、選択は同じ線のまま。ロック時は toast', () => {
+  const { site, t1, t2 } = buildThree();
+  const mode = new SiteModeState(site);
+  mode.selectLine(t1.red.id);
+  assert.equal(mode.inputState, null, 'バッヂ2の線は選択のみ');
+
+  assert.deepEqual(deleteSiteRow(site, mode, t2.red.id), { toast: null });
+  assert.equal(mode.selectedLineId, t1.red.id);
+  assert.equal(mode.inputState.focusedCell, 'red');
+
+  // t1 は tri3 の底辺（青辺）が残るのでロック対象ではないが、赤辺の行は削除不可（null）→ toast なし・変化なし
+  assert.deepEqual(deleteSiteRow(site, mode, t1.red.id), { toast: null });
+  mode.dispose();
+});
+
+test('deleteSiteRow【失敗系】: 削除不可の行（三角形ありの最初の1本・端でない三角形の辺）は何も変えず toast も出さない（UI はボタンを出さない）', () => {
+  const { site, base, t1 } = buildThree();
+  const mode = new SiteModeState(site);
+  const top = undoManager.peekUndo();
+  assert.deepEqual(deleteSiteRow(site, mode, base.id), { toast: null });
+  assert.deepEqual(deleteSiteRow(site, mode, t1.blue.id), { toast: null });
+  assert.equal(site.history.length, 4);
+  assert.equal(undoManager.peekUndo(), top);
+  mode.dispose();
+});
+
+test('deleteSiteTriangle【失敗系】: 他の三角形の底辺になっている三角形・存在しない id は toast を返し何も変えず undo も積まない', () => {
+  const { site, t1 } = buildThree();
+  const before = dumpSite(site);
+  const top = undoManager.peekUndo();
+
+  assert.deepEqual(deleteSiteTriangle(site, t1.t.id), { ok: false, toast: TOAST_TRI_DELETE_LOCKED });
+  assert.deepEqual(deleteSiteTriangle(site, 'none'), { ok: false, toast: TOAST_TRI_DELETE_LOCKED });
+  assert.deepEqual(dumpSite(site), before);
+  assert.equal(undoManager.peekUndo(), top, 'undoは積まれない');
+});
+
+test('deleteSiteBaseLine: 三角形が無い最初の1本を消して空に戻し、undoで同idの線・点・historyが戻り、redoで再削除', () => {
+  const site = new Site();
+  const { lineId } = commitSiteTapLine({ site }, { worldToScreen: (x, y) => ({ x, y }) }, 'sansha', { x: 0, y: 0 }, { x: 1000, y: 0 });
+  const before = dumpSite(site);
+
+  assert.deepEqual(deleteSiteBaseLine(site), { ok: true, toast: null });
+  assert.equal(site.lines.length, 0);
+  assert.equal(site.points.length, 0);
+  assert.equal(site.history.length, 0);
+  assert.equal(site.lineOrder.length, 0);
+
+  undoManager.undo();
+  assert.deepEqual(dumpSite(site), before);
+  assert.equal(site.lineMap.has(lineId), true);
+
+  undoManager.redo();
+  assert.equal(site.lines.length, 0);
+  assert.equal(site.history.length, 0);
+});
+
+test('deleteSiteBaseLine【失敗系】: 三角形がある・線が無いときは toast を返し何も変えず undo も積まない', () => {
+  const { site } = buildThree();
+  const before = dumpSite(site);
+  const top = undoManager.peekUndo();
+  assert.deepEqual(deleteSiteBaseLine(site), { ok: false, toast: TOAST_BASE_DELETE_LOCKED });
+  assert.deepEqual(dumpSite(site), before);
+
+  assert.deepEqual(deleteSiteBaseLine(new Site()), { ok: false, toast: TOAST_BASE_DELETE_LOCKED });
+  assert.equal(undoManager.peekUndo(), top);
 });

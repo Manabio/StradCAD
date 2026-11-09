@@ -10,7 +10,7 @@ export class SiteModeState {
   // 三斜入力中の数値入力状態
   // 線分a/b（バッヂ0/1個）: { focusedCell: 'len'|'red'|'blue', lenValue, redLen, blueLen, redKind, blueKind }
   //   red/blue は次の三角形を構成する2辺（赤辺・青辺）の表中入力行に対応
-  // 編集ボタンによるロック解除（バッヂ>0個の確定済み線分）:
+  // 長さセルのタップによるロック解除（バッヂ>0個の確定済み線分）:
   //   { focusedCell: 'len', lenValue, confirmedValue, lenEditing: true }
   // 線分c（バッヂ2個）または未選択: null
   inputState     = null;
@@ -62,6 +62,11 @@ export class SiteModeState {
         || (this.rectInputState?.editRectId != null && !this.site.rectMap.has(this.rectInputState.editRectId)),
       (gone) => { if (gone) this.clearRectState(); },
     );
+    // 削除・undo 等で選択中の線が消えたら、三斜側の選択・入力を残さない
+    this._lineGoneDispose = reaction(
+      () => this.selectedLineId != null && !this.site.lineMap.has(this.selectedLineId),
+      (gone) => { if (gone) this.selectLine(null); }, // selectLine(null) は selectedLineId=null＋inputState=null の action
+    );
   }
 
   get selectedLine() {
@@ -101,7 +106,7 @@ export class SiteModeState {
     }
     const badgeCount = computeLineTriNums(this.site).get(lineId)?.length ?? 0;
     if (badgeCount >= 2) {
-      // 線分c（バッヂ2個）→ 選択のみ（長さ編集は編集ボタンで明示的にロック解除）
+      // 線分c（バッヂ2個）→ 選択のみ（長さ編集は長さセルのタップで明示的にロック解除）
       this.inputState = null;
     } else {
       // 線分a（バッヂ0個）/ 線分b（バッヂ1個）→ 赤辺・青辺の入力行を追加
@@ -155,7 +160,7 @@ export class SiteModeState {
     this.inputState = null;
   }
 
-  // ---- 三斜タブ「編集」ボタン：確定済み線分の長さフィールドをロック解除 ----
+  // ---- 三斜タブ 長さセルのタップ：確定済み線分の長さフィールドをロック解除 ----
 
   startLenEdit(lineId) {
     const line = this.site.lineMap.get(lineId);
@@ -274,6 +279,7 @@ export class SiteModeState {
 
   dispose() {
     this._rectGoneDispose?.();
+    this._lineGoneDispose?.();
     this.clearSelection();
     this.cancelSiteDraw();
   }

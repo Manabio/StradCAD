@@ -7,6 +7,10 @@ import { undoManager } from '../undoManager.js';
 import { computeSiteApex, pickRedPointId, getSiteLineRedBlue, computeApexSide } from '../site/siteGeometry.js';
 import { computeOuterLineIds } from '../site/lineClassification.js';
 import { findLineHistoryStep, recomputeSiteFromHistory, cloneHistory, computePendingQueue } from './siteHistory.js';
+import { computeDeletableTriangleIds, rowDeleteAction } from '../site/triangleDeletion.js';
+
+export const TOAST_TRI_DELETE_LOCKED  = '他の三角形の底辺になっている三角形は削除できません';
+export const TOAST_BASE_DELETE_LOCKED = '三角形があるため最初の線分は削除できません';
 
 // ---- 三斜 線分長さ編集（history を起点に再計算してUndo登録）----
 // @returns {{ ok: boolean, toast: string|null }}
@@ -255,4 +259,128 @@ export function commitSiteTapLine(project, viewport, sm, startWorld, endWorld) {
     }),
   );
   return { lineId };
+}
+
+// ---- 三斜 削除（三角形・最初の1本）----
+// undo は lineMap の挿入位置（三角番号の採番）と lineOrder の位置（表の順）まで完全復元する。
+// 選択状態（selectedLineId／inputState）は undo の対象外（消えた線の選択は SiteModeState の reaction が解除）。
+
+// 線分の復元用スナップショット（挿入位置込み）
+function snapshotLine(site, line) {
+  return {
+    id: line.id,
+    startId: line.startPoint.id, endId: line.endPoint.id,
+    lineKind: line.lineKind, redPointId: line.redPointId,
+    mapIndex: [...site.lineMap.keys()].indexOf(line.id),
+    orderIndex: site.lineOrder.indexOf(line.id),
+  };
+}
+
+// 挿入位置の昇順に戻す（先に低い index を戻せば、後の index は元の並びでの位置になる）。
+// 端点は pointMap に在ること。無ければ false
+function restoreLines(site, snaps) {
+  for (const s of [...snaps].sort((a, b) => a.mapIndex - b.mapIndex)) {
+    const sp = site.pointMap.get(s.startId);
+    const ep = site.pointMap.get(s.endId);
+    if (!sp || !ep) return false;
+    site.insertLineAt(s.mapIndex, s.orderIndex, sp, ep, s.lineKind, s.id, s.redPointId);
+  }
+  return true;
+}
+
+// 端の三角形（赤辺・青辺がどちらも他の三角形の底辺でない）を削除する。
+// 赤辺・青辺の2本・三角形・頂点・historyの該当ステップ（末尾とは限らない）を消す。
+// 底辺の道路指定は触らない: 削除で底辺が外周に戻っても自動復活させない（格下げのみの規則。
+// 道路指定は外周になった線へユーザーが明示的に行う）。
+// @returns {{ ok: boolean, toast: string|null }}
+export function deleteSiteTriangle(site, triangleId) {
+  const tri = site.triangleMap.get(triangleId);
+  const hIdx = site.history.findIndex(s => s.type === 'triangle' && s.triangleId === triangleId);
+  if (!tri || hIdx < 0 || !computeDeletableTriangleIds(site).has(triangleId)) {
+    return { ok: false, toast: TOAST_TRI_DELETE_LOCKED };
+  }
+  const step = { ...site.history[hIdx] };
+  const redLine  = site.lineMap.get(step.redLineId);
+  const blueLine = site.lineMap.get(step.blueLineId);
+  if (!redLine || !blueLine) return { ok: false, toast: TOAST_TRI_DELETE_LOCKED };
+
+  const snaps = [snapshotLine(site, redLine), snapshotLine(site, blueLine)];
+  const apexId = tri.apexPoint.id;
+  const ax = tri.apexPoint.x, ay = tri.apexPoint.y;
+  const triKind = tri.lineKind;
+
+  const apply = () => runInAction(() => {
+    // 端の三角形の赤辺・青辺はどの三角形の底辺でもないので removeLine の連鎖削除は起きない
+    site.removeLine(step.blueLineId);
+    site.removeLine(step.redLineId);
+    site.removeTriangle(triangleId);
+    site.removePoint(apexId);
+    const i = site.history.findIndex(s => s.type === 'triangle' && s.triangleId === triangleId);
+    if (i >= 0) site.history.splice(i, 1);
+  });
+  apply();
+  undoManager.push(
+    () => runInAction(() => {
+      const baseLine = site.lineMap.get(step.baseLineId);
+      if (!baseLine) return;
+      const apex = site.addPoint(ax, ay, apexId);
+      site.addTriangle(baseLine, apex, triKind, triangleId);
+      restoreLines(site, snaps);
+      site.history.splice(hIdx, 0, { ...step });
+    }),
+    apply,
+  );
+  return { ok: true, toast: null };
+}
+
+// 三斜表の行の削除（rowDeleteAction の振り分け＋実削除＋選択線の入力行の作り直し）。
+// 削除でバッヂ数が変わると選択中の線の入力行の要否が変わるため、成功後に選択線が残っていれば selectLine し直す
+// （confirmSiteTriangle の後処理と同じ形）。
+// @returns {{ toast: string|null }}
+export function deleteSiteRow(site, mode, lineId) {
+  const action = rowDeleteAction(site, lineId);
+  if (!action) return { toast: null };
+  const result = action.type === 'triangle'
+    ? deleteSiteTriangle(site, action.triangleId)
+    : deleteSiteBaseLine(site);
+  if (!result.ok) return { toast: result.toast };
+  runInAction(() => {
+    const sel = mode?.selectedLineId;
+    if (sel && site.lineMap.has(sel)) mode.selectLine(sel);
+  });
+  return { toast: null };
+}
+
+// 三角形が無いときの最初の1本（history が base 1件だけ）を削除して空に戻す。
+// @returns {{ ok: boolean, toast: string|null }}
+export function deleteSiteBaseLine(site) {
+  if (site.history.length !== 1 || site.history[0].type !== 'base') {
+    return { ok: false, toast: TOAST_BASE_DELETE_LOCKED };
+  }
+  const lineId = site.history[0].lineId;
+  const line = site.lineMap.get(lineId);
+  if (!line) return { ok: false, toast: TOAST_BASE_DELETE_LOCKED };
+  const snap = snapshotLine(site, line);
+  const sp = line.startPoint, ep = line.endPoint;
+  const pts = [
+    { id: sp.id, x: sp.x, y: sp.y },
+    { id: ep.id, x: ep.x, y: ep.y },
+  ];
+  const length = line.length;
+
+  const apply = () => runInAction(() => {
+    site.removeLine(lineId);
+    for (const p of pts) site.removePoint(p.id);
+    site.history.pop();
+  });
+  apply();
+  undoManager.push(
+    () => runInAction(() => {
+      for (const p of pts) site.addPoint(p.x, p.y, p.id);
+      restoreLines(site, [snap]);
+      site.history.push({ type: 'base', lineId, length });
+    }),
+    apply,
+  );
+  return { ok: true, toast: null };
 }

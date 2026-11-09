@@ -206,6 +206,23 @@ test('選択中の長方形が消えたら（undo 等）選択と入力を解除
   assert.notEqual(b.sm.selectedRectEdge, null, 'dispose で reaction が解除されている');
 });
 
+test('選択中の線が消えたら（削除・undo 等）三斜の選択と入力を解除する。dispose 後は反応しない', () => {
+  const { site, sm } = makeState();
+  const line = site.addLine(site.addPoint(0, 0), site.addPoint(1000, 0), SiteLineKind.SURVEY);
+  sm.selectLine(line.id);
+  assert.notEqual(sm.inputState, null);
+  site.removeLine(line.id);
+  assert.equal(sm.selectedLineId, null);
+  assert.equal(sm.inputState, null);
+
+  const b = makeState();
+  const l2 = b.site.addLine(b.site.addPoint(0, 0), b.site.addPoint(1000, 0), SiteLineKind.SURVEY);
+  b.sm.dispose();
+  b.sm.selectedLineId = l2.id;
+  b.site.removeLine(l2.id);
+  assert.equal(b.sm.selectedLineId, l2.id, 'dispose で reaction が解除されている');
+});
+
 test('三斜側の入力状態は長方形の操作で変わらない', () => {
   const { rect, sm } = makeState();
   sm.inputState = { focusedCell: 'len', lenValue: '5' };

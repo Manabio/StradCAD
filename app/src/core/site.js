@@ -110,6 +110,7 @@ export class Site {
       addPoint:      action,
       removePoint:   action,
       addLine:       action,
+      insertLineAt:  action,
       removeLine:    action,
       addTriangle:   action,
       removeTriangle: action,
@@ -142,6 +143,19 @@ export class Site {
     const line = new SiteLine(id, startPoint, endPoint, lineKind, redPointId);
     this.lineMap.set(line.id, line);
     this.lineOrder.push(line.id);
+    return line;
+  }
+
+  // 削除の undo 用: lineMap の順（三角番号の採番）と lineOrder の位置（三斜表の順）を保つため、
+  // 各 index の位置へ同 id の線分を挟む。index が末尾以降なら addLine と同じ結果。
+  // 他の SiteLine は同じインスタンスのまま並べ直す。
+  insertLineAt(mapIndex, orderIndex, startPoint, endPoint, lineKind, id, redPointId = startPoint.id) {
+    const entries = [...this.lineMap.entries()];
+    const line = new SiteLine(id, startPoint, endPoint, lineKind, redPointId);
+    entries.splice(Math.max(0, mapIndex), 0, [id, line]);
+    this.lineMap.clear();
+    for (const [k, v] of entries) this.lineMap.set(k, v);
+    this.lineOrder.splice(Math.max(0, orderIndex), 0, id);
     return line;
   }
 
