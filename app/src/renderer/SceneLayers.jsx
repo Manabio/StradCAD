@@ -79,7 +79,7 @@ export const SceneLayers = observer(({
   // openingモード用の早期returnは持たず、floorplan等と同じ共有レイヤ群（下記）をそのまま通す。
   // 敷地モードの配置図の表示中は、敷地の入力レイヤと自階の平面図一式を隠し、屋根伏せ図＋図芯合わせした敷地の外周だけを描く（SitePlacementLayer）
   const sitePlacementShown = appMode === 'site' && !!mode?.showPlacement;
-  const showPlanFigure = shouldShowPlanFigure(appMode) && !sitePlacementShown;
+  const showPlanFigure = shouldShowPlanFigure(appMode);
   return (
     <>
       <Layer name="world">
@@ -127,7 +127,7 @@ export const SceneLayers = observer(({
             {appMode === 'ceiling' && mode && (
               <CeilingSelectionLayer graph={graph} viewport={viewport} selectedCellKeys={mode.selectedCellKeys} previewCells={mode.previewCells} />
             )}
-            {isStairMode && !sitePlacementShown && (
+            {isStairMode && (
               <StairLayer
                 entries={[...installEntries, ...upperEntries]}
                 viewport={viewport}
@@ -202,7 +202,7 @@ export const SceneLayers = observer(({
             {/* 平面の断面解決で描く線とラベル（梁・汎用立体〔S4〕・下屋〔S5〕）と、吹抜け・昇降路の注記（×・上部吹抜け〔S6〕。
                 階段吹抜けと同じ peek 由来）——壁・階段と同じ述語で出す。 */}
             {showPlanFigure && <PlanSolidsLayer graph={graph} project={project} viewport={viewport} belowPeek={belowPlanPeek} abovePeek={abovePlanPeek} direction={planSectionDirection(appMode)} materialMap={appMode === 'ceiling' ? mode?.materialMap ?? null : null} />}
-            {shouldShowPlacedFigures(appMode) && !sitePlacementShown && <PlacedFiguresLayer graph={graph} viewport={viewport} direction={planSectionDirection(appMode)} selectedId={appMode === 'finish' ? (mode?.selectedPlacedFigureId ?? null) : null} />}
+            {shouldShowPlacedFigures(appMode) && <PlacedFiguresLayer graph={graph} viewport={viewport} direction={planSectionDirection(appMode)} selectedId={appMode === 'finish' ? (mode?.selectedPlacedFigureId ?? null) : null} />}
             {/* 昇降機器具の図中記号（「EV」「EV1」等）。室名が出るモード（floorplan・finish）に揃える
                 （planFigureVisibility.js shouldShowEquipmentSymbols）。catalogは建物全体（全採用階。
                 buildingEquipmentCatalog。project.equipmentIndex を App.jsx の effect が埋める。

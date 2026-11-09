@@ -7,12 +7,13 @@
 // （不具合2026-09: 建具モード。仕上げ・敷地モードでも同じ穴が開いていた）。
 // 「壁を描くモード＝柱を描くモード」をこの述語ひとつに閉じ込め、レイヤー側の appMode 直書きを禁じる。
 //
-// 描かないのは3モードだけ（壁・建具・柱について。階段は下の shouldShowStairFigure で天伏も除く）:
+// 描かないのは4モードだけ（壁・建具・柱について。階段は下の shouldShowStairFigure で天伏も除く）:
 //   structure — 伏図（躯体の図）。平面図は描かず、柱は `StructuralLayer` が図面合成の帰属で描く。
 //   elevation — 室内展開図の専用画面（`SceneLayers` が早期returnし平面レイヤー群を一切通らない）。
 //   facade    — 外壁立面図の専用画面（elevation と同じく `SceneLayers` が早期return）。
+//   site      — 敷地図の画面。配置図の表示中は屋根伏せ図・通り芯だけ、非表示中は敷地線だけ（ユーザー指示2026-11-09）。
 export function shouldShowPlanFigure(appMode) {
-  return appMode !== 'structure' && appMode !== 'elevation' && appMode !== 'facade';
+  return appMode !== 'structure' && appMode !== 'elevation' && appMode !== 'facade' && appMode !== 'site';
 }
 
 // 姿図の配置（renderer/PlacedFiguresLayer.jsx）を描くモードか。平面図一式と同じ述語。天伏も通す

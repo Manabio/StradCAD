@@ -54,8 +54,8 @@ test('【配線・強化】SceneLayers は EquipmentSymbolLayer のゲート行�
 // EquipmentSymbolLayer の前に置く（配線は PlanSolidsLayer.wiring.test.js）。
 test('【配線】SceneLayers は RoofPlanLayer を import も使用もしない（下屋は PlanSolidsLayer が描く）。showPlanFigure の定義は既存の述語のまま', () => {
   assert.equal((codeOnly.match(/RoofPlanLayer/g) || []).length, 0, 'RoofPlanLayer が出ない');
-  // 既存の述語に、敷地の配置図の表示中を隠す条件だけを足す（renderer/SitePlacementLayer.wiring.test.js が条件の中身を固定）
-  assert.match(codeOnly, /^\s*const showPlanFigure = shouldShowPlanFigure\(appMode\) && !sitePlacementShown;\s*$/m, 'showPlanFigure の定義は既存の述語＋配置図の表示中を除く');
+  // 敷地モードで平面図一式を描かない判断は述語 shouldShowPlanFigure 一本（planFigureVisibility.test.js が site=false を固定）
+  assert.match(codeOnly, /^\s*const showPlanFigure = shouldShowPlanFigure\(appMode\);\s*$/m, 'showPlanFigure の定義は述語一本');
 });
 
 test('【配線】SceneLayers は VoidLayer を使わず、<PlanSolidsLayer abovePeek=…> を EquipmentSymbolLayer の前に置く（吹抜けの注記も PlanSolidsLayer が描く）', () => {
@@ -71,7 +71,7 @@ test('【配線】SceneLayers は VoidLayer を使わず、<PlanSolidsLayer abov
 // 姿図の配置（S10 P3）: PlanSolidsLayer の直後・EquipmentSymbolLayer の前。表示するモードは shouldShowPlacedFigures、向きは planSectionDirection(appMode)。
 test('【配線】SceneLayers は <PlacedFiguresLayer> を PlanSolidsLayer の後・EquipmentSymbolLayer の前に、述語と向きつきで1行まるごと置く', () => {
   assert.match(codeOnly,
-    /^\s*\{shouldShowPlacedFigures\(appMode\) && !sitePlacementShown && <PlacedFiguresLayer graph=\{graph\} viewport=\{viewport\} direction=\{planSectionDirection\(appMode\)\} selectedId=\{appMode === 'finish' \? \(mode\?\.selectedPlacedFigureId \?\? null\) : null\} \/>\}\s*$/m);
+    /^\s*\{shouldShowPlacedFigures\(appMode\) && <PlacedFiguresLayer graph=\{graph\} viewport=\{viewport\} direction=\{planSectionDirection\(appMode\)\} selectedId=\{appMode === 'finish' \? \(mode\?\.selectedPlacedFigureId \?\? null\) : null\} \/>\}\s*$/m);
   assert.equal((codeOnly.match(/<PlacedFiguresLayer\b/g) || []).length, 1);
   const solidsAt = codeOnly.indexOf('<PlanSolidsLayer');
   const placedAt = codeOnly.indexOf('<PlacedFiguresLayer');

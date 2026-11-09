@@ -49,17 +49,17 @@ test('anyCellBoundsOverlap: listA・listBのいずれかの組み合わせで重
 // 不具合2026-09: 建具モードに入ると階段関連の図が消えた——ここのモード列挙だけが壁・建具・柱の
 // 述語（renderer/planFigureVisibility.js）と食い違っていたのが原因。両者が同じ述語を引くこと、
 // つまり「平面図を描くモード＝階段を描くモード」を固定する。
-test('buildStairEntries: 平面図を描くモード（建具・敷地を含む）で階段を描き、伏図・展開図では描かない', () => {
+test('buildStairEntries: 平面図を描くモード（建具を含む）で階段を描き、伏図・展開図・敷地では描かない', () => {
   const graph = { stairs: [] };
   const project = { planes: [], activePlane: null };
   const viewport = { lodLevel: LodLevel.DETAIL };
   const call = (appMode) => buildStairEntries(graph, project, {
     appMode, viewport, upperStairEntriesPeek: null, stairBreakOverhangMm: 0,
   });
-  for (const mode of ['floorplan', 'finish', 'opening', 'site']) {
+  for (const mode of ['floorplan', 'finish', 'opening']) {
     assert.equal(call(mode).isStairMode, true, mode);
   }
-  for (const mode of ['structure', 'elevation']) {
+  for (const mode of ['structure', 'elevation', 'site']) {
     assert.equal(call(mode).isStairMode, false, mode);
   }
 });

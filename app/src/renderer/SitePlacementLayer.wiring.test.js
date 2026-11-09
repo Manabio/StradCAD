@@ -64,14 +64,14 @@ test('SitePlacementLayer: 通り芯（線・寸法・丸ラベル）は layoutSi
   assert.match(layer, /const dimDotR = GRID_DIM_DOT_RADIUS_PX \/ viewport\.scaleX;/);
 });
 
-test('SceneLayers: 配置図の表示中（sitePlacementShown）は敷地の3レイヤと自階の平面図一式を出さず、SitePlacementLayer を出す', () => {
+test('SceneLayers: 配置図の表示中（sitePlacementShown）は敷地の3レイヤを出さず、SitePlacementLayer を出す（平面図一式は述語 shouldShowPlanFigure が site で false）', () => {
   assert.match(scene, /const sitePlacementShown = appMode === 'site' && !!mode\?\.showPlacement;/);
-  assert.match(scene, /const showPlanFigure = shouldShowPlanFigure\(appMode\) && !sitePlacementShown;/);
+  assert.match(scene, /const showPlanFigure = shouldShowPlanFigure\(appMode\);/);
   assert.match(scene, /\{appMode === 'site' && mode && !sitePlacementShown && \(\s*<SiteLinesLayer/);
   assert.match(scene, /\{appMode === 'site' && mode && !sitePlacementShown && \(\s*<SiteRectsLayer/);
   assert.match(scene, /\{appMode === 'site' && !sitePlacementShown && <SiteDrawPreview /);
-  assert.match(scene, /\{isStairMode && !sitePlacementShown && \(\s*<StairLayer/);
-  assert.match(scene, /\{shouldShowPlacedFigures\(appMode\) && !sitePlacementShown && <PlacedFiguresLayer/);
+  assert.match(scene, /\{isStairMode && \(\s*<StairLayer/);
+  assert.match(scene, /\{shouldShowPlacedFigures\(appMode\) && <PlacedFiguresLayer/);
   assert.match(scene, /\{sitePlacementShown && mode\.placementView && <SitePlacementLayer view=\{mode\.placementView\} viewport=\{viewport\} \/>\}/);
   // showPlanFigure に乗る平面図一式（壁・建具・柱・立体）は述語を共有する
   for (const name of ['ShapesLayer', 'OpeningsLayer', 'ColumnsLayer', 'PlanSolidsLayer']) {

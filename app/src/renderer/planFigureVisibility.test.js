@@ -13,10 +13,16 @@ function codeLines(src) {
   return src.split(/\r?\n/).map(line => line.replace(/\/\/.*$/, '')).join('\n');
 }
 
-test('shouldShowPlanFigure: 平面・建具・仕上げ・敷地は平面図一式を描く', () => {
-  for (const mode of ['floorplan', 'opening', 'finish', 'site']) {
+test('shouldShowPlanFigure: 平面・建具・仕上げは平面図一式を描く', () => {
+  for (const mode of ['floorplan', 'opening', 'finish']) {
     assert.equal(shouldShowPlanFigure(mode), true, mode);
   }
+});
+
+test('shouldShowPlanFigure: 敷地は配置図の表示・非表示に関わらず平面図一式を描かない（ユーザー指示2026-11-09）。派生の述語も false', () => {
+  assert.equal(shouldShowPlanFigure('site'), false);
+  assert.equal(shouldShowStairFigure('site'), false);
+  assert.equal(shouldShowPlacedFigures('site'), false);
 });
 
 test('planSectionDirection: 天伏（ceiling）は見上げ（up）、他のモードは見下げ（down）。未知・欠落のモードも down', () => {
@@ -30,11 +36,11 @@ test('shouldShowPlanFigure: 天伏（ceiling）も平面図一式を描く（見
   assert.equal(shouldShowPlanFigure('ceiling'), true);
 });
 
-test('shouldShowStairFigure: 階段の図は平面・建具・仕上げ・敷地で描き、天伏（上階の裏面で表す）・伏図・展開図では描かない。未知のモードは shouldShowPlanFigure と同じく描く', () => {
-  for (const mode of ['floorplan', 'finish', 'opening', 'site']) assert.equal(shouldShowStairFigure(mode), true, mode);
-  for (const mode of ['ceiling', 'structure', 'elevation']) assert.equal(shouldShowStairFigure(mode), false, mode);
+test('shouldShowStairFigure: 階段の図は平面・建具・仕上げで描き、天伏（上階の裏面で表す）・伏図・展開図・敷地では描かない。未知のモードは shouldShowPlanFigure と同じく描く', () => {
+  for (const mode of ['floorplan', 'finish', 'opening']) assert.equal(shouldShowStairFigure(mode), true, mode);
+  for (const mode of ['ceiling', 'structure', 'elevation', 'site']) assert.equal(shouldShowStairFigure(mode), false, mode);
   assert.equal(shouldShowStairFigure('ceiling'), false);
-  assert.equal(shouldShowStairFigure('foo'), true, '未知のモードは除外列挙（ceiling・structure・elevation）に無いので描く');
+  assert.equal(shouldShowStairFigure('foo'), true, '未知のモードは除外列挙（ceiling・structure・elevation・site）に無いので描く');
   assert.equal(shouldShowPlanFigure('ceiling'), true, '壁・建具・柱は天伏でも描く（階段だけ別の述語）');
 });
 
@@ -76,8 +82,8 @@ test('【不変条件】SceneLayers.jsx: ColumnsLayer の originMarks は should
 });
 
 test('shouldShowPlacedFigures: 姿図の配置は平面図一式と同じモード（天伏も含む）で描き、伏図・展開・立面では描かない', () => {
-  for (const mode of ['floorplan', 'finish', 'ceiling', 'opening', 'site']) assert.equal(shouldShowPlacedFigures(mode), true, mode);
-  for (const mode of ['structure', 'elevation', 'facade']) assert.equal(shouldShowPlacedFigures(mode), false, mode);
+  for (const mode of ['floorplan', 'finish', 'ceiling', 'opening']) assert.equal(shouldShowPlacedFigures(mode), true, mode);
+  for (const mode of ['structure', 'elevation', 'facade', 'site']) assert.equal(shouldShowPlacedFigures(mode), false, mode);
 });
 
 test('shouldShowEquipmentSymbols: 昇降機器具の図中記号は室名が出るモード（floorplan・finish）でのみ描く', () => {
