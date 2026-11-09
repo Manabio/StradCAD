@@ -1,10 +1,13 @@
-﻿import { useEffect, useRef } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { observer } from 'mobx-react-lite';
 import { SiteLineKind } from '@core';
 import { getSiteLineRedBlue } from '../site/siteGeometry.js';
 import { isSanshaKind, computeLineTriNums, computeOuterLineIds } from '../site/lineClassification.js';
 import { siteLineKindLabel } from '../site/siteLineStyle.js';
 import { rowDeleteAction, triangleNumber } from '../site/triangleDeletion.js';
+import {
+  buildSanshaAreaRows, buildRectAreaRows, sumAreaM2, rectsOverlap, formatAreaM2,
+} from '../site/siteArea.js';
 import { NumPad } from './NumPad.jsx';
 import { applyKeyToNumpadValue, toNumpadKey, evalNumpadExpr } from './numpadUtils.js';
 import { ModePanel } from './ModePanel.jsx';
@@ -21,23 +24,6 @@ const KIND_LABEL = {
 
 function makePointIndex(site) {
   return new Map([...site.pointMap.keys()].map((id, i) => [id, i + 1]));
-}
-
-// 三角形一覧を底辺長・高さ・面積付きで返す（面積タブ用）
-function computeAreaRows(site) {
-  const triByLine = new Map([...site.triangleMap.values()].map(t => [t.baseLine.id, t]));
-  const rows = [];
-  let triNum = 0;
-  for (const line of site.lines) {
-    const tri = triByLine.get(line.id);
-    if (!tri) continue;
-    triNum++;
-    const base   = line.length;
-    const area   = tri.area;
-    const height = base > 1e-6 ? (area * 2_000_000) / base : 0;
-    rows.push({ num: triNum, base, height, area });
-  }
-  return rows;
 }
 
 // 式文字列を評価して数値を返す。無効なら NaN
@@ -96,8 +82,12 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
   const otherLines  = site.orderedLines.filter(l => !isSanshaKind(l.lineKind));
   const lineTriNums = computeLineTriNums(site);
   const outerIds    = computeOuterLineIds(site);
-  const areaRows    = computeAreaRows(site);
-  const totalArea   = areaRows.reduce((s, r) => s + r.area, 0);
+  // 面積行（三斜・長方形タブ共通）。開閉は両タブ共有
+  const [areaOpen, setAreaOpen] = useState(false);
+  const showArea    = subMode === 'sansha' || subMode === 'rect';
+  const areaRows    = !showArea ? [] : subMode === 'rect' ? buildRectAreaRows(site.rects) : buildSanshaAreaRows(site);
+  const totalArea   = sumAreaM2(areaRows);
+  const areaOverlap = subMode === 'rect' && rectsOverlap(site.rects);
 
   // 選択中の行へスクロール（描画エリアでの線分クリック時など）
   const selectedRowRef = useRef(null);
@@ -204,7 +194,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
     return (
       <tr key={`${keyPrefix}-${d.cell}`} onClick={() => mode.setRectFocusedCell(d.cell)} style={{ cursor: 'pointer' }}>
         <td style={{ ...TD_BASE, color: '#2563eb', fontWeight: 600 }}>{d.label}</td>
-        <td colSpan={4} style={{
+        <td colSpan={3} style={{
           ...TD_BASE,
           background: focused ? '#f0fdf4' : '#f7fdf9',
           outline:    focused ? '2px solid #22c55e' : 'none',
@@ -220,7 +210,6 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
         {[
           { key: 'sansha', label: '三斜' },
           { key: 'rect',   label: '長方形' },
-          { key: 'area',   label: '面積' },
           { key: 'other',  label: 'その他' },
         ].map(tab => (
           <button
@@ -241,6 +230,52 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
           </button>
         ))}
       </div>
+
+      {/* 面積行（三斜・長方形タブ共通。▶ で内訳） */}
+      {showArea && (
+        <div style={{ flexShrink: 0, borderBottom: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', fontSize: 13, color: '#1e293b' }}>
+            <button
+              onClick={() => setAreaOpen(o => !o)}
+              title="内訳"
+              style={{ ...ICON_BTN, fontSize: 10 }}
+            >{areaOpen ? '▼' : '▶'}</button>
+            <span style={{ fontWeight: 700 }}>面積：</span>
+            <span>{formatAreaM2(totalArea)}</span>
+            <span>㎡</span>
+            {areaOverlap && <span style={{ color: '#94a3b8', fontSize: 11 }}>（重なりあり）</span>}
+          </div>
+          {areaOpen && (
+            <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...TH_BASE, width: 48 }}>番号</th>
+                    <th style={TH_BASE}>計算式</th>
+                    <th style={{ ...TH_BASE, width: 80 }}>面積(㎡)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {areaRows.map(({ num, formula, areaM2 }) => (
+                    <tr key={num}>
+                      <td style={TD_BASE}>{num}</td>
+                      <td style={TD_BASE}>{formula}</td>
+                      <td style={TD_BASE}>{formatAreaM2(areaM2)}</td>
+                    </tr>
+                  ))}
+                  {areaRows.length === 0 && (
+                    <tr>
+                      <td colSpan={3} style={{ ...TD_BASE, color: '#94a3b8', padding: '12px', textAlign: 'center' }}>
+                        {subMode === 'rect' ? '長方形がありません' : '三角形がありません'}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* テーブル */}
       <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto' }}>
@@ -395,39 +430,8 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
               )}
             </tbody>
           </table>
-        ) : subMode === 'area' ? (
-          // ---- 面積タブ ----
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th style={{ ...TH_BASE, width: 48 }}>番号</th>
-                <th style={TH_BASE}>計算式</th>
-                <th style={{ ...TH_BASE, width: 80 }}>面積(㎡)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {areaRows.map(({ num, base, height, area }) => (
-                <tr key={num}>
-                  <td style={TD_BASE}>{num}</td>
-                  <td style={TD_BASE}>{`${base.toFixed(0)} × ${height.toFixed(0)} ÷ 2`}</td>
-                  <td style={TD_BASE}>{area.toFixed(2)}</td>
-                </tr>
-              ))}
-              {areaRows.length === 0 && (
-                <tr>
-                  <td colSpan={3} style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
-                    三角形がありません
-                  </td>
-                </tr>
-              )}
-              <tr>
-                <td colSpan={2} style={{ ...TD_BASE, fontWeight: 700, borderTop: '2px solid #cbd5e1' }}>合計</td>
-                <td style={{ ...TD_BASE, fontWeight: 700, borderTop: '2px solid #cbd5e1' }}>{totalArea.toFixed(2)}</td>
-              </tr>
-            </tbody>
-          </table>
         ) : subMode === 'rect' ? (
-          // ---- 長方形タブ（番号／よこ／たて／面積。合計は和集合）＋外周表（辺ごとの道路指定） ----
+          // ---- 長方形タブ（番号／よこ／たて。面積は見出し直下の「面積：」行）＋外周表（辺ごとの道路指定） ----
           <>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -435,7 +439,6 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                 <th style={{ ...TH_BASE, width: 48 }}>番号</th>
                 <th style={TH_BASE}>よこ</th>
                 <th style={TH_BASE}>たて</th>
-                <th style={{ ...TH_BASE, width: 80 }}>面積(㎡)</th>
                 <th style={{ ...TH_BASE, width: 40 }} title="削除">{TRASH_ICON}</th>
               </tr>
             </thead>
@@ -477,7 +480,6 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                     <td style={{ ...td, fontWeight: 600 }}>{row.num}</td>
                     {dimCell('w', row.w.toFixed(0))}
                     {dimCell('h', row.h.toFixed(0))}
-                    <td style={td}>{row.areaM2.toFixed(2)}</td>
                     <td style={td}>
                       {row.canDelete && (
                         <button onClick={() => onDeleteRect?.(row.id)} style={ICON_BTN} title="削除">{TRASH_ICON}</button>
@@ -495,7 +497,7 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                     <tr key={`${row.id}-anchor`}>
                       <td style={{ ...TD_BASE, color: '#ef4444', fontWeight: 600 }}>基点</td>
                       <td colSpan={2} style={TD_BASE}>{rectAnchorLabel(mode.selectedRectEdge.side, mode.rectAnchor)}</td>
-                      <td colSpan={2} style={TD_BASE}>
+                      <td colSpan={1} style={TD_BASE}>
                         <button
                           onClick={() => mode.toggleRectAnchor()}
                           style={{
@@ -512,16 +514,11 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
               {rectIn?.kind === 'first' && !rectIn.editRectId && rectInputRows('first')}
               {rectTable.rows.length === 0 && !rectIn && (
                 <tr>
-                  <td colSpan={5} style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
+                  <td colSpan={4} style={{ ...TD_BASE, color: '#94a3b8', padding: '20px', textAlign: 'center' }}>
                     描画エリアをタップして左上角を置いてください
                   </td>
                 </tr>
               )}
-              <tr>
-                <td colSpan={3} style={{ ...TD_BASE, fontWeight: 700, borderTop: '2px solid #cbd5e1' }}>合計</td>
-                <td style={{ ...TD_BASE, fontWeight: 700, borderTop: '2px solid #cbd5e1' }}>{rectTable.totalAreaM2.toFixed(2)}</td>
-                <td style={{ ...TD_BASE, borderTop: '2px solid #cbd5e1' }}></td>
-              </tr>
             </tbody>
           </table>
           {outlineRows.length > 0 && (

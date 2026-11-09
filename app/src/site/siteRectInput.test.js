@@ -13,11 +13,10 @@ const attach = (o = {}) => ({ kind: 'attach', focusedCell: 'along', alongValue: 
 
 // ---- 表 ----
 
-test('buildRectTableRows: 番号は rects の順（1始まり）、面積は㎡、合計は和集合（重なりは数えない）', () => {
+test('buildRectTableRows: 番号は rects の順（1始まり）', () => {
   const rects = [R('a', 0, 0, 4000, 3000), R('b', 2000, 0, 4000, 3000)];
-  const { rows, totalAreaM2 } = buildRectTableRows(rects);
-  assert.deepEqual(rows.map(r => [r.id, r.num, r.w, r.h, r.areaM2]), [['a', 1, 4000, 3000, 12], ['b', 2, 4000, 3000, 12]]);
-  assert.equal(totalAreaM2, 18, '重なり 2000×3000 を二重に数えない');
+  const { rows } = buildRectTableRows(rects);
+  assert.deepEqual(rows.map(r => [r.id, r.num, r.w, r.h]), [['a', 1, 4000, 3000], ['b', 2, 4000, 3000]]);
 });
 
 test('buildRectTableRows: canEdit / canDelete は端の長方形だけ真（鎖 A-B-C の B は両方偽）', () => {
@@ -64,8 +63,8 @@ test('rectEnterAction: 修正中は列順（よこ→たて→確定）。attach
   assert.deepEqual(rectEnterAction(editFirst({ focusedCell: 'h' })), { type: 'confirm' });
 });
 
-test('【失敗系】buildRectTableRows: 長方形が無ければ行なし・合計 0', () => {
-  assert.deepEqual(buildRectTableRows([]), { rows: [], totalAreaM2: 0 });
+test('【失敗系】buildRectTableRows: 長方形が無ければ行なし', () => {
+  assert.deepEqual(buildRectTableRows([]), { rows: [] });
 });
 
 // ---- 入力行・Enter・NumPad ----
