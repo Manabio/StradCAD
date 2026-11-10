@@ -157,7 +157,7 @@ export function isDoorlessMechanism(mechanism) {
 
 export const FITTING_CATALOG = [
   { key: 'singleSwing',   label: '片開き戸',     mechanism: OpeningMechanism.SWING,        wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
-  { key: 'sliding',       label: '引き戸',       mechanism: OpeningMechanism.SLIDE_SINGLE, wallKinds: ['interior', 'exterior'], defaultWidth: 800,  defaultHeight: 2000 },
+  { key: 'sliding',       label: '引き戸',       mechanism: OpeningMechanism.SLIDE_SINGLE, wallKinds: ['interior', 'exterior'], defaultWidth: 1550, defaultHeight: 2000 }, // W＝2×800−50（扉幅 DW 800。slideOutset.js）
   { key: 'doubleSliding', label: '引き違い戸',   mechanism: OpeningMechanism.SLIDE_DOUBLE, wallKinds: ['interior', 'exterior'], defaultWidth: 1600, defaultHeight: 2000 },
   { key: 'folding',       label: '折れ戸',       mechanism: OpeningMechanism.FOLD,         wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
   { key: 'door',          label: 'ドア',         mechanism: OpeningMechanism.SWING,        wallKinds: ['exterior'],            defaultWidth: 900,  defaultHeight: 2000 },

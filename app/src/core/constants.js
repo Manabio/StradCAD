@@ -854,6 +854,8 @@ export const FRAME_KAKARI_WIDTH_MM = 10; // 方立のうち開口側かかり代
 // ——展開図側（純モジュール）は .jsx を静的に引けないため、レンダラ（OpeningsLayer.jsx）に
 // 置いていた定数を openingPlanSymbolGeometry.js へ移し、さらにここへ移した（ユーザー明示指示2026-09「平面に指定があるので参照のこと」）。
 export const DOOR_LEAF_THICKNESS_MM = 30;
+/** 外付け引き戸の建具幅 W＝2×扉幅 DW−50 の 50。W＝穴（DW−50）＋引き代（DW）。ユーザー指示 2026-11-10 */
+export const SLIDE_OUTSET_WIDTH_DEDUCT_MM = 50;
 /** fit の長さ比較の許容（mm）。elevationStyle.js の COORD_EPS_MM と同値だが、detail/ は elevation/ を引けないので別定義。 */
 export const DETAIL_FIT_EPS_MM = 1e-3;
 /** 手の辺に付ける印（Move.edge）。'air'＝空気との境目（室内側の見え掛かりの線。展開図で中線になる。S8a）。 */
