@@ -36,7 +36,9 @@ import { isEndpointAt } from '../transform/centerLineExtend.js';
 import { resolveKneeDropOverlays } from '../finish/kneeDropWall.js';
 import { columnWallCuts, columnWrapSolids, bareColumnRect } from '../finish/columnWrap.js';
 import { resolveWallStuds, columnIntervalsOnWall } from './wallStudLayout.js';
-import { indexByAxis, findOpeningsOnWallIndexed } from '../openings/openingGeometry.js';
+import { indexByAxis, findOpeningsOnWallIndexed, findHostWallIndexed } from '../openings/openingGeometry.js';
+import { findCatalogEntry } from '../openings/openingCatalog.js';
+import { openingCutSpan } from '../openings/slideOutset.js';
 import { resolveWallRegionLines, wallSpanIntervals } from './planWallRegion.js';
 import { graphComputed } from './graphDerived.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
@@ -118,7 +120,7 @@ export function resolveDeferredBackingIds(generalShapes) {
  * 持ち回り、ここでは**領域に載らない要素**（略図の単線・下地スタッドの配置範囲）だけを組み立てる。
  *
  * @param {import('@core').Wall} wall
- * @param {{openings?:object[], junction?:object, regionLines?:object[],
+ * @param {{cuts?:[number,number][], junction?:object, regionLines?:object[],
  *   backingSpan?:[number,number]|null}} [deps]
  *   junction: wallJunctions.get(wall.id)（endExtend＝描画上の壁スパン／spanCutsで切り欠く区間）
  * @returns {{
@@ -133,14 +135,14 @@ export function resolveDeferredBackingIds(generalShapes) {
  *     'kd'|'kdcap'（`style` が 'knee'=実線／'drop'=破線）。ids は畳まれた1本に寄与したすべての壁のid。
  *   backingSpan: 下地スタッドを並べる長さ方向の範囲（突き合わせ延長・端部の回り込み反映済み）。
  */
-export function resolveWallLines(wall, { openings = [], junction, regionLines = null, backingSpan = null } = {}) {
+export function resolveWallLines(wall, { cuts = [], junction, regionLines = null, backingSpan = null } = {}) {
   // **描画上の壁スパン**: 低い壁（腰壁）とL字の端部で取り合う高い壁は、その端を相手の帯の
   // 遠位面まで伸ばして描く（wallJunctionResolve.js パス0のendExtend）。ここで1回だけ広げれば
   // 単線・下地の入力が同じ端点に従う——モデルの端点（wall.coord1/coord2）は変えない。
   const endExtend = junction?.endExtend ?? {};
   const lo = endExtend.lo ?? Math.min(wall.coord1, wall.coord2);
   const hi = endExtend.hi ?? Math.max(wall.coord1, wall.coord2);
-  const segments = wallSpanIntervals(lo, hi, openings, junction?.spanCuts ?? []);
+  const segments = wallSpanIntervals(lo, hi, cuts, junction?.spanCuts ?? []);
   return { segments, lines: regionLines ?? [], backingSpan, spanLo: lo, spanHi: hi };
 }
 
@@ -194,10 +196,29 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null, kneeDrop
   // しているためここで確定させる。
   // 見上げ（天伏）は断面線がまたがない建具を壁の欠き取りから外す＝その位置も連なった壁（ceiling/ceilingOpeningVisibility.js）。
   const openingIndex = indexByAxis(hiddenOpeningIds ? graph.openings.filter(o => !hiddenOpeningIds.has(o.id)) : graph.openings);
-  const openingsByWall = new Map();
+  // 壁に入れる区間は建具の開口全幅ではなく**穴**（openings/slideOutset.js openingCutSpan。外付け引き戸は穴だけ・
+  // 他は開口全幅＝恒等）。host＝建具の実ホスト壁（外壁なら外付けにしない＝恒等。R12）。機構は建具ごとに 1 回だけ引く。
+  const mechanismById = new Map();
+  const mechanismOf = (o) => {
+    if (!mechanismById.has(o.id)) mechanismById.set(o.id, findCatalogEntry(o.category, o.subType)?.mechanism);
+    return mechanismById.get(o.id);
+  };
+  // host は**建具の実ホスト壁**（findHostWall）で、描いている壁ではない——同じ境界の 2 枚の壁（室内向き壁＋外壁）は
+  // 同じ建具を軸と範囲で拾うので、描く壁を host にすると外壁側だけ穴の判定が食い違う。引けなければ null（外壁でない扱い）。
+  const wallIndex = indexByAxis(walls);
+  const hostById = new Map();
+  const hostOf = (o) => {
+    if (!hostById.has(o.id)) hostById.set(o.id, findHostWallIndexed(o, wallIndex));
+    return hostById.get(o.id);
+  };
+  const cutsByWall = new Map();
   for (const wall of walls) {
-    const found = findOpeningsOnWallIndexed(wall, openingIndex);
-    if (found.length > 0) openingsByWall.set(wall.id, found.sort((a, b) => a.coord1 - b.coord1));
+    const cuts = [];
+    for (const o of findOpeningsOnWallIndexed(wall, openingIndex)) {
+      const span = openingCutSpan(o, mechanismOf(o), hostOf(o));
+      if (span) cuts.push(span);
+    }
+    if (cuts.length > 0) cutsByWall.set(wall.id, cuts.sort((a, b) => a[0] - b[0]));
   }
 
   // 腰壁・垂れ壁の描画オーバーレイ。略図LOD（単線）では特別描画なし。
@@ -251,14 +272,14 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null, kneeDrop
     ? [...wallRunFreeEnds(ownSegments), ...stairPartitionEnds(graph, undefined, undefined, ownSegments).filter(e => e.free)]
     : null;
   const region = schematic ? null : resolveWallRegionLines(walls, {
-    junctions: wallJunctions, openingsByWall, kneeDropOverlays, endpointAtByWall,
+    junctions: wallJunctions, cutsByWall, kneeDropOverlays, endpointAtByWall,
     columnWraps, clipGroups, detail, freeEndPoints,
   });
 
   const wallLines = new Map();
   for (const wall of walls) {
     wallLines.set(wall.id, resolveWallLines(wall, {
-      openings: openingsByWall.get(wall.id),
+      cuts: cutsByWall.get(wall.id),
       junction: wallJunctions?.get(wall.id),
       regionLines: region?.lines.get(wall.id) ?? null,
       backingSpan: region?.backingSpans.get(wall.id) ?? null,

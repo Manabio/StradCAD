@@ -10,7 +10,9 @@
 
 import { DetailSlot, FRAME_OVERHANG_MM } from '../core/constants.js';
 import { clampFrameFaceWidth, jambWidthFor } from './openingPlanSymbolGeometry.js';
-import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, DETAIL_OWNER_OPENING } from '../error.js';
+import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, DETAIL_OWNER_OPENING, ERR_SLIDE_ON_EXTERIOR_WALL } from '../error.js';
+import { OpeningCategory } from '../core.js';
+import { isOutsetSlide } from './slideOutset.js';
 import { effectiveFrameFaceWidth, effectiveFrameProjection, effectiveHeight, fixtureSymbolOf } from './openingNumbering.js';
 import { detailFitKey, fitDetailLocalMemo, subTypeDetailFigureRefsFor, findCatalogEntry } from './openingCatalog.js';
 import { isFrameOnlySection, isSwingLeafSection, isWindowSection, sectionFrameFaceWidthFor, openingSectionWallRange, wallMaterialRangeForOpening, wallMaterialRangesOf } from './openingSection.js';
@@ -157,4 +159,28 @@ export function collectDetailFitFailures(graph, seen = new Set(), { slots = ALL_
   }
   if (slots.includes(DetailSlot.FIGURE)) failures.push(...collectDetailFigureFailures(graph?.openings, seen));
   return failures;
+}
+
+/** 外壁をホストにする引き戸の通知の重複排除の鍵（階をまたいで 1 回だけ出す）。 */
+export const SLIDE_ON_EXTERIOR_WALL_KEY = 'slideOnExteriorWall';
+
+/**
+ * 外壁（isExteriorWall）をホストにする外付け引き戸（category fitting・機構 SLIDE_SINGLE）の通知の集計（R12。
+ * 外付けにできず従来の描きのままであることを建具モード突入時に 1 回知らせる）。行の形は collectDetailFitFailures と同じで
+ * 同じ経路（場面 detail-fit-failed）に載せる。seen を複数階で共有すれば何本あっても 1 件。ホスト壁が引けない建具は対象外。
+ * @param {object|null} graph
+ * @param {Set<string>} [seen] 重複排除の鍵の集合（破壊的に更新する）
+ * @returns {{key:string, symbolKey:string, label:string, message:string}[]}
+ */
+export function collectSlideOnExteriorWall(graph, seen = new Set()) {
+  if (seen.has(SLIDE_ON_EXTERIOR_WALL_KEY)) return [];
+  for (const o of graph?.openings ?? []) {
+    if (o.category !== OpeningCategory.FITTING) continue;
+    const entry = findCatalogEntry(o.category, o.subType);
+    if (!isOutsetSlide(entry?.mechanism)) continue;
+    if (findHostWall(o, graph)?.isExteriorWall !== true) continue;
+    seen.add(SLIDE_ON_EXTERIOR_WALL_KEY);
+    return [{ key: SLIDE_ON_EXTERIOR_WALL_KEY, symbolKey: o.subType, label: entry.label ?? o.subType, message: ERR_SLIDE_ON_EXTERIOR_WALL }];
+  }
+  return [];
 }

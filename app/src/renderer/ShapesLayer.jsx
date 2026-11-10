@@ -6,6 +6,7 @@ import { ceilingUpDerived } from './ceilingUpDerived.js';
 import { LodLevel, resolveStrokeWidth } from '../viewport.js';
 import { buildWallDrawPlan } from './wallDrawPlan.js';
 import { graphComputed } from './graphDerived.js';
+import { overlayGeneration } from '../catalog/catalogRegistry.js';
 import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
 import { studRects } from './wallStudLayout.js';
 
@@ -94,7 +95,7 @@ export const ShapesLayer = observer(({ graph, viewport, stairUnderClips = null, 
   // （kneeDropUpOptions）。向きを鍵に含める（graphDerived.js の約束）。
   const up = direction === 'up';
   const { kneeDropOverlays, wallLines, wallStuds } =
-    graphComputed(graph, `wallDrawPlan:${lodLevel}:${clipKey}:${up ? 'up' : 'down'}`,
+    graphComputed(graph, `wallDrawPlan:${lodLevel}:${clipKey}:${up ? 'up' : 'down'}:${overlayGeneration()}`,
       () => {
         const upDerived = up ? ceilingUpDerived(graph) : null;
         return buildWallDrawPlan(graph, lodLevel, {

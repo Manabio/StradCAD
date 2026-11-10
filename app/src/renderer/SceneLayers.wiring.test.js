@@ -100,7 +100,7 @@ test('【配線】SceneLayers は <ShapesLayer> へ direction={planSectionDirect
 test('【配線】ShapesLayer は見上げのとき kneeDropUpOptions(ceilingUpDerived(graph).wallCutAt) と hiddenOpeningIds を buildWallDrawPlan へ渡し、向きを graphComputed の鍵に含める', () => {
   const shapes = stripComments(fs.readFileSync(path.resolve(import.meta.dirname, 'ShapesLayer.jsx'), 'utf8'));
   assert.match(shapes, /^\s*const up = direction === 'up';\s*$/m);
-  assert.match(shapes, /graphComputed\(graph, `wallDrawPlan:\$\{lodLevel\}:\$\{clipKey\}:\$\{up \? 'up' : 'down'\}`,/);
+  assert.match(shapes, /graphComputed\(graph, `wallDrawPlan:\$\{lodLevel\}:\$\{clipKey\}:\$\{up \? 'up' : 'down'\}:\$\{overlayGeneration\(\)\}`,/);
   assert.match(shapes, /^\s*const upDerived = up \? ceilingUpDerived\(graph\) : null;\s*$/m);
   assert.match(shapes, /^\s*kneeDrop: upDerived \? kneeDropUpOptions\(upDerived\.wallCutAt\) : undefined,\s*$/m);
   assert.match(shapes, /^\s*hiddenOpeningIds: upDerived\?\.hiddenOpeningIds,\s*$/m);

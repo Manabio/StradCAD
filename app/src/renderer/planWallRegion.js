@@ -54,15 +54,18 @@ import { q, unq, rectFromMm, unionBoundary, clipEdgeToInterior } from './orthoRe
 import { WALL_JUNCTION_TOL_MM } from '../structural/woodFraming.js';
 
 /**
- * 壁1本の「描画上のスパン区間」（開口とspanCutsで分割済み）を返す。
+ * 壁1本の「描画上のスパン区間」（建具の穴の区間 `cuts` とspanCutsで分割済み）を返す。
+ * cuts＝壁を全厚で欠く区間 [lo,hi] の配列（lo 昇順。引き戸は穴だけ・他の建具は開口全幅。呼び出し側が
+ * openings/slideOutset.js openingCutSpan で解く＝この純モジュールは建具を引かない）。
+ * @param {Array<[number,number]>|undefined} cuts
  * @returns {Array<[number,number]>}
  */
-export function wallSpanIntervals(lo, hi, openings, spanCuts) {
+export function wallSpanIntervals(lo, hi, cuts, spanCuts) {
   const raw = [];
   let cursor = lo;
-  for (const o of openings ?? []) {
-    if (o.coord1 > cursor) raw.push([cursor, o.coord1]);
-    cursor = Math.max(cursor, o.coord2);
+  for (const [cutLo, cutHi] of cuts ?? []) {
+    if (cutLo > cursor) raw.push([cursor, cutLo]);
+    cursor = Math.max(cursor, cutHi);
   }
   if (cursor < hi) raw.push([cursor, hi]);
   if (!spanCuts?.length) return raw;
@@ -91,11 +94,11 @@ export function regionSpan(wall, junction) {
  * 壁1本ぶんの領域入力（POJO）。`materialRange`/`backingRange` は MobX の computed なので
  * 1回だけ読んで写す（`wallJunctionResolve.js` の makeView と同じ手口）。
  */
-function wallInput(wall, { junction, openings, kneeDrop, clipGroup }) {
+function wallInput(wall, { junction, cuts, kneeDrop, clipGroup }) {
   const [lo, hi] = regionSpan(wall, junction);
   // 天板（腰壁・垂れ壁）の壁は `spanCuts`（パス0「高い壁の帯に覆われる区間は描かない」）を使わない
   // ——同じことを天板の領域から全高の材を差し引いて表す（`resolveCapLines`）。
-  const spans = wallSpanIntervals(lo, hi, openings, kneeDrop ? [] : (junction?.spanCuts ?? []));
+  const spans = wallSpanIntervals(lo, hi, cuts, kneeDrop ? [] : (junction?.spanCuts ?? []));
   const backing = wall.backingRange;
   // 対称壁（`backingDepth == null`）の `backingRange` は軸CLを中心に `materialRange`（軸CL〜仕上げ面の
   // 半分）をはみ出す。**下地は実在する材**なので、材の矩形を下地の遠位面まで広げて被覆に参加させる
@@ -361,7 +364,7 @@ function wrapEndsFor(w, junction, endpointAt, freeEndPoints) {
  * @param {object[]} walls graph.walls
  * @param {{
  *   junctions?: Map<string, object>|null,
- *   openingsByWall?: Map<string, object[]>,
+ *   cutsByWall?: Map<string, [number,number][]>,
  *   kneeDropOverlays?: Map<string, object>|null,
  *   endpointAtByWall?: Map<string, {lo:boolean, hi:boolean}>,
  *   columnWraps?: Array<{id:string, outer:{xLo:number,xHi:number,yLo:number,yHi:number},
@@ -377,7 +380,7 @@ function wrapEndsFor(w, junction, endpointAt, freeEndPoints) {
  *   backingSpans: 壁id → 下地スタッドを並べる長さ方向の範囲（取り合い・回り込みの正規化済み）。
  */
 export function resolveWallRegionLines(walls, {
-  junctions = null, openingsByWall = null, kneeDropOverlays = null,
+  junctions = null, cutsByWall = null, kneeDropOverlays = null,
   endpointAtByWall = null, columnWraps = null, clipGroups = null, detail = true,
   freeEndPoints = null,
 } = {}) {
@@ -386,7 +389,7 @@ export function resolveWallRegionLines(walls, {
     if (wall.type !== ShapeType.WALL) continue;
     inputs.push(wallInput(wall, {
       junction: junctions?.get(wall.id),
-      openings: openingsByWall?.get(wall.id),
+      cuts: cutsByWall?.get(wall.id),
       kneeDrop: kneeDropOverlays?.get(wall.id),
       clipGroup: clipGroups?.get(wall.id) ?? null,
     }));

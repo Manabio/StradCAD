@@ -11,7 +11,7 @@ import {
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays } from '../catalog/catalogRegistry.js';
 import { replaceRowsByScenario, defaultResolveDecision } from '../catalog/resolveQueue.js';
-import { ERR_DETAIL_FIT_FAILED } from '../error.js';
+import { ERR_DETAIL_FIT_FAILED, ERR_SLIDE_ON_EXTERIOR_WALL } from '../error.js';
 import {
   jambFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol, elevationFigure, installElevationFigures,
 } from '../openings/openingDetailTestFixtures.js';
@@ -315,6 +315,29 @@ test('init: 同じ（図のキー・slot・壁厚・出幅・見付）の三方�
   } finally {
     clearOverlays();
   }
+});
+
+// ---- 外壁をホストにする引き戸の通知（R12。場面 detail-fit-failed の経路に乗せる）----
+test('init: 外壁をホストにする引き戸は detail-fit-failed の行を 1 行作る（本数によらず・許可操作は defer だけ）', async () => {
+  const { project, graph, wall } = makeGraph(); // makeGraph の壁は外壁
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 1550, OpeningCategory.FITTING, 'sliding', {});
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 2300, 800, OpeningCategory.FITTING, 'sliding', {});
+  const { catalogResolveRows } = await new OpeningModeState(graph, project).init();
+  const rows = catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].message, ERR_SLIDE_ON_EXTERIOR_WALL);
+  assert.deepEqual(rows[0].allowedActions, ['defer']);
+});
+
+test('【失敗系】init: 内壁の引き戸・外壁のドアは外壁の引き戸の通知を作らない', async () => {
+  const { project, graph, wall } = makeGraph();
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 900, OpeningCategory.FITTING, 'door', {});
+  assert.deepEqual((await new OpeningModeState(graph, project).init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed'), [], '外壁のドア');
+  const { project: p2, graph: g2 } = makeGraph();
+  const interiorWall = g2.addWall(g2.walls[0].axisCL, -75, false, g2.walls[0].clStart, 0, g2.walls[0].clEnd, 0, { isExteriorWall: false });
+  g2.addOpening(interiorWall.axisCL, -1, false, interiorWall.clStart, 1500, 1550, OpeningCategory.FITTING, 'sliding', {});
+  const rows = (await new OpeningModeState(g2, p2).init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+  assert.deepEqual(rows, [], '内壁の引き戸');
 });
 
 test('【失敗系】init: 詳細図が合わせられる記号・割当て無しの記号・三方枠でない建具は detail-fit-failed の行を作らない', async () => {

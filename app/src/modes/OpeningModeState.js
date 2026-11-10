@@ -4,7 +4,7 @@ import { composeCatalog } from '../catalog/catalogRegistry.js';
 import { buildResolveRows } from '../catalog/resolveQueue.js';
 import { buildCodeTable, currentDocumentAliases, peekUnresolvedCodes } from '../catalog/codeNormalization.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
-import { collectDetailFitFailures } from '../openings/openingDetailFitCheck.js';
+import { collectDetailFitFailures, collectSlideOnExteriorWall } from '../openings/openingDetailFitCheck.js';
 
 /**
  * unresolved配列（{code, location:'opening', openingId}[]）を `${code}::${openingId}` で
@@ -156,6 +156,12 @@ export class OpeningModeState {
         detailFitFailures.push(...collectDetailFitFailures(graph, detailFitSeen));
       } catch (e) {
         console.error('三方枠の詳細図の合わせ込み検査に失敗しました（この階はスキップします）:', e);
+      }
+      // 外壁の引き戸は外付けにできない通知（R12。全階で 1 件）。三方枠の集計の失敗に巻き込まれないよう別の try で囲む
+      try {
+        detailFitFailures.push(...collectSlideOnExteriorWall(graph, detailFitSeen));
+      } catch (e) {
+        console.error('外壁の引き戸の検査に失敗しました（この階はスキップします）:', e);
       }
       for (const opening of graph?.openings ?? []) {
         if (opening?.category && opening?.subType) {

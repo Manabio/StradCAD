@@ -6,7 +6,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { clearOverlays, setOverlay } from '../catalog/catalogRegistry.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
-import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND } from '../error.js';
+import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, ERR_SLIDE_ON_EXTERIOR_WALL } from '../error.js';
 import {
   DetailSlot, PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumRole, DetailDatumKind, DetailAxis, DetailDash,
   DETAIL_FIGURE_VERSION,
@@ -14,7 +14,7 @@ import {
 import { placeOpeningWithDefaults } from './openingEdit.js';
 import { openingSectionWallRange, wallMaterialRangeForOpening } from './openingSection.js';
 import { findHostWall, wallFaceRange } from './openingGeometry.js';
-import { collectDetailFitFailures } from './openingDetailFitCheck.js';
+import { collectDetailFitFailures, collectSlideOnExteriorWall, SLIDE_ON_EXTERIOR_WALL_KEY } from './openingDetailFitCheck.js';
 import { jambFigure, headFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol } from './openingDetailTestFixtures.js';
 
 test.afterEach(() => clearOverlays());
@@ -423,4 +423,39 @@ test('片開き戸: 建具個別の detailRefs が参照切れ → 既定へ戻�
   const ok = uniqueSymbolKey();
   installFrameSymbol(ok, { [JAMB]: jambFigure('df-chk-sw-ok'), [HEAD]: headFigure('df-chk-sw-ok-h') });
   assert.deepEqual(collectDetailFitFailures(graphWithFrames(ok, 1, [{ subType: 'singleSwing' }]).graph), []);
+});
+
+// ---- 外壁をホストにする引き戸の通知（R12。collectSlideOnExteriorWall） ----
+// 水平の壁 1 本（外壁か否かを選ぶ）に、subType の建具を n 個置く。
+function slideGraph(subType, { exterior, count = 1, category = OpeningCategory.FITTING } = {}) {
+  const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
+  const [x0, x1, y] = [cl(CenterLineType.VERTICAL, 0), cl(CenterLineType.VERTICAL, 6000), cl(CenterLineType.HORIZONTAL, 0)];
+  graph.addWall(y, 75, false, x0, 0, x1, 0, { isExteriorWall: exterior });
+  for (let i = 0; i < count; i += 1) graph.addOpening(y, 1, false, x0, 1000 + i * 2000, 1550, category, subType, {});
+  return graph;
+}
+
+test('外壁の引き戸: 外壁をホストにする引き戸が何本あっても 1 件（文言・種別ラベル付き）', () => {
+  const found = collectSlideOnExteriorWall(slideGraph('sliding', { exterior: true, count: 2 }));
+  assert.equal(found.length, 1);
+  assert.equal(found[0].message, ERR_SLIDE_ON_EXTERIOR_WALL);
+  assert.equal(found[0].symbolKey, 'sliding');
+  assert.equal(found[0].label, '引き戸');
+  assert.equal(found[0].key, SLIDE_ON_EXTERIOR_WALL_KEY);
+});
+
+test('外壁の引き戸: seen を共有すると階をまたいでも 1 件', () => {
+  const seen = new Set();
+  assert.equal(collectSlideOnExteriorWall(slideGraph('sliding', { exterior: true }), seen).length, 1);
+  assert.deepEqual(collectSlideOnExteriorWall(slideGraph('sliding', { exterior: true }), seen), []);
+});
+
+test('【失敗系】外壁の引き戸: 内壁の引き戸・外壁の他の建具（ドア・引き違い戸）・窓・建具なし・graph なしは 0 件', () => {
+  assert.deepEqual(collectSlideOnExteriorWall(slideGraph('sliding', { exterior: false })), []);
+  assert.deepEqual(collectSlideOnExteriorWall(slideGraph('door', { exterior: true })), []);
+  assert.deepEqual(collectSlideOnExteriorWall(slideGraph('doubleSliding', { exterior: true })), []);
+  assert.deepEqual(collectSlideOnExteriorWall(slideGraph('sliding', { exterior: true, category: OpeningCategory.WINDOW })), []);
+  assert.deepEqual(collectSlideOnExteriorWall(slideGraph('sliding', { exterior: true, count: 0 })), []);
+  assert.deepEqual(collectSlideOnExteriorWall(null), []);
 });

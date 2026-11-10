@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ShapeType } from '@core';
-import { resolveWallRegionLines } from './planWallRegion.js';
+import { resolveWallRegionLines, wallSpanIntervals } from './planWallRegion.js';
 import { resolveWallTJunctions } from './wallJunctionResolve.js';
 
 // 最小スタブ壁（resolveWallRegionLines が読むフィールドのみ）。
@@ -74,8 +74,8 @@ test('端の正規化は物理端に接する区間だけ: 壁端に接する開
   // H壁の hi 端（x=-2942.5）に接する開口。生き残る区間 [-6142.5,-3742.5] は物理端に触れないので、
   // 相手の内側線（x=-2955）へ寄せる正規化は効かず、材も下地も開口の縁で終わる。
   const H = realH7763d6(), V = realVd288b5();
-  const openingsByWall = new Map([[H.id, [{ coord1: -3742.5, coord2: -2942.5 }]]]);
-  const result = resolveWallRegionLines([H, V], { openingsByWall });
+  const cutsByWall = new Map([[H.id, [[-3742.5, -2942.5]]]]);
+  const result = resolveWallRegionLines([H, V], { cutsByWall });
   const lines = allLines(result);
   // y=-1942.5 の2本目 [-3045,-2942.5] と y=-1955 の2本目 [-3045,-2955] は、H壁の材が無くなって露出した
   // V壁の端の妻線と下地の木口（V壁の端はH壁の内側線へ寄せたまま）。
@@ -87,8 +87,8 @@ test('端の正規化は物理端に接する区間だけ: 壁端に接する開
 
 test('【失敗系】開口が壁の途中なら両端の正規化は従来どおりで、内側の端は開口の縁のまま', () => {
   const H = realH7763d6(), V = realVd288b5();
-  const openingsByWall = new Map([[H.id, [{ coord1: -5000, coord2: -4200 }]]]);
-  const lines = allLines(resolveWallRegionLines([H, V], { openingsByWall }));
+  const cutsByWall = new Map([[H.id, [[-5000, -4200]]]]);
+  const lines = allLines(resolveWallRegionLines([H, V], { cutsByWall }));
   assert.deepEqual(at(lines, false, -1942.5), [[-6142.5, -5000], [-4200, -2942.5]]);
   assert.deepEqual(at(lines, false, -1955), [[-6142.5, -5000], [-4200, -2955]], '物理端側だけ相手の内側線で止まる');
   assert.deepEqual(at(lines, true, -5000), [[-2045, -1942.5]]);
@@ -532,4 +532,18 @@ test('【2a壁】描画クリップの単位（clipGroups）が違う壁の線�
   const result = resolveWallRegionLines(collinearPair(), { clipGroups });
   assert.deepEqual(at(allLines(result), false, 57.5), [[0, 3000], [3000, 3500]], '単位が違えば別々の線');
   assert.deepEqual(at(result.lines.get('B'), false, 57.5), [[3000, 3500]], 'Bの区間はBが持つ＝Bのクリップが掛かる');
+});
+
+test('wallSpanIntervals: 穴の区間 cuts で壁を分割し、spanCuts をさらに引く', () => {
+  assert.deepEqual(wallSpanIntervals(0, 6000, [[1000, 1800], [3000, 3800]], []), [[0, 1000], [1800, 3000], [3800, 6000]]);
+  assert.deepEqual(wallSpanIntervals(0, 6000, [[1000, 1800]], [[500, 1200]]), [[0, 500], [1800, 6000]], 'spanCuts は分割後の区間から引く');
+  assert.deepEqual(wallSpanIntervals(0, 6000, [[0, 800]], []), [[800, 6000]], '壁の端に接する穴');
+  assert.deepEqual(wallSpanIntervals(0, 6000, [[5200, 6000]], []), [[0, 5200]]);
+});
+
+test('【失敗系】wallSpanIntervals: cuts が無ければ全長・壁より広い穴は空・重なる穴は後ろへ延びる側だけ採る', () => {
+  assert.deepEqual(wallSpanIntervals(0, 6000, undefined, undefined), [[0, 6000]]);
+  assert.deepEqual(wallSpanIntervals(0, 6000, [], []), [[0, 6000]]);
+  assert.deepEqual(wallSpanIntervals(0, 6000, [[-100, 6100]], []), []);
+  assert.deepEqual(wallSpanIntervals(0, 6000, [[1000, 2000], [1500, 2500]], []), [[0, 1000], [2500, 6000]]);
 });
