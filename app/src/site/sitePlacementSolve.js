@@ -30,7 +30,9 @@ export function normalizeLineAngle90(deg) {
  *  4. 平行移動＝頂点1の像 − R·v1
  * 2 段目「位置」（along があるとき。回転は変えず、手順3の沿い座標だけを置き換える）:
  *  3'. 共有点 k（vertex 1＝v1／2＝v2）の像の「通り芯B に直交する座標」＝ B の値 ± distance（通り芯A と直交する軸の線。
- *      符号は 2. と同じ規則: 建物図芯が B の値より大きければ −、以外は +。図芯なしは前回の変換で写した共有点と同じ側。sideFlipped で反転）。
+ *      側は敷地の形で決める: 共有点 P から相手の点 Q へ向かう像の向き dir（A に沿う成分）の反対側＝手前
+ *      （dir>0 なら −、以外は +。敷地は P から Q へ延びて建物を跨ぐため）。sideFlipped で反転。
+ *      建物図芯・前回の像は使わない〔図芯の反対側は 1 段目には合うが、共有点は B に対して図芯と同じ側にあり得る〕）。
  *      この座標は通り芯A に沿う成分と同じなので、頂点1の沿い座標へ直す: k=1 はそのまま、k=2 は R·(v2−v1)（A に平行）の沿い成分を引く。
  *      along が同じ軸の通り芯・距離が不正なら null（過剰拘束・解なし）
  * @param {object} p
@@ -82,24 +84,14 @@ export function computeSitePlacement({ v1, v2, centerLine, distance, rotationFli
     if (!Number.isFinite(along.distance) || along.distance <= 0 || !Number.isFinite(along.centerLine.value)) return null;
     if (along.vertex !== 1 && along.vertex !== 2) return null;
     const bValue = along.centerLine.value;
-    const shared = along.vertex === 2 ? v2 : v1;
-    const sharedPrev = applySiteTransform(shared, prevTransform ?? { rotationDeg: 0, tx: 0, ty: 0 });
-    const prevB = isVertical ? sharedPrev.y : sharedPrev.x; // 通り芯B に直交する成分（A の沿い方向）
-    let bSign;
-    if (buildingCenter) {
-      const centerB = isVertical ? buildingCenter.y : buildingCenter.x;
-      bSign = centerB > bValue ? -1 : 1;
-    } else {
-      bSign = prevB < bValue ? -1 : 1;
-    }
+    const dx = v2.x - v1.x, dy = v2.y - v1.y;
+    const alongComp = isVertical ? dx * sin + dy * cos : dx * cos - dy * sin; // R·(v2−v1) の A に沿う成分
+    // 共有点 P から相手 Q へ向かう像の沿い成分（敷地が延びる向き）
+    const dir = along.vertex === 1 ? alongComp : -alongComp;
+    let bSign = dir > 0 ? -1 : 1; // 延びる向きの反対側（手前）へ置く
     if (along.sideFlipped) bSign = -bSign;
     const sharedAlong = bValue + bSign * along.distance;
-    if (along.vertex === 1) {
-      alongImage = sharedAlong;
-    } else {
-      const dx = v2.x - v1.x, dy = v2.y - v1.y;
-      alongImage = sharedAlong - (isVertical ? dx * sin + dy * cos : dx * cos - dy * sin); // R·(v2−v1) の沿い成分
-    }
+    alongImage = along.vertex === 1 ? sharedAlong : sharedAlong - alongComp;
   }
 
   const orthoImage = value + sign * distance;

@@ -423,7 +423,8 @@ test('undo/redo との同期: 確定→undo で placement は null、入力は�
 
 // ---- 2 段目「位置」（S5） ----
 // 配置: 敷地 (10000,0)-(13000,0)-… を v1=(10000,0)・v2=(13000,0)。1 段目＝縦 X0（x=0）距離 1000 → 回転 90 度・図芯 (3000,2000) が x=0 の東 → 像の x=−1000。
-// 2 段目＝横 Y4000（y=4000）離れ 500・図芯 y=2000 が y=4000 の北 → 共有点の像の y=4500。R(90)·(v2−v1)=(0,3000)。
+// 2 段目＝横 Y4000（y=4000）離れ 500・R(90)·(v2−v1)=(0,3000)。側は敷地の延びる向きの手前（図芯・前回の像は使わない）:
+// 共有点 v1 は +y へ延びるので手前 y=3500、共有点 v2 は −y へ延びるので手前の反対＝y=4500。
 
 const imageOf = (sm, p) => applySiteTransform(p, sm.placementView.siteTransform);
 const nearPt = (p, x, y, msg) => { assert.ok(Math.abs(p.x - x) < 1e-6 && Math.abs(p.y - y) < 1e-6, `${msg ?? ''} (${p.x}, ${p.y}) ≠ (${x}, ${y})`); };
@@ -509,7 +510,7 @@ test('【失敗系】位置が partial: placementCanCommit は false・commitPla
   sm.dispose();
 });
 
-test('commitPlacement: 位置あり（共有点=頂点1）→ 保存される along は {vertex, centerLineId, distance（式を評価した数値）, sideFlipped}。共有点の像の y=4000+500、v2 の像の x は 1 段目の拘束どおり', async () => {
+test('commitPlacement: 位置あり（共有点=頂点1）→ 保存される along は {vertex, centerLineId, distance（式を評価した数値）, sideFlipped}。共有点の像の y=4000−500、v2 の像の x は 1 段目の拘束どおり', async () => {
   const sm = await openPlacement();
   const [v1, v2] = fillInput(sm, { distance: '1000' });
   nearPt(v1, 10000, 0); nearPt(v2, 13000, 0);
@@ -518,8 +519,8 @@ test('commitPlacement: 位置あり（共有点=頂点1）→ 保存される al
   assert.deepEqual(sm.commitPlacement(), { ok: true, toast: null });
   assert.deepEqual(sm.site.placement.input.along, { vertex: 1, centerLineId: gridY4000(sm).id, distance: 500, sideFlipped: false });
   assert.equal(sm.site.placement.rotationDeg, 90);
-  nearPt(imageOf(sm, v1), -1000, 4500, '共有点 v1（y=Y4000+500）');
-  nearPt(imageOf(sm, v2), -1000, 7500, 'v2（x=−1000 の拘束が保たれる）');
+  nearPt(imageOf(sm, v1), -1000, 3500, '共有点 v1（v2 へ延びる向きの手前 y=Y4000−500）');
+  nearPt(imageOf(sm, v2), -1000, 6500, 'v2（x=−1000 の拘束が保たれる）');
   assert.equal(sm.placementInput.along.distanceValue, '500', '保存値から作り直した入力は評価後の文字列');
   sm.dispose();
 });
@@ -599,7 +600,7 @@ test('1 段目の頂点を解除すると、その頂点を共有点にした位
   sm.dispose();
 });
 
-test('togglePlacementAlongSide: 配置済みなら即時に再配置（共有点の像 y=4500→3500。undo 1 件）。未配置ならフラグだけ（配置も undo も増えない）', async () => {
+test('togglePlacementAlongSide: 配置済みなら即時に再配置（共有点の像 y=3500→4500。undo 1 件）。未配置ならフラグだけ（配置も undo も増えない）', async () => {
   const sm = await openPlacement();
   const [v1] = fillInput(sm);
   fillAlong(sm);
@@ -610,11 +611,11 @@ test('togglePlacementAlongSide: 配置済みなら即時に再配置（共有点
   assert.equal(undoManager.peekUndo(), before);
   sm.togglePlacementAlongSide(); // 戻す
   assert.equal(sm.commitPlacement().ok, true);
-  nearPt(imageOf(sm, v1), -1000, 4500);
+  nearPt(imageOf(sm, v1), -1000, 3500);
   const first = sm.site.placement;
   assert.deepEqual(sm.togglePlacementAlongSide(), { ok: true, toast: null });
   assert.equal(sm.site.placement.input.along.sideFlipped, true);
-  nearPt(imageOf(sm, v1), -1000, 3500, '側反転で B の手前へ');
+  nearPt(imageOf(sm, v1), -1000, 4500, '側反転で B の向こうへ');
   undoManager.undo();
   assert.equal(sm.site.placement, first, '側反転の 1 件だけ戻る');
   sm.dispose();

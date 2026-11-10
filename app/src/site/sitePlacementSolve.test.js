@@ -135,14 +135,14 @@ test('沿い座標: 前回の変換（回転あり）で写した頂点1の通�
 const near = (p, x, y, msg) => { close(p.x, x, `${msg ?? ''} x`); close(p.y, y, `${msg ?? ''} y`); };
 const along = (vertex, centerLine, distance, sideFlipped = false) => ({ vertex, centerLine, distance, sideFlipped });
 
-test('along 縦A×横B・共有点=頂点1: v1=(0,0)・v2=(0,5000)・A=x10000 距離3000・B=y2000 離れ500・図芯(20000,0) → v1 の像 (7000,2500)・v2 の像 (7000,7500)。t=(7000,2500)', () => {
+test('along 縦A×横B・共有点=頂点1: v1=(0,0)・v2=(0,5000)・A=x10000 距離3000・B=y2000 離れ500・図芯(20000,0) → v1 の像 (7000,1500)・v2 の像 (7000,6500)。t=(7000,1500)', () => {
   const r = computeSitePlacement({
     ...base, v1: { x: 0, y: 0 }, v2: { x: 0, y: 5000 }, centerLine: V(10000), distance: 3000,
     buildingCenter: { x: 20000, y: 0 }, along: along(1, H(2000), 500),
   });
-  close(r.rotationDeg, 0); close(r.tx, 7000); close(r.ty, 2500);
-  near(applySiteTransform({ x: 0, y: 0 }, r), 7000, 2500, 'v1（共有点 y=B+500）');
-  near(applySiteTransform({ x: 0, y: 5000 }, r), 7000, 7500, 'v2（1 段目の拘束 x=7000 は保たれる）');
+  close(r.rotationDeg, 0); close(r.tx, 7000); close(r.ty, 1500);
+  near(applySiteTransform({ x: 0, y: 0 }, r), 7000, 1500, 'v1（共有点。v2 へ延びる向きの手前 y=B−500）');
+  near(applySiteTransform({ x: 0, y: 5000 }, r), 7000, 6500, 'v2（1 段目の拘束 x=7000 は保たれる）');
 });
 
 test('along 縦A×横B・共有点=頂点2: 同じ入力で共有点が v2 → v2 の像が (7000,2500)・v1 の像が (7000,−2500)。t=(7000,−2500)', () => {
@@ -165,14 +165,14 @@ test('along 横A×縦B・共有点=頂点1（回転 90 度）: v1=(100,50)・v2=
   near(applySiteTransform({ x: 100, y: 5050 }, r), 4800, 3000, 'v2（1 段目の拘束 y=3000 は保たれる）');
 });
 
-test('along 横A×縦B・共有点=頂点2（回転 90 度）: v2 の像が (9800,3000)・v1 の像が (14800,3000)。t=(14850,2900)', () => {
+test('along 横A×縦B・共有点=頂点2（回転 90 度）: v2 の像が (8200,3000)・v1 の像が (13200,3000)。t=(13250,2900)', () => {
   const r = computeSitePlacement({
     ...base, v1: { x: 100, y: 50 }, v2: { x: 100, y: 5050 }, centerLine: H(4000), distance: 1000,
     buildingCenter: { x: 0, y: 10000 }, along: along(2, V(9000), 800),
   });
-  close(r.rotationDeg, 90); close(r.tx, 14850); close(r.ty, 2900);
-  near(applySiteTransform({ x: 100, y: 5050 }, r), 9800, 3000, 'v2（共有点）');
-  near(applySiteTransform({ x: 100, y: 50 }, r), 14800, 3000, 'v1');
+  close(r.rotationDeg, 90); close(r.tx, 13250); close(r.ty, 2900);
+  near(applySiteTransform({ x: 100, y: 5050 }, r), 8200, 3000, 'v2（共有点。v1 へ延びる向きの手前 x=B−800）');
+  near(applySiteTransform({ x: 100, y: 50 }, r), 13200, 3000, 'v1');
 });
 
 test('along: 回転は along が無いときと同じ（位置は平行移動だけを決める）。rotationFlipped でも共有点が B から離れ分の位置にある', () => {
@@ -183,35 +183,44 @@ test('along: 回転は along が無いときと同じ（位置は平行移動だ
   const without = computeSitePlacement(args);
   const withAlong = computeSitePlacement({ ...args, along: along(2, H(2000), 500) });
   close(withAlong.rotationDeg, without.rotationDeg); close(withAlong.rotationDeg, 180);
-  // 回転 180: R·(v2−v1)=(0,−5000) → v1 の沿い座標 = 2500 − (−5000) = 7500。v2 の像は (7000, 2500)
-  near(applySiteTransform({ x: 0, y: 0 }, withAlong), 7000, 7500, 'v1');
-  near(applySiteTransform({ x: 0, y: 5000 }, withAlong), 7000, 2500, 'v2（共有点）');
+  // 回転 180: R·(v2−v1)=(0,−5000)。共有点 v2 から v1 へは +y へ延びる → v2 は手前 B−500=1500。v1 = 1500 + 5000 = 6500
+  near(applySiteTransform({ x: 0, y: 0 }, withAlong), 7000, 6500, 'v1');
+  near(applySiteTransform({ x: 0, y: 5000 }, withAlong), 7000, 1500, 'v2（共有点）');
 });
 
-test('along.sideFlipped: B のどちら側かが反転する（図芯が B の手前 → 通常は B+離れ、反転で B−離れ）。1 段目の側は変わらない', () => {
+test('along.sideFlipped: B のどちら側かが反転する（通常は延びる向きの手前 B−離れ、反転で B+離れ）。1 段目の側は変わらない。図芯に依らない', () => {
   const args = {
     ...base, v1: { x: 0, y: 0 }, v2: { x: 0, y: 5000 }, centerLine: V(10000), distance: 3000, buildingCenter: { x: 20000, y: 0 },
   };
-  near(applySiteTransform({ x: 0, y: 0 }, computeSitePlacement({ ...args, along: along(1, H(2000), 500) })), 7000, 2500);
-  near(applySiteTransform({ x: 0, y: 0 }, computeSitePlacement({ ...args, along: along(1, H(2000), 500, true) })), 7000, 1500);
-  // 図芯が B より大きい側（y=3000）なら通常は B−離れ
+  near(applySiteTransform({ x: 0, y: 0 }, computeSitePlacement({ ...args, along: along(1, H(2000), 500) })), 7000, 1500);
+  near(applySiteTransform({ x: 0, y: 0 }, computeSitePlacement({ ...args, along: along(1, H(2000), 500, true) })), 7000, 2500);
+  // 図芯が B より大きい側（y=3000）でも同じ 1500（図芯は 2 段目の側に使わない）
   const south = computeSitePlacement({ ...args, buildingCenter: { x: 20000, y: 3000 }, along: along(1, H(2000), 500) });
-  near(applySiteTransform({ x: 0, y: 0 }, south), 7000, 1500);
+  near(applySiteTransform({ x: 0, y: 0 }, south), 7000, 1500, '図芯に依らない');
 });
 
-test('along・図芯なし: 前回の変換で写した共有点と同じ側に置く（B=y2000: 前回の像 y=1000 → B−500=1500／y=5000 → B+500=2500）。sideFlipped で反対側', () => {
+test('along・図芯なしでも敷地の延びる向きで決まる（前回の像が B の手前でも向こうでも v1 の像 y=1500・sideFlipped で 2500・共有点 v2 なら v2 の像 y=2500）', () => {
   const args = {
     ...base, v1: { x: 0, y: 0 }, v2: { x: 0, y: 5000 }, centerLine: V(10000), distance: 3000, along: along(1, H(2000), 500),
   };
   const below = computeSitePlacement({ ...args, prevTransform: { rotationDeg: 0, tx: 8000, ty: 1000 } });
   near(applySiteTransform({ x: 0, y: 0 }, below), 7000, 1500, '前回の像が B の手前');
   const above = computeSitePlacement({ ...args, prevTransform: { rotationDeg: 0, tx: 8000, ty: 5000 } });
-  near(applySiteTransform({ x: 0, y: 0 }, above), 7000, 2500, '前回の像が B の向こう');
+  near(applySiteTransform({ x: 0, y: 0 }, above), 7000, 1500, '前回の像が B の向こう');
   const flipped = computeSitePlacement({ ...args, prevTransform: { rotationDeg: 0, tx: 8000, ty: 1000 }, along: along(1, H(2000), 500, true) });
   near(applySiteTransform({ x: 0, y: 0 }, flipped), 7000, 2500, 'sideFlipped');
-  // 共有点が v2 のときは v2 の前回の像で側を決める（v2 の前回の像 y=1000+5000=6000 → B の向こう → +）
   const k2 = computeSitePlacement({ ...args, along: along(2, H(2000), 500), prevTransform: { rotationDeg: 0, tx: 8000, ty: 1000 } });
-  near(applySiteTransform({ x: 0, y: 5000 }, k2), 7000, 2500, '共有点 v2 の前回の像で判定');
+  near(applySiteTransform({ x: 0, y: 5000 }, k2), 7000, 2500, '共有点 v2 は v1 へ向かう −y の反対側＝B+500');
+});
+
+test('along 回帰: 敷地の左端の角と右端の通り芯の組（P1=(0,15000)・P2=(20000,15000)・横 Y6000 距離2000・図芯(4500,3000)・共有点 P1・縦 X9000 離れ1500）→ P1 の像 x=7500（X9000 の手前）・P2 の像 x=27500', () => {
+  const r = computeSitePlacement({
+    ...base, v1: { x: 0, y: 15000 }, v2: { x: 20000, y: 15000 }, centerLine: H(6000), distance: 2000,
+    buildingCenter: { x: 4500, y: 3000 }, along: along(1, V(9000), 1500),
+  });
+  close(r.rotationDeg, 0);
+  near(applySiteTransform({ x: 0, y: 15000 }, r), 7500, 8000, 'P1（旧規則は x=10500 で建物の右へ飛んだ）');
+  near(applySiteTransform({ x: 20000, y: 15000 }, r), 27500, 8000, 'P2');
 });
 
 test('along が無い（省略・null）: 沿い座標は従来どおり前回の像のまま（R6。v1 の前回の像 y=700）', () => {
