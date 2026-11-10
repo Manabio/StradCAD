@@ -576,7 +576,8 @@ export class SiteModeState {
         if (!f.graph) return []; // peek に失敗した階（readFailed は collectAdoptedFloors が立てている）
         try {
           const outerAxisIds = computeExteriorWallSegments(f.graph).filter(s => s.loopType === 'outer').map(s => s.axisCLId);
-          const entry = { planeId: f.plane.id, regions: [...leanToPlanRegions(f.graph), ...topRoofPlanRegions(f.graph, project)] };
+          // order＝階の下→上の順位（plane.elevation。project.planes の並びも elevation 昇順だが、順序の根拠は高さそのものにする）
+          const entry = { planeId: f.plane.id, order: f.plane.elevation, regions: [...leanToPlanRegions(f.graph), ...topRoofPlanRegions(f.graph, project)] };
           outerAxisIds.forEach(id => exteriorIds.add(id));
           return [entry];
         } catch (err) {

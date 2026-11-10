@@ -75,6 +75,120 @@ test('【失敗系】roofPlanLines: 例外を投げる region は failedCount �
   assert.deepEqual(result.lines.map(l => l.key), ['p1/a/0', 'p1/b/0']);
 });
 
+// ---- 屋根の重なり（S12）: 下屋の線を上の屋根の軒先線で止める ----
+
+/** rectRegion に軒先線（outline＝閉路 1 本）を付けた region。 */
+const withOutline = (region, x0, y0, x1, y1) => ({ ...region, outline: [{ points: [x0, y0, x1, y0, x1, y1, x0, y1] }] });
+const mainRegion = (x0, y0, x1, y1) => withOutline(rectRegion('main', x0, y0, x1, y1), x0, y0, x1, y1);
+const leanRegion = (id, x0, y0, x1, y1) => withOutline(rectRegion(`lean:${id}`, x0, y0, x1, y1), x0, y0, x1, y1);
+
+test('roofPlanLines: 主屋根の軒先線の内側にかかる下屋の線は軒先で止まる（主屋根 0..4000×0..3000・下屋 −1000..3000×1000..2000）', () => {
+  const { lines, rawLines } = roofPlanLines([
+    { planeId: 'p1', order: 1, regions: [leanRegion('a', -1000, 1000, 3000, 2000)] },
+    { planeId: 'p2', order: 2, regions: [mainRegion(0, 0, 4000, 3000)] },
+  ]);
+  // 下屋の閉じた外形は主屋根の内側（x 0..3000）が隠れ、始点 (−1000,1000) をまたぐ 1 本 [0,2000]→[−1000,2000]→[−1000,1000]→[0,1000] だけ残る
+  assert.deepEqual(lines.filter(l => l.key.startsWith('p1/')).map(l => ({ key: l.key, points: l.points, closed: l.closed })), [
+    { key: 'p1/lean:a/0', points: [0, 2000, -1000, 2000, -1000, 1000, 0, 1000], closed: false },
+  ]);
+  assert.equal(rawLines.filter(l => l.key.startsWith('p1/'))[0].closed, true, '切る前は閉じた外形のまま');
+});
+
+test('roofPlanLines: 主屋根・屋根区画の線は切らない（下屋と重なっても不変）', () => {
+  const main = mainRegion(0, 0, 4000, 3000);
+  // 区画は主屋根の東に隣接（4000..6000）。下屋 −1000..5000×1000..2000 は主屋根と区画の両方にまたがる（x 0..5000 が隠れる）
+  const zone = withOutline(rectRegion('zone:z1', 4000, 0, 6000, 3000), 4000, 0, 6000, 3000);
+  const { lines } = roofPlanLines([
+    { planeId: 'p1', order: 1, regions: [leanRegion('a', -1000, 1000, 5000, 2000)] },
+    { planeId: 'p2', order: 2, regions: [zone, main] },
+  ]);
+  const top = lines.filter(l => l.key.startsWith('p2/'));
+  assert.deepEqual(top.map(l => [l.key, l.points, l.closed]), [
+    ['p2/zone:z1/0', [4000, 0, 6000, 0, 6000, 3000, 4000, 3000], true],
+    ['p2/main/0', [0, 0, 4000, 0, 4000, 3000, 0, 3000], true],
+  ]);
+  assert.deepEqual(lines.filter(l => l.key.startsWith('p1/')).map(l => [l.points, l.closed]), [
+    [[0, 2000, -1000, 2000, -1000, 1000, 0, 1000], false],
+  ]);
+});
+
+test('roofPlanLines: 3 階建て。1F 下屋が 2F 下屋と 3F 主屋根の両方に重なる区間（x 0..1500）は残らない（隠す側は和集合で偶奇に打ち消されない）', () => {
+  const { lines } = roofPlanLines([
+    { planeId: 'p1', order: 1, regions: [leanRegion('a', -1000, 1000, 3000, 2000)] },
+    { planeId: 'p2', order: 2, regions: [leanRegion('b', -500, 500, 1500, 2500)] },
+    { planeId: 'p3', order: 3, regions: [mainRegion(0, 0, 4000, 3000)] },
+  ]);
+  // a の閉じた外形のうち x −500..3000 は b か主屋根の内側。残るのは x −1000..−500 の部分だけ（始点をまたいで 1 本）
+  assert.deepEqual(lines.filter(l => l.key.startsWith('p1/')).map(l => [l.points, l.closed]), [
+    [[-500, 2000, -1000, 2000, -1000, 1000, -500, 1000], false],
+  ]);
+});
+
+test('roofPlanLines: 上の階の下屋が下の階の下屋を隠す。下屋 a（下階 0..2000×0..1000）は b（上階 1000..3000×−500..1500）の軒先で止まり、b は不変', () => {
+  const { lines } = roofPlanLines([
+    { planeId: 'p1', order: 1, regions: [leanRegion('a', 0, 0, 2000, 1000)] },
+    { planeId: 'p2', order: 2, regions: [leanRegion('b', 1000, -500, 3000, 1500)] },
+  ]);
+  assert.deepEqual(lines.find(l => l.key.startsWith('p1/')).points, [1000, 1000, 0, 1000, 0, 0, 1000, 0]);
+  assert.deepEqual(lines.filter(l => l.key.startsWith('p2/')).map(l => [l.points, l.closed]), [
+    [[1000, -500, 3000, -500, 3000, 1500, 1000, 1500], true],
+  ]);
+});
+
+test('roofPlanLines: 同じ階の下屋どうし・order が無い階どうしは切らない', () => {
+  const a = leanRegion('a', 0, 0, 2000, 1000);
+  const b = leanRegion('b', 1000, -500, 3000, 1500);
+  const same = roofPlanLines([{ planeId: 'p1', order: 1, regions: [a, b] }]);
+  assert.deepEqual(same.lines.map(l => [l.points, l.closed]), [
+    [[0, 0, 2000, 0, 2000, 1000, 0, 1000], true],
+    [[1000, -500, 3000, -500, 3000, 1500, 1000, 1500], true],
+  ]);
+  // 上の階の下屋が下の階を隠す向きだけ。逆（下の階の下屋は上の階を隠さない）は上の検証で b 不変として確認済み
+  const noOrder = roofPlanLines([{ planeId: 'p1', regions: [a] }, { planeId: 'p2', regions: [b] }]);
+  assert.equal(noOrder.lines.length, 2, 'order が無ければ下屋どうしは切らない');
+  assert.equal(noOrder.lines[0].closed, true);
+});
+
+test('roofPlanLines: 主屋根が無ければ下屋は上の階の下屋にだけ切られる（主屋根の (a) は効かない）', () => {
+  const { lines } = roofPlanLines([{ planeId: 'p1', order: 1, regions: [leanRegion('a', -1000, 1000, 3000, 2000)] }]);
+  assert.deepEqual(lines.map(l => [l.points, l.closed]), [[[-1000, 1000, 3000, 1000, 3000, 2000, -1000, 2000], true]]);
+});
+
+test('roofPlanLines: 外形線に一致する下屋の線は隠れる側（主屋根と軒先どうしが一致する下屋 → 線なし）', () => {
+  const { lines } = roofPlanLines([
+    { planeId: 'p1', order: 1, regions: [leanRegion('a', 0, 0, 4000, 3000)] },
+    { planeId: 'p2', order: 2, regions: [mainRegion(0, 0, 4000, 3000)] },
+  ]);
+  assert.deepEqual(lines.map(l => l.key), ['p2/main/0']);
+});
+
+test('【失敗系】roofPlanLines: outline を読むと例外の region は隠す側に使わず、他の下屋は切られない。自身の例外は failedCount', () => {
+  const bad = { key: 'zone:bad', get outline() { throw new Error('壊れた outline'); }, outlineOnly: true, exposedPaths: [{ points: [0, 0, 10, 0], closed: false }] };
+  const { lines, failedCount } = roofPlanLines([
+    { planeId: 'p1', order: 1, regions: [leanRegion('a', 0, 0, 2000, 1000)] },
+    { planeId: 'p2', order: 2, regions: [bad] },
+  ]);
+  assert.equal(failedCount, 0, 'outline の例外は region の線を組む握りには入らない（exposedPaths は読める）');
+  assert.deepEqual(lines.find(l => l.key.startsWith('p1/')).points, [0, 0, 2000, 0, 2000, 1000, 0, 1000]);
+});
+
+test('composeSitePlacementView: 図芯と枠は切る前の線から（隠れた下屋の分も含める。切った後の線なら (1500,1500)）', () => {
+  // 主屋根は描く線（exposedPaths）が 1000..2000 の正方形・軒先線（outline）は 0..4000×0..3000。下屋 100..300 はその軒先線の内側にすっかり隠れる
+  const main = { ...rectRegion('main', 1000, 1000, 2000, 2000), outline: [{ points: [0, 0, 4000, 0, 4000, 3000, 0, 3000] }] };
+  const roof = {
+    floors: [
+      { planeId: 'p1', order: 1, regions: [leanRegion('a', 100, 100, 300, 300)] },
+      { planeId: 'p2', order: 2, regions: [main] },
+    ],
+    gridBounds: null, readFailed: false,
+  };
+  const v = composeSitePlacementView({ site: new Site(), roof });
+  assert.deepEqual(v.roofLines.map(l => l.key), ['p2/main/0'], '隠れた下屋の線は描かない');
+  assert.deepEqual(v.buildingCenter, { x: 1050, y: 1050 }, '切る前の外接矩形 100..2000 の中心');
+  assert.equal(v.centerSource, SitePlacementCenterSource.ROOF);
+  assert.equal(v.roofEmpty, false);
+});
+
 // ---- 敷地の外周 ----
 
 test('siteOutlineSegments / siteOutlineCorners: 三斜は外周だけ（内側の対角線は出さない）・角は外周が2本集まる点', () => {

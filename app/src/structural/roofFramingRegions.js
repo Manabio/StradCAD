@@ -37,7 +37,7 @@
  *   下屋＝屋根セルのある階の graph（その階の伏図の自階 graph）。
  */
 import {
-  isRoofFeature, RoofShape, CL_OVERLAP_TOL_MM, DEFAULT_ROOF_EAVE_OVERHANG_MM, DEFAULT_ROOF_GABLE_OVERHANG_MM, ROOF_ZONE_REGION_KEY_PREFIX,
+  isRoofFeature, RoofShape, CL_OVERLAP_TOL_MM, DEFAULT_ROOF_EAVE_OVERHANG_MM, DEFAULT_ROOF_GABLE_OVERHANG_MM, ROOF_ZONE_REGION_KEY_PREFIX, LEAN_TO_REGION_KEY_PREFIX,
 } from '../core/constants.js';
 import { isTopFloorPlane } from '../core/project.js';
 import { rulesFor, effectiveStructure } from './structureRules.js';
@@ -294,7 +294,7 @@ function framingRegionOfRoom(room, graph) {
     zeroZones, tolMm: CL_OVERLAP_TOL_MM,
   });
   if (route.kind === 'none') return null;
-  const key = `lean:${room.id}`;
+  const key = `${LEAN_TO_REGION_KEY_PREFIX}${room.id}`;
   if (route.kind === 'rect') {
     const region = { key, rect, shape: route.shape, ridgeIsVertical: regionRidgeIsVertical(route.shape, room.roofSpec, rect), highSide: route.highSide };
     return { region: withOutline(region, room.roofSpec, zeroZones, null, interiorRects), zeroZones, kindZones: null, interiorRects };
@@ -318,7 +318,7 @@ function planOutlineOnlyRegion(room, graph) {
   const boundsList = roofRoomBounds(room, graph);
   const interiorRects = roofInteriorRects(graph);
   const r = outlineOnlyRegionOf({
-    key: `lean:${room.id}`, boundsList, shape: resolveRoofShape(room.roofSpec, { boundsList }), spec: room.roofSpec,
+    key: `${LEAN_TO_REGION_KEY_PREFIX}${room.id}`, boundsList, shape: resolveRoofShape(room.roofSpec, { boundsList }), spec: room.roofSpec,
     // 屋内に接する部分は出幅 0（壁の中に重なるので線を描かない）
     zeroZonesOf: (_rect, _rects, edges) => roofBoundaryInteriorContacts(edges, graph, interiorRects),
     interiorRects,

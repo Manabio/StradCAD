@@ -137,6 +137,8 @@ export const ROOF_ZONE_PICK_START_LABEL = '＋屋根区画を指定';
 export const ROOF_ZONE_PICK_END_LABEL = '指定を終える';
 // 屋根区画の小屋組 region の key の接頭辞（structural/roofFramingRegions.js。key＝`zone:<zoneId>`。区画以外の主屋根は 'main'）
 export const ROOF_ZONE_REGION_KEY_PREFIX = 'zone:';
+// 下屋（leanToPlanRegions）の region の key の接頭辞（key＝`lean:<roomId>`）。配置図の屋根伏せ図が下屋と主屋根・区画を見分ける
+export const LEAN_TO_REGION_KEY_PREFIX = 'lean:';
 // 外部タブ（finish/exteriorGroups.js buildExteriorGroups）の群の種別
 export const ExteriorGroupType = Object.freeze({
   MAIN_ROOF: 'mainRoof',  // 主屋根（区画以外の範囲。セルを持たない固定の群）

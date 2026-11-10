@@ -11,9 +11,10 @@
  * 写像は p' = R(rotationDeg)·p + (tx, ty)（原点まわりの回転＋平行移動。pivot は持たない＝敷地の図芯は形で動くため）。
  * 写像の口（applySiteTransform・siteTransformGroupProps）は site/siteTransform.js だけが持つ（ここからは再 export しない）。
  */
-import { SitePlacementCenterSource, SITE_LOG_TAG } from '../core/constants.js';
+import { SitePlacementCenterSource, SITE_LOG_TAG, LEAN_TO_REGION_KEY_PREFIX, CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { samePlacementVertex } from './sitePlacementVertex.js';
 import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
+import { clipRoofLinesByCovers } from '../finish/roof/roofPlanClip.js';
 import { computeOuterLineIds, computeOuterCornerPoints } from './lineClassification.js';
 import { computeOutlinePieces, computeOutlineCorners } from './siteRectGeometry.js';
 import { composeSitePlacementGrid } from './sitePlacementGrid.js';
@@ -23,27 +24,48 @@ import { applySiteTransform } from './siteTransform.js';
 // Konva の key の組み立て部品。種別ごとの id 空間の衝突を避けるためだけに付け、比較には使わない。
 const SITE_PLACEMENT_KEY_PREFIX = Object.freeze({ LEAN: 'l', RECT: 'r', POINT: 'p', CORNER: 'c' });
 
+const isLeanRegion = region => typeof region?.key === 'string' && region.key.startsWith(LEAN_TO_REGION_KEY_PREFIX);
+// 壊れた region（outline を読むと例外）は隠す側に使わない（その region 自身の線は region ごとの握りで failedCount に数える）
+const outlineRingsOf = region => {
+  try { return region?.outline ?? []; } catch { return []; }
+};
+
 /**
  * 全採用階の屋根の線。region ごとに握り、例外の region は failedCount に数えて残りは描く（facade/facadeRoof.js と同じ握り方）。
- * @param {Array<{planeId:string, regions:object[]}>} floors
- * @returns {{lines: Array<{key:string, points:number[], closed:boolean}>, failedCount:number}}
+ * 下屋の線は上にある屋根の軒先線（region.outline）の内側を描かない（隠れる部分を止める）。上にある屋根＝(a) 主屋根・屋根区画（下屋でない region。
+ * 最上階だけに出る）の全部、(b) 自分より order が大きい階の下屋。同じ階（order が同じ・無い）の下屋どうしは高さの上下が決まらないので切らない。
+ * 主屋根・屋根区画の線は切らない。
+ * @param {Array<{planeId:string, order?:number, regions:object[]}>} floors order＝階の下→上の順位（大きいほど上。SiteModeState が plane.elevation を付ける）
+ * @returns {{lines: Array<{key:string, points:number[], closed:boolean}>, rawLines: Array<{key:string, points:number[], closed:boolean}>, failedCount:number}}
+ *   lines＝切った後（描く線）・rawLines＝切る前（図芯・枠の基準。配置の基準は隠れる線も含める）
  */
 export function roofPlanLines(floors) {
+  const list = floors ?? [];
+  // 隠す側は region ごとの閉路の組のまま持つ（clipRoofLinesByCovers が組の和集合で判定。重なる屋根が偶奇で打ち消し合わない）
+  const mainRings = list.flatMap(f => (f.regions ?? []).filter(r => !isLeanRegion(r)).map(outlineRingsOf));
   const lines = [];
+  const rawLines = [];
   let failedCount = 0;
-  for (const { planeId, regions } of floors ?? []) {
+  for (const { planeId, order, regions } of list) {
+    const covers = [...mainRings];
+    if (Number.isFinite(order)) {
+      for (const f of list) {
+        if (Number.isFinite(f.order) && f.order > order) covers.push(...(f.regions ?? []).filter(isLeanRegion).map(outlineRingsOf));
+      }
+    }
     for (const region of regions ?? []) {
       try {
-        roofPlanRegionFigure(region).lines.forEach((l, i) => {
-          lines.push({ key: `${planeId}/${region.key}/${i}`, points: l.points, closed: l.closed });
-        });
+        const figureLines = roofPlanRegionFigure(region).lines;
+        const clipped = isLeanRegion(region) ? clipRoofLinesByCovers(figureLines, covers, CL_OVERLAP_TOL_MM) : figureLines;
+        figureLines.forEach((l, i) => rawLines.push({ key: `${planeId}/${region.key}/${i}`, points: l.points, closed: l.closed }));
+        clipped.forEach((l, i) => lines.push({ key: `${planeId}/${region.key}/${i}`, points: l.points, closed: l.closed }));
       } catch (err) {
         console.warn(`${SITE_LOG_TAG} 屋根の region「${region?.key}」の線を組めませんでした（その region は描かない）:`, err);
         failedCount++;
       }
     }
   }
-  return { lines, failedCount };
+  return { lines, rawLines, failedCount };
 }
 
 /**
@@ -102,7 +124,7 @@ const centerOf = b => (b ? { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 
  * 配置図の描画プリミティブ一式。
  * @param {object} p
  * @param {object} p.site 敷地（lines・points・rects）
- * @param {{floors: Array<{planeId:string, regions:object[]}>, gridBounds: {minX,minY,maxX,maxY}|null, gridLines?: object[], readFailed:boolean}|null} p.roof
+ * @param {{floors: Array<{planeId:string, order?:number, regions:object[]}>, gridBounds: {minX,minY,maxX,maxY}|null, gridLines?: object[], readFailed:boolean}|null} p.roof
  * @returns {{
  *   roofLines: Array<{key:string, points:number[], closed:boolean}>, roofFailedCount: number, roofEmpty: boolean,
  *   siteSegments: Array<{key:string, points:number[]}>, siteCorners: Array<{key:string, x:number, y:number}>,
@@ -114,11 +136,12 @@ const centerOf = b => (b ? { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 
  * }}
  */
 export function composeSitePlacementView({ site, roof }) {
-  const { lines: roofLines, failedCount: roofFailedCount } = roofPlanLines(roof?.floors ?? []);
+  const { lines: roofLines, rawLines: roofRawLines, failedCount: roofFailedCount } = roofPlanLines(roof?.floors ?? []);
   const siteSegments = siteOutlineSegments(site);
   const siteCorners = siteOutlineCorners(site);
 
-  const roofBounds = boundsOfPointLists(roofLines.map(l => l.points));
+  // 図芯・枠は切る前の線から（隠れる部分も含めた建物の範囲。配置の基準は S12 の前と変えない）
+  const roofBounds = boundsOfPointLists(roofRawLines.map(l => l.points));
   const gridBounds = roof?.gridBounds ?? null;
   const buildingBounds = roofBounds ?? gridBounds;
   const centerSource = roofBounds ? SitePlacementCenterSource.ROOF
