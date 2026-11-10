@@ -118,6 +118,20 @@ export function boundsOfPointLists(pointLists) {
   return b;
 }
 
+/**
+ * 敷地の外周の線分を配置図の座標へ写す（枠 siteBounds と、はなれ寸法の測り先に使う同じ点列）。
+ * @param {Array<{points:number[]}>} segments 敷地座標の線分（[x1,y1,x2,y2]）
+ * @param {{rotationDeg:number, tx:number, ty:number}} transform
+ * @returns {Array<{points:[number,number,number,number]}>}
+ */
+export function placeSiteSegments(segments, transform) {
+  return segments.map(s => {
+    const a = applySiteTransform({ x: s.points[0], y: s.points[1] }, transform);
+    const b = applySiteTransform({ x: s.points[2], y: s.points[3] }, transform);
+    return { points: [a.x, a.y, b.x, b.y] };
+  });
+}
+
 const centerOf = b => (b ? { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 } : null);
 
 /**
@@ -155,17 +169,14 @@ export function composeSitePlacementView({ site, roof }) {
     ? { rotationDeg: placement.rotationDeg, tx: placement.tx, ty: placement.ty }
     : { rotationDeg: 0, tx: aligned ? buildingCenter.x - siteCenter.x : 0, ty: aligned ? buildingCenter.y - siteCenter.y : 0 };
   // 配置図座標での敷地の外周の外接矩形（通り芯の線と丸ラベルを敷地の外へ出すための枠）。敷地が無ければ null
-  const siteBounds = boundsOfPointLists(siteSegments.map(s => {
-    const a = applySiteTransform({ x: s.points[0], y: s.points[1] }, siteTransform);
-    const b = applySiteTransform({ x: s.points[2], y: s.points[3] }, siteTransform);
-    return [a.x, a.y, b.x, b.y];
-  }));
+  const siteSegmentsPlaced = placeSiteSegments(siteSegments, siteTransform);
+  const siteBounds = boundsOfPointLists(siteSegmentsPlaced.map(s => s.points));
   return {
     roofLines, roofFailedCount, roofEmpty: roofLines.length === 0,
     siteSegments, siteCorners,
     buildingCenter, centerSource, siteCenter,
     // 通り芯の線・丸ラベル・寸法（図芯の基準 gridBounds とは別の入力。ここから図芯は求めない）
-    grid: composeSitePlacementGrid({ gridLines: roof?.gridLines ?? [], roofBounds, siteBounds }),
+    grid: composeSitePlacementGrid({ gridLines: roof?.gridLines ?? [], roofBounds, siteBounds, siteSegmentsPlaced }),
     // 境界線ラベルの片（敷地座標・結合済み。字の位置は scale に依るのでレイヤーが layoutBoundaryLabels で出す）
     boundaryPieces: mergeCollinearPieces(boundaryPieces(site)),
     siteTransform,

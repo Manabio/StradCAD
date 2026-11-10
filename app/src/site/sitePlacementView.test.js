@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { Site } from '../core.js';
 import { SitePlacementCenterSource } from '../core/constants.js';
 import {
-  roofPlanLines, siteOutlineSegments, siteOutlineCorners, boundsOfPointLists,
+  roofPlanLines, siteOutlineSegments, siteOutlineCorners, boundsOfPointLists, placeSiteSegments,
   composeSitePlacementView,
   samePlacementVertex, placementVertexIndex,
   placementAlongVertexIndex, placementVertexLabels, placementVertexLabelText,
@@ -365,6 +365,64 @@ test('composeSitePlacementView: grid.frame は配置図座標の敷地の外接�
   const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} vs ${b}`);
   near(v.grid.frame.x[0], 8000); near(v.grid.frame.x[1], 10000);
   near(v.grid.frame.y[0], 5000); near(v.grid.frame.y[1], 9000);
+});
+
+test('placeSiteSegments: 敷地の線分を配置図座標へ写す（回転 90°・tx=10000・ty=5000: (0,0)-(4000,0) → (10000,5000)-(10000,9000)）。applySiteTransform と同じ写像', () => {
+  const t = { rotationDeg: 90, tx: 10000, ty: 5000 };
+  const placed = placeSiteSegments([{ key: 'a', points: [0, 0, 4000, 0] }, { key: 'b', points: [4000, 0, 4000, 2000] }], t);
+  assert.equal(placed.length, 2);
+  placed[0].points.forEach((v, i) => assert.ok(Math.abs(v - [10000, 5000, 10000, 9000][i]) < 1e-6, `${i}: ${v}`));
+  const p = applySiteTransform({ x: 4000, y: 2000 }, t);
+  assert.ok(Math.abs(placed[1].points[2] - p.x) < 1e-6 && Math.abs(placed[1].points[3] - p.y) < 1e-6);
+  assert.deepEqual(placeSiteSegments([], t), []);
+});
+
+test('composeSitePlacementView: はなれ寸法は敷地を配置図座標へ写して測る（回転 90°: 敷地 x 8000..10000・y 5000..9000、通り芯 X=9000・Y=6000 → 左右 1000・上 1000・下 3000）', () => {
+  const site = new Site();
+  site.addRect(0, 0, 4000, 2000);
+  const input = { v1: { x: 0, y: 0 }, v2: { x: 4000, y: 0 }, centerLineId: 'c1', distance: 3000, rotationFlipped: false, sideFlipped: false };
+  site.setPlacement({ rotationDeg: 90, tx: 10000, ty: 5000, input });
+  const roof = {
+    floors: [{ planeId: 'p1', regions: [{ key: 'r', outlineOnly: true, exposedPaths: [{ points: [9000, 6000, 9500, 6000, 9500, 7000, 9000, 7000], closed: true }] }] }],
+    gridBounds: null,
+    gridLines: [{ id: 'x0', centerLineType: 'X', value: 9000, label: 'X1' }, { id: 'y0', centerLineType: 'Y', value: 6000, label: 'Y1' }],
+    readFailed: false,
+  };
+  const rows = composeSitePlacementView({ site, roof }).grid.rows;
+  assert.equal(rows.length, 4, '通り芯は各軸 1 本なので既存の段は無く、はなれだけ（測った側ごとに 1 行）');
+  const segsOf = side => rows.filter(r => r.side === side).map(r => r.segments);
+  assert.deepEqual(segsOf('top'), [[{ v1: 8000, v2: 9000, length: 1000 }], [{ v1: 9000, v2: 10000, length: 1000 }]]);
+  assert.deepEqual(segsOf('left'), [[{ v1: 5000, v2: 6000, length: 1000 }], [{ v1: 6000, v2: 9000, length: 3000 }]]);
+});
+
+test('composeSitePlacementView: 実機相当（敷地 13000×15000・配置 tx=−2000・ty=−13500）で左 2000・下 1500・右 1900（13000−2000−9100）・上 886（15000−1500−12614）', () => {
+  const site = new Site();
+  site.addRect(0, 0, 13000, 15000);
+  const input = { v1: { x: 0, y: 0 }, v2: { x: 0, y: 15000 }, centerLineId: 'x0', distance: 2000, rotationFlipped: false, sideFlipped: false };
+  site.setPlacement({ rotationDeg: 0, tx: -2000, ty: -13500, input });
+  const mk = (ids, type, vals) => vals.map((value, i) => ({ id: `${ids}${i}`, centerLineType: type, value, label: `${ids}${i}` }));
+  const roof = {
+    floors: [{ planeId: 'p1', regions: [{ key: 'r', outlineOnly: true, exposedPaths: [{ points: [-500, -13000, 9600, -13000, 9600, 500, -500, 500], closed: true }] }] }],
+    gridBounds: null,
+    gridLines: [...mk('x', 'X', [0, 1820, 3640, 7280, 9100]), ...mk('y', 'Y', [-12614, -7000, -3640, 0])],
+    readFailed: false,
+  };
+  const rows = composeSitePlacementView({ site, roof }).grid.rows;
+  const lens = side => rows.filter(r => r.side === side && r.key.includes('/gap/')).flatMap(r => r.segments.map(s => s.length));
+  assert.deepEqual(lens('top'), [2000, 1900]);
+  assert.deepEqual(lens('left'), [886, 1500]);
+  assert.equal(rows.filter(r => r.key.includes('/gap/')).length, 4, '上 2 行・左 2 行。下・右は上・左と同じ値なので出さない');
+});
+
+test('【失敗系】composeSitePlacementView: 敷地が空なら、はなれ寸法は出ない（通り芯の寸法だけ）', () => {
+  const roof = {
+    floors: [], gridBounds: null, readFailed: false,
+    gridLines: [{ id: 'x0', centerLineType: 'X', value: 0, label: 'X1' }, { id: 'x1', centerLineType: 'X', value: 5000, label: 'X2' },
+      { id: 'y0', centerLineType: 'Y', value: 0, label: 'Y1' }, { id: 'y1', centerLineType: 'Y', value: 4000, label: 'Y2' }],
+  };
+  const rows = composeSitePlacementView({ site: new Site(), roof }).grid.rows;
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every(r => !r.key.includes('/gap/')));
 });
 
 test('【失敗系】composeSitePlacementView: 敷地が空なら siteBounds が無く frame は屋根の外接矩形のまま', () => {

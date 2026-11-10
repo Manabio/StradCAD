@@ -292,7 +292,9 @@ test('通り芯の写し: placementRoof.gridLines は本数・昇順・ラベル
     ]);
     const view = sm.placementView;
     assert.equal(view.grid.lines.length, 5);
-    assert.equal(view.grid.rows.length, 3, 'X=間隔＋全長・Y=間隔');
+    const gapRows = view.grid.rows.filter(r => r.key.includes('/gap/'));
+    assert.equal(view.grid.rows.length - gapRows.length, 3, 'X=間隔＋全長・Y=間隔');
+    assert.ok(gapRows.length >= 2, '敷地があるので、はなれ寸法（上・左）が足される（S14）');
     assert.equal(view.centerSource, SitePlacementCenterSource.ROOF);
     sm.dispose();
   });
