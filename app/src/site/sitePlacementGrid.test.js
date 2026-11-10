@@ -137,15 +137,15 @@ const layoutGrid = () => composeSitePlacementGrid({
 });
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} vs ${b}`);
 
-test('layoutSitePlacementGrid: 寸法線は枠の外（X 行は枠の上端より上・Y 行は左端より左）。1 段目＝16px・2 段目＝16＋24px。数値は線の手前（−11−2px）', () => {
+test('layoutSitePlacementGrid: 寸法線は枠の外（X 行は枠の上端より上・Y 行は左端より左）。1 段目＝32px・2 段目＝32＋24px。数値は線の手前（−11−2px）', () => {
   const l = layoutSitePlacementGrid(layoutGrid(), 1);
   const x0 = l.rows.find(r => r.axis === V && r.key.endsWith('/0')), x1 = l.rows.find(r => r.axis === V && r.key.endsWith('/1'));
   const y0 = l.rows.find(r => r.axis === H);
   assert.equal(x0.side, DimensionSide.TOP);
   assert.equal(y0.side, DimensionSide.LEFT);
-  near(x0.lineCoord, 28000 - 16);
-  near(x1.lineCoord, 28000 - 40);
-  near(y0.lineCoord, 48000 - 16);
+  near(x0.lineCoord, 28000 - 32);
+  near(x1.lineCoord, 28000 - 56);
+  near(y0.lineCoord, 48000 - 32);
   near(x0.normalNumCoord, x0.lineCoord - 13);
   near(y0.normalNumCoord, y0.lineCoord - 13);
   assert.ok(x1.lineCoord < x0.lineCoord, '全長の段は間隔の段より外');
@@ -173,16 +173,16 @@ test('layoutSitePlacementGrid: 離れは画面 px 固定（scale 2 では世界 
 
 test('layoutSitePlacementGrid: 丸の中心は枠から（最も外の行の数値帯の外＋6px＋半径12px）。両端で同じ距離。線は丸の中心から丸の中心まで', () => {
   const l = layoutSitePlacementGrid(layoutGrid(), 1);
-  // X は行 2 段: 16＋24＋11＋2＋6＝59、＋半径 12 → 71。Y は行 1 段: 16＋11＋2＋6＝35、＋12 → 47
+  // X は行 2 段: 32＋24＋11＋2＋6＝75、＋半径 12 → 87。Y は行 1 段: 32＋11＋2＋6＝51、＋12 → 63
   const x1 = l.labels.filter(t => t.key.includes('/x1/'));
   assert.equal(x1.length, 2);
-  near(28000 - x1[0].y, 71);
-  near(x1[1].y - 36000, 71);
+  near(28000 - x1[0].y, 87);
+  near(x1[1].y - 36000, 87);
   assert.deepEqual([x1[0].x, x1[1].x], [53640, 53640]);
   assert.deepEqual(x1.map(t => t.label), ['X2', 'X2']);
   const y0 = l.labels.filter(t => t.key.includes('/y0/'));
-  near(48000 - y0[0].x, 47);
-  near(y0[1].x - 62000, 47);
+  near(48000 - y0[0].x, 63);
+  near(y0[1].x - 62000, 63);
   assert.deepEqual([y0[0].y, y0[1].y], [30000, 30000]);
   const lineX1 = l.lines.find(t => t.key.endsWith('/x1'));
   assert.deepEqual(lineX1.points, [x1[0].x, x1[0].y + 12, x1[1].x, x1[1].y - 12], '線の端は丸の縁（中心から半径 12px 手前）');
@@ -199,11 +199,11 @@ test('layoutSitePlacementGrid: 通り芯 0 本は空（例外なし）。行が 
     gridLines: mkLines([50000], [30000]), roofBounds: { minX: 49000, minY: 29000, maxX: 51000, maxY: 31000 },
   }), 1);
   assert.equal(one.rows.length, 0);
-  near(29000 - one.labels[0].y, 47); // 16＋11＋2＋6＋12
+  near(29000 - one.labels[0].y, 63); // 32＋11＋2＋6＋12
 });
 
 // ---- 敷地の外周（siteBounds）で線と丸ラベルの枠を広げる ----
-// scale 1: 丸の離れ X 軸（行 2 段）71・Y 軸（行 1 段）47
+// scale 1: 丸の離れ X 軸（行 2 段）87・Y 軸（行 1 段）63
 
 const withSite = siteBounds => composeSitePlacementGrid({
   gridLines: mkLines([50000, 53640, 57280], [30000, 34000]),
@@ -236,11 +236,11 @@ const placedGrid = () => composeSitePlacementGrid({
   siteBounds: { minX: -2000, minY: -13500, maxX: 11000, maxY: 1500 },
 });
 
-test('layoutSitePlacementGrid: 寸法行は敷地込みの枠の縁から 16px 外（X 行 y＝−13500−16・Y 行 x＝−2000−16）。2 段目はさらに 24px 外', () => {
+test('layoutSitePlacementGrid: 寸法行は敷地込みの枠の縁から 32px 外（X 行 y＝−13500−32・Y 行 x＝−2000−32）。2 段目はさらに 24px 外', () => {
   const l = layoutSitePlacementGrid(placedGrid(), 1);
-  near(l.rows.find(r => r.axis === V && r.key.endsWith('/0')).lineCoord, -13500 - 16);
-  near(l.rows.find(r => r.axis === V && r.key.endsWith('/1')).lineCoord, -13500 - 40);
-  near(l.rows.find(r => r.axis === H).lineCoord, -2000 - 16);
+  near(l.rows.find(r => r.axis === V && r.key.endsWith('/0')).lineCoord, -13500 - 32);
+  near(l.rows.find(r => r.axis === V && r.key.endsWith('/1')).lineCoord, -13500 - 56);
+  near(l.rows.find(r => r.axis === H).lineCoord, -2000 - 32);
 });
 
 test('layoutSitePlacementGrid: Y 軸の寸法（HORIZONTAL・左側）の行が出て、位置は敷地込みの枠の左縁基準。点は x＝線・y＝通り芯', () => {
@@ -251,31 +251,31 @@ test('layoutSitePlacementGrid: Y 軸の寸法（HORIZONTAL・左側）の行が�
   assert.deepEqual(rowsY[0].segments, [{ v1: -4000, v2: 0, length: 4000 }]);
   const l = layoutSitePlacementGrid(g, 1);
   const y0 = l.rows.find(r => r.axis === H);
-  near(y0.lineCoord, g.frame.x[0] - 16);
-  assert.deepEqual(y0.dots.map(d => [d.x, d.y]), [[-2000 - 16, -4000], [-2000 - 16, 0]]);
+  near(y0.lineCoord, g.frame.x[0] - 32);
+  assert.deepEqual(y0.dots.map(d => [d.x, d.y]), [[-2000 - 32, -4000], [-2000 - 32, 0]]);
 });
 
-test('layoutSitePlacementGrid: 丸ラベルは寸法行（数値帯まで）のさらに外。X 行 2 段なら y＝−13500−71、Y 行 1 段なら x＝−2000−47。線の端は丸の縁', () => {
+test('layoutSitePlacementGrid: 丸ラベルは寸法行（数値帯まで）のさらに外。X 行 2 段なら y＝−13500−87、Y 行 1 段なら x＝−2000−63。線の端は丸の縁', () => {
   const l = layoutSitePlacementGrid(placedGrid(), 1);
   const x1 = labelsOf(l, 'x1');
-  near(x1[0].y, -13500 - 71);
-  near(x1[1].y, 1500 + 71);
+  near(x1[0].y, -13500 - 87);
+  near(x1[1].y, 1500 + 87);
   const y0 = labelsOf(l, 'y0');
-  near(y0[0].x, -2000 - 47);
-  near(y0[1].x, 11000 + 47);
+  near(y0[0].x, -2000 - 63);
+  near(y0[1].x, 11000 + 63);
   const row2 = l.rows.find(r => r.axis === V && r.key.endsWith('/1'));
   assert.ok(x1[0].y < row2.normalNumCoord - 11, '丸の中心は最も外の寸法行の数値より外');
 });
 
-test('layoutSitePlacementGrid: 敷地が小さく枠が屋根・通り芯で決まるなら従来の位置（丸 X 71・Y 47）。敷地込みでも離れは画面 px 固定（scale 2 で半分）', () => {
+test('layoutSitePlacementGrid: 敷地が小さく枠が屋根・通り芯で決まるなら従来の位置（丸 X 87・Y 63）。敷地込みでも離れは画面 px 固定（scale 2 で半分）', () => {
   const l = layoutSitePlacementGrid(withSite({ minX: 49000, minY: 29000, maxX: 61000, maxY: 35000 }), 1);
-  near(labelsOf(l, 'x1')[0].y, 28000 - 71);
-  near(labelsOf(l, 'x1')[1].y, 36000 + 71);
-  near(labelsOf(l, 'y0')[0].x, 48000 - 47);
-  near(labelsOf(l, 'y0')[1].x, 62000 + 47);
+  near(labelsOf(l, 'x1')[0].y, 28000 - 87);
+  near(labelsOf(l, 'x1')[1].y, 36000 + 87);
+  near(labelsOf(l, 'y0')[0].x, 48000 - 63);
+  near(labelsOf(l, 'y0')[1].x, 62000 + 63);
   const l2 = layoutSitePlacementGrid(placedGrid(), 2);
-  near(l2.rows.find(r => r.axis === V && r.key.endsWith('/0')).lineCoord, -13500 - 8);
-  near(-13500 - labelsOf(l2, 'x1')[0].y, 35.5);
+  near(l2.rows.find(r => r.axis === V && r.key.endsWith('/0')).lineCoord, -13500 - 16);
+  near(-13500 - labelsOf(l2, 'x1')[0].y, 43.5);
 });
 
 // ---- composeSitePlacementView への配線 ----

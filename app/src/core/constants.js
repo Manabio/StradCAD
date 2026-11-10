@@ -565,8 +565,8 @@ export const SITE_PLACEMENT_ROOF_LINE_WEIGHT = 'thin';
 export const GRID_DIM_COLOR = '#475569';
 /** 通り芯の寸法の、寸法線上の点（通り芯との交点）の半径（画面 px）。 */
 export const GRID_DIM_DOT_RADIUS_PX = 2;
-/** 配置図の通り芯の寸法: 通り芯の枠の端から1段目の寸法線までの離れ（画面 px）。 */
-export const SITE_PLACEMENT_GRID_DIM_OFFSET_PX = 16;
+/** 配置図の通り芯の寸法: 通り芯の枠の端（配置後は敷地の境界線）から1段目の寸法線までの離れ（画面 px）。16 から 2 倍へ（2026-11-10 ユーザー指示「寸法線を今の 2 倍くらい境界線から離して」）。 */
+export const SITE_PLACEMENT_GRID_DIM_OFFSET_PX = 32;
 /** 配置図の通り芯の寸法: 1段目から2段目（全長）の寸法線までの離れ（画面 px。数値帯 13＋余白）。 */
 export const SITE_PLACEMENT_GRID_DIM_ROW_GAP_PX = 24;
 /** 配置図の通り芯の寸法で、全長の段を足す最小の通り芯本数（2本では間隔＝全長）。 */
