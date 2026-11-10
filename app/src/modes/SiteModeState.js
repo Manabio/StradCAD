@@ -2,28 +2,45 @@ import { makeObservable, observable, action, computed, reaction, runInAction } f
 import { SiteLineKind } from '@core';
 import {
   SITE_PLACEMENT_EMPTY_MESSAGE, SITE_PLACEMENT_READ_ERROR_MESSAGE, SITE_PLACEMENT_LOADING_MESSAGE, SITE_LOG_TAG,
-  SitePlacementAlongVertex, CenterLineType,
+  CenterLineType,
 } from '../core/constants.js';
 import { withGraphsReadScope } from '../graphReadScope.js';
 import { gridBoundsMm } from '../initialView.js';
 import { isSanshaKind, computeLineTriNums } from '../site/lineClassification.js';
 import { rectEdge, pickRectEdgeAnchor, rectNeighbors, deriveRectAttachment } from '../site/siteRectGeometry.js';
-import { composeSitePlacementView, samePlacementVertex, placementVertexIndex } from '../site/sitePlacementView.js';
+import { composeSitePlacementView, samePlacementVertex } from '../site/sitePlacementView.js';
+import { alongSharedVertex } from '../site/sitePlacementVertex.js';
 import { gridLineSnapshot, markExteriorGridLines } from '../site/sitePlacementGrid.js';
 import { computeExteriorWallSegments } from '../finish/wallGeneration.js';
 import { evalNumpadExpr } from '../ui/numpadUtils.js';
 import { computeSitePlacement } from '../site/sitePlacementSolve.js';
 import {
   applySitePlacementWithUndo, TOAST_PLACEMENT_INCOMPLETE, TOAST_PLACEMENT_DISTANCE_BAD, TOAST_PLACEMENT_UNSOLVABLE,
-  TOAST_PLACEMENT_ALONG_INCOMPLETE, TOAST_PLACEMENT_ALONG_AXIS,
+  TOAST_PLACEMENT_ALONG_INCOMPLETE, TOAST_PLACEMENT_ALONG_AXIS, TOAST_PLACEMENT_ALONG_UNSHARED,
 } from '../transform/sitePlacementEdit.js';
 import { leanToPlanRegions, topRoofPlanRegions } from '../structural/roofFramingRegions.js';
 import { collectAdoptedFloors } from './adoptedFloors.js';
 
-// 2 段目「位置」の入力バッファ（vertex＝共有点 1|2。保存値は {vertex, centerLineId, distance, sideFlipped}）
+// 2 対目の入力バッファ（v1＝共有点の候補・v2＝境界線のもう一端。敷地座標。保存値は {v1, v2|null, centerLineId, distance, sideFlipped}）
 const emptyAlongInput = () => ({
-  vertex: SitePlacementAlongVertex.V1, centerLineId: null, distanceValue: '', sideFlipped: false,
+  v1: null, v2: null, centerLineId: null, distanceValue: '', sideFlipped: false,
 });
+
+// 頂点の枠。1 対目の頂点1・頂点2（f1・f2）→ 2 対目の頂点1・頂点2（a1・a2）の順に埋める
+const VERTEX_SLOTS = Object.freeze(['f1', 'f2', 'a1', 'a2']);
+const SECOND_PAIR_SLOTS = Object.freeze(['a1', 'a2']);
+
+const slotPoint = (inp, slot) => ({ f1: inp.v1, f2: inp.v2, a1: inp.along?.v1, a2: inp.along?.v2 })[slot] ?? null;
+
+// 枠 slot を point（null＝解除）にした入力
+function withSlot(inp, slot, point) {
+  switch (slot) {
+    case 'f1': return { ...inp, v1: point };
+    case 'f2': return { ...inp, v2: point };
+    case 'a1': return { ...inp, along: { ...inp.along, v1: point } };
+    default: return { ...inp, along: { ...inp.along, v2: point } };
+  }
+}
 
 const emptyPlacementInput = () => ({
   v1: null, v2: null, centerLineId: null, distanceValue: '', rotationFlipped: false, sideFlipped: false,
@@ -52,7 +69,10 @@ function placementInputFromSite(site) {
     rotationFlipped: !!input.rotationFlipped,
     sideFlipped: !!input.sideFlipped,
     along: a
-      ? { vertex: a.vertex, centerLineId: a.centerLineId, distanceValue: String(a.distance), sideFlipped: !!a.sideFlipped }
+      ? {
+        v1: { x: a.v1.x, y: a.v1.y }, v2: a.v2 ? { x: a.v2.x, y: a.v2.y } : null, // 頂点2 が無い旧データは null のまま
+        centerLineId: a.centerLineId, distanceValue: String(a.distance), sideFlipped: !!a.sideFlipped,
+      }
       : emptyAlongInput(),
   };
 }
@@ -92,7 +112,8 @@ export class SiteModeState {
   placementRoof    = null; // { floors: [{planeId, regions}], gridBounds, gridLines, readFailed } | null
   // 配置の指定入力（保存しない画面状態。表示にした時点で site.placement.input から作り、非表示で null）。
   // { v1:{x,y}|null, v2:{x,y}|null（敷地座標）, centerLineId:string|null, distanceValue:string, rotationFlipped, sideFlipped,
-  //   along:{vertex:1|2, centerLineId:string|null, distanceValue:string, sideFlipped}（2 段目「位置」の入力バッファ）}
+  //   along:{v1:{x,y}|null, v2:{x,y}|null, centerLineId:string|null, distanceValue:string, sideFlipped}（2 対目の入力バッファ。
+  //   v1＝共有点〔1 対目の頂点のどちらかと一致が必要〕・v2＝境界線のもう一端〔解には使わない〕）}
   placementInput   = null;
   placementDistanceFocused = false; // 距離欄を編集中（NumPad を出す）
   placementAlongDistanceFocused = false; // 位置の離れ欄を編集中（NumPad を出す。距離欄の編集とは排他）
@@ -118,9 +139,9 @@ export class SiteModeState {
       placementAlongCenterLine: computed,
       placementAlongStale: computed,
       placementAlongState: computed,
-      placementAlongVertexStale: computed,
+      placementAlongVertexStates: computed,
+      placementAlongSharedVertex: computed,
       placementCanCommit: computed,
-      setPlacementAlongVertex: action,
       setPlacementAlongCenterLine: action,
       setPlacementAlongDistanceValue: action,
       setPlacementAlongDistanceFocused: action,
@@ -297,21 +318,32 @@ export class SiteModeState {
     return !!this.placementInput?.along?.centerLineId && this.placementAlongCenterLine === null;
   }
 
-  // 位置の入力の状態: 'none'＝通り芯も離れも空（共有点・側は数えない）／'ready'＝両方入力あり／'partial'＝片方だけ
+  // 2 対目の入力の状態: 'none'＝頂点1・頂点2・通り芯・離れがすべて空（側は数えない）／'ready'＝頂点1・通り芯・離れが入力あり（頂点2 は任意）／'partial'＝それ以外。
+  // 失効・共有でない・離れが 0 以下は ready のまま commit 側が理由つきで拒否する
   get placementAlongState() {
     const a = this.placementInput?.along;
     if (!a) return 'none';
+    const hasVertex1 = a.v1 !== null;
     const hasLine = !!a.centerLineId;
     const hasDistance = a.distanceValue.trim() !== '';
-    if (!hasLine && !hasDistance) return 'none';
-    return hasLine && hasDistance ? 'ready' : 'partial';
+    if (!hasVertex1 && a.v2 === null && !hasLine && !hasDistance) return 'none';
+    return hasVertex1 && hasLine && hasDistance ? 'ready' : 'partial';
   }
 
-  // 位置の共有点（1 段目の頂点 k）が指定済みでない。位置を指定しているときだけ true（未指定の入力で常に失効と出さない）
-  get placementAlongVertexStale() {
+  // 2 対目の頂点の状態。v1: 'none'|'set'|'stale'（角が無い）|'unshared'（角はあるが 1 対目の頂点のどちらとも一致しない）、v2: 'none'|'set'|'stale'
+  get placementAlongVertexStates() {
     const a = this.placementInput?.along;
-    if (!a || this.placementAlongState === 'none') return false;
-    return this.placementVertexStates[a.vertex === SitePlacementAlongVertex.V2 ? 'v2' : 'v1'] !== 'set';
+    const view = this.placementView;
+    const v1 = placementVertexState(a?.v1 ?? null, view);
+    return {
+      v1: v1 === 'set' && this.placementAlongSharedVertex === null ? 'unshared' : v1,
+      v2: placementVertexState(a?.v2 ?? null, view),
+    };
+  }
+
+  // 2 対目の頂点1（共有点）が一致する 1 対目の頂点（1|2）。どちらでもなければ null（解けない）
+  get placementAlongSharedVertex() {
+    return alongSharedVertex(this.placementInput);
   }
 
   get placementCanCommit() {
@@ -323,19 +355,41 @@ export class SiteModeState {
     if (along === 'partial') return false;
     if (along === 'none') return true;
     const ad = this._placementAlongDistance();
-    return this.placementAlongCenterLine !== null && !this.placementAlongVertexStale && Number.isFinite(ad) && ad > 0;
+    return this.placementAlongCenterLine !== null && this.placementAlongVertexStates.v1 === 'set' && Number.isFinite(ad) && ad > 0;
   }
 
-  /** 配置図上の敷地の角（敷地座標）をタップ。指定済みの角は解除、それ以外は v1→v2 の順に埋め、両方埋まっていれば v2 を置換する（v1 は距離の基準なので据え置き）。 */
+  /**
+   * 配置図上の敷地の角（敷地座標）をタップ。4 つの枠（1 対目の頂点1・頂点2 → 2 対目の頂点1・頂点2）を順に埋める。
+   * - 2 対目の枠に入っている角のタップ: その角を入っている全部の枠から解除（共有の角は 1 対目の枠からも外れる）。
+   * - 1 対目の枠にだけ入っている角のタップ: 1 対目が揃っていて、2 対目の頂点1 が unshared ならそれを置き換える。そうでなければ
+   *   2 対目に空き枠（なし・失効）があればそこへ入れる（共有点の指定）。
+   *   なければその角を 1 対目の枠から解除。
+   * - どの枠にも無い角: 空き枠（なし・失効）を f1→f2→a1→a2 の順に埋める。全部埋まっていれば a2 を置換する。
+   * 1 対目の枠が変わっても 2 対目は触らない（共有の一致は placementAlongSharedVertex が判定する）。
+   */
   pickPlacementVertex(pt) {
     const inp = this.placementInput;
     if (!inp) return;
     const p = { x: pt.x, y: pt.y };
-    const idx = placementVertexIndex(inp, p);
-    if (idx === 1) this.placementInput = { ...inp, v1: null };
-    else if (idx === 2) this.placementInput = { ...inp, v2: null };
-    else if (this.placementVertexStates.v1 !== 'set') this.placementInput = { ...inp, v1: p }; // 空き・失効の頂点1は空きとして埋め直す
-    else this.placementInput = { ...inp, v2: p }; // v2 が空・失効・埋まっていても v2 へ
+    const matched = VERTEX_SLOTS.filter(s => samePlacementVertex(slotPoint(inp, s), p));
+    const first = this.placementVertexStates;
+    const second = this.placementAlongVertexStates;
+    const stateOf = { f1: first.v1, f2: first.v2, a1: second.v1, a2: second.v2 };
+    const isFree = s => stateOf[s] === 'none' || stateOf[s] === 'stale';
+    let next = inp;
+    if (matched.some(s => SECOND_PAIR_SLOTS.includes(s))) {
+      matched.forEach(s => { next = withSlot(next, s, null); });
+    } else if (matched.length > 0) {
+      const firstComplete = first.v1 === 'set' && first.v2 === 'set';
+      // 2 対目の頂点1 が unshared（角はあるが 1 対目と一致しない）ならそれを置き換える（修正操作が 1 対目を壊さないように）。空き優先より先
+      const target = !firstComplete ? undefined
+        : second.v1 === 'unshared' ? 'a1' : SECOND_PAIR_SLOTS.find(isFree);
+      if (target) next = withSlot(next, target, p);
+      else matched.forEach(s => { next = withSlot(next, s, null); });
+    } else {
+      next = withSlot(next, VERTEX_SLOTS.find(isFree) ?? SECOND_PAIR_SLOTS[1], p);
+    }
+    this.placementInput = next;
   }
 
   setPlacementCenterLine(id) {
@@ -354,13 +408,7 @@ export class SiteModeState {
     if (on) this.placementAlongDistanceFocused = false; // NumPad は 1 つだけ
   }
 
-  // ---- 2 段目「位置」の入力 ----
-
-  setPlacementAlongVertex(vertex) {
-    const inp = this.placementInput;
-    if (!inp || (vertex !== SitePlacementAlongVertex.V1 && vertex !== SitePlacementAlongVertex.V2)) return;
-    this.placementInput = { ...inp, along: { ...inp.along, vertex } };
-  }
+  // ---- 2 対目の入力（頂点は pickPlacementVertex）----
 
   setPlacementAlongCenterLine(id) {
     const inp = this.placementInput;
@@ -477,7 +525,8 @@ export class SiteModeState {
     return { ok: true, toast: null };
   }
 
-  // 位置（2 段目）の入力を解への引数と保存値に直す。none → 両方 null、拒否理由があれば toast（partial・失効・距離不正・1 段目と同じ軸）
+  // 2 対目の入力を解への引数（共有点 vertex は 1 対目のどちらと一致するか）と保存値に直す。none → 両方 null、
+  // 拒否理由があれば toast（partial・失効・距離不正・1 段目と同じ軸・頂点1 が 1 対目の頂点と一致しない）
   _resolveAlong(firstCl) {
     const none = { solve: null, saved: null, toast: null };
     const state = this.placementAlongState;
@@ -487,12 +536,19 @@ export class SiteModeState {
     const raw = this.placementRoof?.gridLines?.find(g => g.id === a.centerLineId) ?? null;
     if (raw && raw.centerLineType === firstCl.centerLineType) return { ...none, toast: TOAST_PLACEMENT_ALONG_AXIS };
     const line = this.placementAlongCenterLine;
-    if (!line || this.placementAlongVertexStale) return { ...none, toast: TOAST_PLACEMENT_INCOMPLETE };
+    const vst = this.placementAlongVertexStates;
+    if (!line || vst.v1 === 'stale') return { ...none, toast: TOAST_PLACEMENT_INCOMPLETE };
+    const vertex = this.placementAlongSharedVertex;
+    if (vst.v1 === 'unshared' || vertex === null) return { ...none, toast: TOAST_PLACEMENT_ALONG_UNSHARED };
     const distance = this._placementAlongDistance();
     if (!Number.isFinite(distance) || distance <= 0) return { ...none, toast: TOAST_PLACEMENT_DISTANCE_BAD };
     return {
-      solve: { vertex: a.vertex, centerLine: { centerLineType: line.centerLineType, value: line.value }, distance, sideFlipped: a.sideFlipped },
-      saved: { vertex: a.vertex, centerLineId: a.centerLineId, distance, sideFlipped: a.sideFlipped },
+      solve: { vertex, centerLine: { centerLineType: line.centerLineType, value: line.value }, distance, sideFlipped: a.sideFlipped },
+      // 頂点2 は解に使わない（保存して境界線を示すだけ）。今の角に無い（失効）なら保存しない
+      saved: {
+        v1: { x: a.v1.x, y: a.v1.y }, v2: vst.v2 === 'set' ? { x: a.v2.x, y: a.v2.y } : null,
+        centerLineId: a.centerLineId, distance, sideFlipped: a.sideFlipped,
+      },
       toast: null,
     };
   }

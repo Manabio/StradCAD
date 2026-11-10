@@ -9,7 +9,7 @@ import { undoManager } from '../undoManager.js';
 import { SITE_PLACEMENT_VERTEX_EPS_MM } from '../core/constants.js';
 import {
   TOAST_PLACEMENT_INCOMPLETE, TOAST_PLACEMENT_DISTANCE_BAD, TOAST_PLACEMENT_UNSOLVABLE,
-  TOAST_PLACEMENT_ALONG_INCOMPLETE, TOAST_PLACEMENT_ALONG_AXIS,
+  TOAST_PLACEMENT_ALONG_INCOMPLETE, TOAST_PLACEMENT_ALONG_AXIS, TOAST_PLACEMENT_ALONG_UNSHARED,
 } from '../transform/sitePlacementEdit.js';
 import { applySiteTransform } from '../site/siteTransform.js';
 import { SiteModeState } from './SiteModeState.js';
@@ -33,7 +33,7 @@ async function openPlacement(project = makeProject()) {
   return sm;
 }
 
-const EMPTY_ALONG = { vertex: 1, centerLineId: null, distanceValue: '', sideFlipped: false };
+const EMPTY_ALONG = { v1: null, v2: null, centerLineId: null, distanceValue: '', sideFlipped: false };
 const gridY0 = sm => sm.placementRoof.gridLines.find(g => g.centerLineType === CenterLineType.HORIZONTAL && g.value === 0);
 const gridY4000 = sm => sm.placementRoof.gridLines.find(g => g.centerLineType === CenterLineType.HORIZONTAL && g.value === 4000);
 
@@ -98,21 +98,106 @@ test('dispose: 入力とフォーカスを捨てる', async () => {
 
 // ---- 頂点・通り芯・距離 ----
 
-test('pickPlacementVertex: v1→v2 の順に埋まり、同じ角のタップで解除、両方埋まると v2 を置換（v1 は据え置き）、v1 解除で v2 は残る', async () => {
+// 4 つの枠（1 対目の頂点1・頂点2、2 対目の頂点1・頂点2）の入力を [f1, f2, a1, a2] で見る
+const slots = sm => [sm.placementInput.v1, sm.placementInput.v2, sm.placementInput.along.v1, sm.placementInput.along.v2];
+
+test('pickPlacementVertex: 1 対目 v1 → v2 → 2 対目 v1 → v2 の順に埋まり、全部埋まると 2 対目 v2 を置換する（1 対目・2 対目 v1 は据え置き）', async () => {
+  const sm = await openPlacement();
+  const [a, b, c, d] = corners(sm);
+  sm.pickPlacementVertex(a);
+  assert.deepEqual(slots(sm), [a, null, null, null]);
+  sm.pickPlacementVertex(b);
+  assert.deepEqual(slots(sm), [a, b, null, null]);
+  sm.pickPlacementVertex(c);
+  assert.deepEqual(slots(sm), [a, b, c, null], '3 つ目は 2 対目の頂点1');
+  sm.pickPlacementVertex(d);
+  assert.deepEqual(slots(sm), [a, b, c, d], '4 つ目は 2 対目の頂点2');
+  sm.dispose();
+});
+
+test('pickPlacementVertex: 4 枠が全部埋まっているとき、新しい角は 2 対目の頂点2 を置換する。座標は EPS 以内なら同じ角', async () => {
+  const sm = await openPlacement();
+  const [a, b, c, d] = corners(sm);
+  const extra = { x: 99999, y: 99999 };
+  [a, b, c, d].forEach(p => sm.pickPlacementVertex(p));
+  // 4 角（長方形）しか角が無いので、5 つ目は角として存在しない座標で置換の分岐だけを見る（失効扱いは別テスト）
+  sm.pickPlacementVertex(extra);
+  assert.deepEqual(slots(sm).slice(0, 3), [a, b, c], '1 対目と 2 対目の頂点1 は据え置き');
+  assert.deepEqual(slots(sm)[3], extra, '2 対目の頂点2 を置換');
+  sm.pickPlacementVertex({ x: extra.x + SITE_PLACEMENT_VERTEX_EPS_MM / 2, y: extra.y }); // EPS 以内＝同じ角 → 解除
+  assert.equal(slots(sm)[3], null);
+  sm.dispose();
+});
+
+test('pickPlacementVertex: 2 対目だけの角のタップはその枠を解除し、1 対目の枠は触らない。空いた枠は次のタップで埋まる', async () => {
+  const sm = await openPlacement();
+  const [a, b, c, d] = corners(sm);
+  [a, b, c, d].forEach(p => sm.pickPlacementVertex(p));
+  sm.pickPlacementVertex(d); // 2 対目の頂点2 を解除
+  assert.deepEqual(slots(sm), [a, b, c, null]);
+  sm.pickPlacementVertex(c); // 2 対目の頂点1 を解除
+  assert.deepEqual(slots(sm), [a, b, null, null], '1 対目は無傷');
+  sm.pickPlacementVertex(d); // 空いた 2 対目の頂点1 へ
+  assert.deepEqual(slots(sm), [a, b, d, null]);
+  sm.dispose();
+});
+
+test('pickPlacementVertex: 1 対目だけの角のタップ。1 対目が不完全なら解除・揃っていて 2 対目に空きがあれば 2 対目へ入れる（共有点）・空きが無ければ解除', async () => {
+  const sm = await openPlacement();
+  const [a, b, c, d] = corners(sm);
+  sm.pickPlacementVertex(a);
+  sm.pickPlacementVertex(a); // 1 対目が不完全 → 解除
+  assert.deepEqual(slots(sm), [null, null, null, null]);
+  sm.pickPlacementVertex(a);
+  sm.pickPlacementVertex(b);
+  sm.pickPlacementVertex(b); // 1 対目が揃っている・2 対目に空き → 共有点として 2 対目の頂点1 へ
+  assert.deepEqual(slots(sm), [a, b, b, null]);
+  assert.equal(sm.placementAlongSharedVertex, 2);
+  sm.pickPlacementVertex(a); // 1 対目の頂点1 の角。2 対目に空きがある（頂点2）→ 2 対目の頂点2 へ
+  assert.deepEqual(slots(sm), [a, b, b, a]);
+  sm.pickPlacementVertex(c);
+  assert.deepEqual(slots(sm), [a, b, b, c], '全部埋まっていれば 2 対目の頂点2 を置換');
+  sm.pickPlacementVertex(a); // 1 対目だけの角・2 対目に空きなし → 1 対目の頂点1 を解除
+  assert.deepEqual(slots(sm), [null, b, b, c], '2 対目は触らない');
+  assert.equal(sm.placementAlongVertexStates.v1, 'set', '頂点2 が一致しているので共有のまま');
+  sm.pickPlacementVertex(d); // 空いた 1 対目の頂点1 へ
+  assert.deepEqual(slots(sm), [d, b, b, c]);
+  sm.dispose();
+});
+
+test('pickPlacementVertex: 2 対目の失効枠（角が無い座標）は空きとして埋まる。どの枠にも無い角のタップは 2 対目の頂点2 でなく頂点1 に入る', async () => {
   const sm = await openPlacement();
   const [a, b, c] = corners(sm);
+  [a, b].forEach(p => sm.pickPlacementVertex(p));
+  const gone = { x: 1, y: 2 };
+  runInAction(() => { sm.placementInput = { ...sm.placementInput, along: { ...sm.placementInput.along, v1: gone } }; });
+  assert.equal(sm.placementAlongVertexStates.v1, 'stale');
+  sm.pickPlacementVertex(c);
+  assert.deepEqual(slots(sm), [a, b, c, null]);
+  sm.dispose();
+});
+
+test('pickPlacementVertex: 2 対目の頂点1 が unshared のとき、1 対目だけの角のタップは頂点1 を置き換え、1 対目は不変', async () => {
+  const sm = await openPlacement();
+  const [a, b, c] = corners(sm);
+  [a, b, c].forEach(p => sm.pickPlacementVertex(p)); // 2 対目の頂点1＝c（1 対目 [a,b] のどちらとも違う）
+  assert.equal(sm.placementAlongVertexStates.v1, 'unshared');
   sm.pickPlacementVertex(a);
-  assert.deepEqual([sm.placementInput.v1, sm.placementInput.v2], [a, null]);
+  assert.deepEqual(slots(sm), [a, b, a, null], '頂点1 が置き換わり 1 対目は不変');
+  assert.equal(sm.placementAlongSharedVertex, 1);
+  sm.dispose();
+});
+
+test('pickPlacementVertex: 共有の角（1 対目と 2 対目の頂点1 が同じ）のタップは、入っている枠すべてから外す。次のタップは空いた 1 対目の枠から埋まる', async () => {
+  const sm = await openPlacement();
+  const [a, b] = corners(sm);
+  sm.pickPlacementVertex(a);
   sm.pickPlacementVertex(b);
-  assert.deepEqual([sm.placementInput.v1, sm.placementInput.v2], [a, b]);
-  sm.pickPlacementVertex(c); // 両方埋まっている → v2 を置換
-  assert.deepEqual([sm.placementInput.v1, sm.placementInput.v2], [a, c], 'v1 は距離の基準なので据え置き');
-  sm.pickPlacementVertex(a); // v1 を解除
-  assert.deepEqual([sm.placementInput.v1, sm.placementInput.v2], [null, c], 'v2 は残る');
-  sm.pickPlacementVertex(b); // 空いた v1 へ
-  assert.deepEqual([sm.placementInput.v1, sm.placementInput.v2], [b, c]);
-  sm.pickPlacementVertex({ x: c.x + SITE_PLACEMENT_VERTEX_EPS_MM / 2, y: c.y }); // EPS 以内＝同じ角 → 解除
-  assert.equal(sm.placementInput.v2, null);
+  sm.pickPlacementVertex(b); // 共有
+  sm.pickPlacementVertex(b);
+  assert.deepEqual(slots(sm), [a, null, null, null]);
+  sm.pickPlacementVertex(b);
+  assert.deepEqual(slots(sm), [a, b, null, null]);
   sm.dispose();
 });
 
@@ -179,7 +264,9 @@ test('placementCanCommit: 頂点2点が set・通り芯が引ける・距離が 
   assert.equal(sm.placementCanCommit, false, '通り芯なし');
   sm.setPlacementCenterLine(gridX0(sm).id);
   assert.equal(sm.placementCanCommit, true);
-  sm.pickPlacementVertex(b); // 頂点2を外す
+  sm.pickPlacementVertex(b); // 1 対目が揃っているので 2 対目の頂点1（共有点）になる
+  assert.equal(sm.placementCanCommit, false, '2 対目が不完全（頂点1 だけ）');
+  sm.pickPlacementVertex(b); // 共有の角 → 1 対目の頂点2・2 対目の頂点1 から外れる
   assert.equal(sm.placementCanCommit, false, '頂点2なし');
   sm.pickPlacementVertex(b);
   assert.equal(sm.placementCanCommit, true);
@@ -429,9 +516,9 @@ test('undo/redo との同期: 確定→undo で placement は null、入力は�
 const imageOf = (sm, p) => applySiteTransform(p, sm.placementView.siteTransform);
 const nearPt = (p, x, y, msg) => { assert.ok(Math.abs(p.x - x) < 1e-6 && Math.abs(p.y - y) < 1e-6, `${msg ?? ''} (${p.x}, ${p.y}) ≠ (${x}, ${y})`); };
 
-/** 位置の入力（共有点・横 Y4000・離れ）を揃える。 */
+/** 2 対目の入力（頂点1＝1 対目の頂点 vertex（1|2）と同じ角・横 Y4000・離れ）を揃える。1 対目が揃っていること（その角のタップが 2 対目の頂点1 になる）。 */
 function fillAlong(sm, { vertex = 1, distance = '500' } = {}) {
-  sm.setPlacementAlongVertex(vertex);
+  sm.pickPlacementVertex(vertex === 1 ? sm.placementInput.v1 : sm.placementInput.v2);
   sm.setPlacementAlongCenterLine(gridY4000(sm).id);
   sm.setPlacementAlongDistanceValue(distance);
 }
@@ -448,31 +535,86 @@ test('placementAlongCenterLines: 1 段目が未選択なら空・縦を選ぶと
   sm.dispose();
 });
 
-test('placementAlongState: 通り芯も離れも空なら none（共有点・側だけの変更は none）・片方だけなら partial・両方で ready', async () => {
+test('placementAlongState: 頂点・通り芯・離れがすべて空なら none（側だけの変更は none）・不足は partial・頂点1・通り芯・離れで ready（頂点2 は任意）', async () => {
   const sm = await openPlacement();
+  const [a, b, , d] = corners(sm);
   sm.setPlacementCenterLine(gridX0(sm).id);
   assert.equal(sm.placementAlongState, 'none');
-  sm.setPlacementAlongVertex(2);
   sm.togglePlacementAlongSide();
-  assert.equal(sm.placementAlongState, 'none', '共有点・側は数えない');
+  assert.equal(sm.placementAlongState, 'none', '側は数えない');
   sm.setPlacementAlongDistanceValue('500');
   assert.equal(sm.placementAlongState, 'partial', '離れだけ');
   sm.setPlacementAlongCenterLine(gridY4000(sm).id);
+  assert.equal(sm.placementAlongState, 'partial', '頂点1 なし');
+  sm.pickPlacementVertex(a);
+  sm.pickPlacementVertex(b);
+  sm.pickPlacementVertex(b); // 2 対目の頂点1
+  assert.equal(sm.placementAlongState, 'ready', '頂点2 は空でも ready');
+  sm.pickPlacementVertex(d); // 2 対目の頂点2
   assert.equal(sm.placementAlongState, 'ready');
   sm.setPlacementAlongDistanceValue('');
-  assert.equal(sm.placementAlongState, 'partial', '通り芯だけ');
-  sm.setPlacementAlongCenterLine(gridY4000(sm).id); // 解除
-  assert.equal(sm.placementAlongState, 'none');
+  assert.equal(sm.placementAlongState, 'partial', '離れなし');
+  sm.setPlacementAlongCenterLine(gridY4000(sm).id); // 通り芯を解除
+  sm.pickPlacementVertex(d); // 2 対目の頂点2 を解除
+  sm.pickPlacementVertex(b); // 共有の角→ 1 対目の頂点2 と 2 対目の頂点1 から外れる
+  assert.equal(sm.placementAlongState, 'none', '頂点2 だけ残っていても partial だが、全部空なら none');
+  sm.pickPlacementVertex(d); // 空いた 1 対目の頂点2 へ（2 対目は空のまま）
+  sm.pickPlacementVertex(a); // 1 対目の頂点1 の角: 2 対目の頂点1 へ
+  sm.pickPlacementVertex(d); // 1 対目の頂点2 の角: 2 対目の空き（頂点2）へ
+  assert.deepEqual(slots(sm), [a, d, a, d]);
+  sm.setPlacementAlongCenterLine(gridY4000(sm).id);
+  sm.setPlacementAlongCenterLine(gridY4000(sm).id); // 付けて外す（通り芯・離れは空のまま）
+  assert.equal(sm.placementAlongState, 'partial', '頂点だけ残っていれば partial');
   sm.dispose();
 });
 
-test('位置のアクション: 共有点は 1/2 だけ受ける・通り芯は同じ id で解除・離れは文字列をそのまま持つ。配置図を開いていなければ何もしない', async () => {
+test('placementAlongVertexStates・placementAlongSharedVertex: 頂点1 が 1 対目の頂点1 と一致→shared=1・頂点2 と一致→2・どちらとも一致しなければ unshared（角は存在する）。角が消えたら stale', async () => {
+  const project = makeProject();
+  const sm = await openPlacement(project);
+  const [a, b, c, d] = corners(sm);
+  assert.deepEqual(sm.placementAlongVertexStates, { v1: 'none', v2: 'none' });
+  assert.equal(sm.placementAlongSharedVertex, null);
+  sm.pickPlacementVertex(a);
+  sm.pickPlacementVertex(b);
+  sm.pickPlacementVertex(a); // 1 対目の頂点1 の角 → 2 対目の頂点1
+  assert.equal(sm.placementAlongSharedVertex, 1);
+  assert.deepEqual(sm.placementAlongVertexStates, { v1: 'set', v2: 'none' });
+  sm.pickPlacementVertex(a); // 共有の角 → 入っている枠すべてから外れる（1 対目の頂点1・2 対目の頂点1）
+  sm.pickPlacementVertex(a); // 空いた 1 対目の頂点1 へ
+  sm.pickPlacementVertex(b); // 1 対目の頂点2 の角 → 2 対目の頂点1
+  assert.equal(sm.placementAlongSharedVertex, 2);
+  // 2 対目の頂点1 を 1 対目のどちらとも違う角にする
+  sm.pickPlacementVertex(b); // 共有を外す（1 対目の頂点2 も外れる）
+  sm.pickPlacementVertex(c); // 空いた 1 対目の頂点2 へ
+  sm.pickPlacementVertex(d); // 2 対目の頂点1（1 対目 [a,c] のどちらとも違う）
+  assert.deepEqual(slots(sm), [a, c, d, null]);
+  assert.equal(sm.placementAlongSharedVertex, null);
+  assert.deepEqual(sm.placementAlongVertexStates, { v1: 'unshared', v2: 'none' });
+  runInAction(() => { project.site.removeRect(project.site.rects[0].id); });
+  assert.deepEqual(sm.placementAlongVertexStates, { v1: 'stale', v2: 'none' }, '角が消えたら unshared でなく stale');
+  sm.dispose();
+});
+
+test('1 対目の枠が変わっても 2 対目は残り、共有の判定だけが再評価される（頂点1 の一致が 1→2 に移る・どちらとも外れれば unshared）', async () => {
   const sm = await openPlacement();
-  sm.setPlacementAlongVertex(2);
-  assert.equal(sm.placementInput.along.vertex, 2);
-  sm.setPlacementAlongVertex(3);
-  sm.setPlacementAlongVertex(0);
-  assert.equal(sm.placementInput.along.vertex, 2, '1/2 以外は無視');
+  const [a, b, c] = corners(sm);
+  [a, b].forEach(p => sm.pickPlacementVertex(p));
+  sm.pickPlacementVertex(a); // 2 対目の頂点1＝a（共有 1）
+  assert.equal(sm.placementAlongSharedVertex, 1);
+  runInAction(() => { sm.placementInput = { ...sm.placementInput, v1: b, v2: a }; }); // 1 対目の枠が入れ替わった
+  assert.deepEqual(sm.placementInput.along.v1, a, '2 対目は触られない');
+  assert.equal(sm.placementAlongSharedVertex, 2, '一致が頂点2 へ移る');
+  assert.equal(sm.placementAlongVertexStates.v1, 'set');
+  sm.pickPlacementVertex(b); // 1 対目の頂点1 の角で 2 対目に空き → 2 対目の頂点2
+  runInAction(() => { sm.placementInput = { ...sm.placementInput, v1: c, v2: b }; });
+  assert.equal(sm.placementAlongSharedVertex, null);
+  assert.equal(sm.placementAlongVertexStates.v1, 'unshared');
+  assert.deepEqual(sm.placementInput.along.v2, b, '2 対目の頂点2 も残る');
+  sm.dispose();
+});
+
+test('位置のアクション: 通り芯は同じ id で解除・離れは文字列をそのまま持つ。配置図を開いていなければ何もしない', async () => {
+  const sm = await openPlacement();
   const id = gridY4000(sm).id;
   sm.setPlacementAlongCenterLine(id);
   assert.equal(sm.placementInput.along.centerLineId, id);
@@ -483,7 +625,6 @@ test('位置のアクション: 共有点は 1/2 だけ受ける・通り芯は�
   sm.dispose();
 
   const closed = new SiteModeState(makeProject().site);
-  closed.setPlacementAlongVertex(2);
   closed.setPlacementAlongCenterLine('x');
   closed.setPlacementAlongDistanceValue('5');
   assert.equal(closed.placementInput, null);
@@ -510,14 +651,14 @@ test('【失敗系】位置が partial: placementCanCommit は false・commitPla
   sm.dispose();
 });
 
-test('commitPlacement: 位置あり（共有点=頂点1）→ 保存される along は {vertex, centerLineId, distance（式を評価した数値）, sideFlipped}。共有点の像の y=4000−500、v2 の像の x は 1 段目の拘束どおり', async () => {
+test('commitPlacement: 2 対目あり（頂点1=1 対目の頂点1）→ 保存される along は {v1, v2（無ければ null）, centerLineId, distance（式を評価した数値）, sideFlipped}。共有点の像の y=4000−500、v2 の像の x は 1 段目の拘束どおり', async () => {
   const sm = await openPlacement();
   const [v1, v2] = fillInput(sm, { distance: '1000' });
   nearPt(v1, 10000, 0); nearPt(v2, 13000, 0);
   fillAlong(sm, { vertex: 1, distance: '400+100' });
   assert.equal(sm.placementCanCommit, true);
   assert.deepEqual(sm.commitPlacement(), { ok: true, toast: null });
-  assert.deepEqual(sm.site.placement.input.along, { vertex: 1, centerLineId: gridY4000(sm).id, distance: 500, sideFlipped: false });
+  assert.deepEqual(sm.site.placement.input.along, { v1, v2: null, centerLineId: gridY4000(sm).id, distance: 500, sideFlipped: false });
   assert.equal(sm.site.placement.rotationDeg, 90);
   nearPt(imageOf(sm, v1), -1000, 3500, '共有点 v1（v2 へ延びる向きの手前 y=Y4000−500）');
   nearPt(imageOf(sm, v2), -1000, 6500, 'v2（x=−1000 の拘束が保たれる）');
@@ -525,12 +666,12 @@ test('commitPlacement: 位置あり（共有点=頂点1）→ 保存される al
   sm.dispose();
 });
 
-test('commitPlacement: 位置あり（共有点=頂点2）→ v2 の像の y=4500・v1 の像の y=1500（R·(v2−v1)=(0,3000) を引く）', async () => {
+test('commitPlacement: 2 対目あり（頂点1=1 対目の頂点2）→ v2 の像の y=4500・v1 の像の y=1500（R·(v2−v1)=(0,3000) を引く）。保存の頂点1 は 1 対目の頂点2 の座標', async () => {
   const sm = await openPlacement();
   const [v1, v2] = fillInput(sm, { distance: '1000' });
   fillAlong(sm, { vertex: 2, distance: '500' });
   assert.equal(sm.commitPlacement().ok, true);
-  assert.equal(sm.site.placement.input.along.vertex, 2);
+  assert.deepEqual(sm.site.placement.input.along.v1, v2);
   nearPt(imageOf(sm, v2), -1000, 4500, '共有点 v2');
   nearPt(imageOf(sm, v1), -1000, 1500, 'v1');
   sm.dispose();
@@ -552,8 +693,9 @@ test('【失敗系】commitPlacement: 位置の離れが 0 以下・式でない
 
 test('【失敗系】commitPlacement: 位置の通り芯が 1 段目と同じ軸なら TOAST_PLACEMENT_ALONG_AXIS・写しに無い id（失効）なら TOAST_PLACEMENT_INCOMPLETE。どちらも保存しない', async () => {
   const sm = await openPlacement();
-  fillInput(sm); // 1 段目＝縦 X0
-  const x6000 = sm.placementRoof.gridLines.find(g => g.centerLineType === CenterLineType.VERTICAL && g.value === 6000);
+  const [a] = fillInput(sm); // 1 段目＝縦 X0
+  sm.pickPlacementVertex(a); // 2 対目の頂点1
+  const x6000 =sm.placementRoof.gridLines.find(g => g.centerLineType === CenterLineType.VERTICAL && g.value === 6000);
   sm.setPlacementAlongCenterLine(x6000.id); // 一覧では選べないが、アクションは受ける（防御）
   sm.setPlacementAlongDistanceValue('500');
   assert.equal(sm.placementAlongCenterLine, null, '候補は直交する軸だけ');
@@ -581,22 +723,97 @@ test('1 段目の通り芯を縦→横へ変えると、選んでいた横の位
   sm.dispose();
 });
 
-test('1 段目の頂点を解除すると、その頂点を共有点にした位置は失効（placementAlongVertexStale・canCommit=false・commit は INCOMPLETE）。位置が none なら失効扱いにしない', async () => {
+test('【失敗系】2 対目の頂点1 が 1 対目の頂点のどちらとも一致しない（unshared）と canCommit=false・commit は TOAST_PLACEMENT_ALONG_UNSHARED で保存しない。頂点2 の有無は問わない', async () => {
   const sm = await openPlacement();
-  const [, v2] = fillInput(sm);
-  assert.equal(sm.placementAlongVertexStale, false);
-  sm.pickPlacementVertex(v2); // 頂点2を解除
-  assert.equal(sm.placementAlongVertexStale, false, '位置が none');
-  assert.equal(sm.placementCanCommit, false, '1 段目の頂点2が無い');
-  sm.pickPlacementVertex(v2); // 戻す
+  const [a, b, c] = fillInput(sm).concat(corners(sm)[2]);
+  fillAlong(sm, { vertex: 2 });
+  assert.equal(sm.placementCanCommit, true, '共有している間は確定できる');
+  // 2 対目の頂点1 を 1 対目のどちらとも違う角 c へ付け替える（1 対目を c に変えずに 2 対目だけを動かす）
+  sm.pickPlacementVertex(b); // 共有の角 → 1 対目の頂点2・2 対目の頂点1 から外れる
+  sm.pickPlacementVertex(c); // 空いた 1 対目の頂点2 へ
+  sm.pickPlacementVertex(b); // 1 対目に無い角 → 空き枠（2 対目の頂点1）へ
+  assert.deepEqual(slots(sm), [a, c, b, null]);
+  assert.equal(sm.placementAlongVertexStates.v1, 'unshared');
+  assert.equal(sm.placementCanCommit, false);
+  const before = undoManager.peekUndo();
+  assert.deepEqual(sm.commitPlacement(), { ok: false, toast: TOAST_PLACEMENT_ALONG_UNSHARED });
+  assert.equal(sm.site.placement, null);
+  assert.equal(undoManager.peekUndo(), before);
+  sm.dispose();
+});
+
+test('【失敗系】2 対目の頂点1 が失効（角が消えた）なら canCommit=false・commit は TOAST_PLACEMENT_INCOMPLETE。2 対目が none なら失効扱いにしない', async () => {
+  const project = makeProject();
+  const sm = await openPlacement(project);
+  fillInput(sm);
+  assert.equal(sm.placementAlongVertexStates.v1, 'none', '2 対目が none');
   fillAlong(sm, { vertex: 2 });
   assert.equal(sm.placementCanCommit, true);
-  sm.pickPlacementVertex(v2); // 共有点の頂点2を解除
-  assert.equal(sm.placementAlongVertexStale, true);
+  runInAction(() => { project.site.removeRect(project.site.rects[0].id); });
+  assert.equal(sm.placementAlongVertexStates.v1, 'stale');
   assert.equal(sm.placementCanCommit, false);
   assert.deepEqual(sm.commitPlacement(), { ok: false, toast: TOAST_PLACEMENT_INCOMPLETE });
-  sm.setPlacementAlongVertex(1); // 共有点を頂点1（set）へ変えれば失効でなくなる（1 段目は頂点2なしで canCommit 不可のまま）
-  assert.equal(sm.placementAlongVertexStale, false);
+  sm.dispose();
+});
+
+test('頂点2（2 対目）は解に使わない・任意: 空でも確定でき、入れても像は変わらず、保存には入る（座標のコピー）。失効した頂点2 は保存しない', async () => {
+  const project = makeProject();
+  const sm = await openPlacement(project);
+  const [v1] = fillInput(sm, { distance: '1000' });
+  fillAlong(sm, { vertex: 1, distance: '500' });
+  assert.equal(sm.commitPlacement().ok, true);
+  const withoutV2 = sm.site.placement;
+  assert.equal(withoutV2.input.along.v2, null);
+  const image = imageOf(sm, v1);
+  const d = corners(sm)[3];
+  sm.pickPlacementVertex(d); // 2 対目の頂点2
+  assert.equal(sm.commitPlacement().ok, true);
+  assert.deepEqual(sm.site.placement.input.along.v2, d);
+  assert.notEqual(sm.site.placement.input.along.v2, sm.placementInput.along.v2, '座標オブジェクトを共有しない');
+  nearPt(imageOf(sm, v1), image.x, image.y, '頂点2 の有無で像は変わらない');
+  runInAction(() => { sm.placementInput = { ...sm.placementInput, along: { ...sm.placementInput.along, v2: { x: 1, y: 2 } } }; });
+  assert.equal(sm.placementAlongVertexStates.v2, 'stale');
+  assert.equal(sm.commitPlacement().ok, true, '頂点2 の失効は確定を止めない');
+  assert.equal(sm.site.placement.input.along.v2, null, '失効した頂点2 は保存しない');
+  sm.dispose();
+});
+
+test('実機再現の回帰: 2 対目の角 2 点のタップで 1 対目が変わらない（敷地 13000×15000・1 対目＝左上・左下・X1・2000、2 対目＝左下・右下・Y1・1500 → 回転 0・左下 (−2000,1500)・左上 (−2000,−13500)・右下 (11000,1500)）', async () => {
+  const project = new Project('proj', 'test');
+  project.addPlane(0, '1階', 'p1');
+  project.activePlaneId = 'p1';
+  const st = { labeled: true, discipline: Discipline.STRUCT };
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, st);
+  project.structGraph.addCenterLine(CenterLineType.VERTICAL, 9100, st);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0, st);
+  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, -12614, st);
+  project.site.addRect(0, 0, 13000, 15000); // 左上(0,0)・右上(13000,0)・右下(13000,15000)・左下(0,15000)
+  const sm = new SiteModeState(project.site, project);
+  await sm.setShowPlacement(true);
+  // 建物図芯 (4550,−6307)＝通り芯の外接矩形の中心（屋根は無い）
+  assert.deepEqual(sm.placementView.buildingCenter, { x: 4550, y: -6307 });
+  const at = (x, y) => corners(sm).find(c => c.x === x && c.y === y);
+  const topLeft = at(0, 0), bottomLeft = at(0, 15000), bottomRight = at(13000, 15000);
+  const x1 = sm.placementRoof.gridLines.find(g => g.centerLineType === CenterLineType.VERTICAL && g.value === 0);
+  const y1 = sm.placementRoof.gridLines.find(g => g.centerLineType === CenterLineType.HORIZONTAL && g.value === 0);
+  sm.pickPlacementVertex(topLeft);
+  sm.pickPlacementVertex(bottomLeft);
+  sm.setPlacementCenterLine(x1.id);
+  sm.setPlacementDistanceValue('2000');
+  sm.pickPlacementVertex(bottomLeft); // 2 対目の頂点1＝左下（1 対目の頂点2 と共有）
+  sm.pickPlacementVertex(bottomRight); // 2 対目の頂点2＝右下。ここで 1 対目が変わってはならない
+  assert.deepEqual(slots(sm), [topLeft, bottomLeft, bottomLeft, bottomRight], '1 対目は不変');
+  sm.setPlacementAlongCenterLine(y1.id);
+  sm.setPlacementAlongDistanceValue('1500');
+  assert.equal(sm.placementAlongSharedVertex, 2);
+  assert.equal(sm.placementCanCommit, true);
+  assert.deepEqual(sm.commitPlacement(), { ok: true, toast: null });
+  assert.equal(sm.site.placement.rotationDeg, 0, '90° 回らない');
+  nearPt(imageOf(sm, bottomLeft), -2000, 1500, '左下');
+  nearPt(imageOf(sm, topLeft), -2000, -13500, '左上');
+  nearPt(imageOf(sm, bottomRight), 11000, 1500, '右下');
+  assert.deepEqual(sm.site.placement.input.along.v1, bottomLeft);
+  assert.deepEqual(sm.site.placement.input.along.v2, bottomRight);
   sm.dispose();
 });
 
@@ -672,9 +889,9 @@ test('clearPlacementAlong: 未配置なら入力を既定に戻すだけ（配�
   sm.dispose();
 });
 
-test('undo/redo との同期: 位置あり→解除→undo で位置の入力（共有点・通り芯・離れ・側）も保存値から復元され、位置の NumPad は閉じる', async () => {
+test('undo/redo との同期: 2 対目あり→解除→undo で 2 対目の入力（頂点・通り芯・離れ・側）も保存値から復元され、離れの NumPad は閉じる', async () => {
   const sm = await openPlacement();
-  fillInput(sm);
+  const [, b] = fillInput(sm);
   fillAlong(sm, { vertex: 2, distance: '500' });
   sm.togglePlacementAlongSide();
   sm.commitPlacement();
@@ -682,22 +899,31 @@ test('undo/redo との同期: 位置あり→解除→undo で位置の入力（
   assert.deepEqual(sm.placementInput.along, EMPTY_ALONG);
   sm.setPlacementAlongDistanceFocused(true);
   undoManager.undo();
-  assert.deepEqual(sm.placementInput.along, { vertex: 2, centerLineId: gridY4000(sm).id, distanceValue: '500', sideFlipped: true });
+  assert.deepEqual(sm.placementInput.along, { v1: b, v2: null, centerLineId: gridY4000(sm).id, distanceValue: '500', sideFlipped: true });
   assert.equal(sm.placementAlongDistanceFocused, false);
   sm.dispose();
 });
 
-test('init: site.placement.input.along があれば位置の入力を復元する（離れは文字列）。無ければ既定', async () => {
+test('init: site.placement.input.along があれば 2 対目の入力を復元する（離れは文字列・座標はコピー）。頂点2 が無い旧データは null のまま。無ければ既定', async () => {
   const project = makeProject();
   const input = {
     v1: { x: 10000, y: 0 }, v2: { x: 13000, y: 0 }, centerLineId: 'cl-1', distance: 1000, rotationFlipped: false, sideFlipped: false,
-    along: { vertex: 2, centerLineId: 'cl-2', distance: 250.5, sideFlipped: true },
+    along: { v1: { x: 13000, y: 0 }, v2: { x: 13000, y: 2000 }, centerLineId: 'cl-2', distance: 250.5, sideFlipped: true },
   };
   project.site.setPlacement({ rotationDeg: 90, tx: 0, ty: 0, input });
   const sm = new SiteModeState(project.site, project);
   await sm.init();
-  assert.deepEqual(sm.placementInput.along, { vertex: 2, centerLineId: 'cl-2', distanceValue: '250.5', sideFlipped: true });
+  assert.deepEqual(sm.placementInput.along, {
+    v1: { x: 13000, y: 0 }, v2: { x: 13000, y: 2000 }, centerLineId: 'cl-2', distanceValue: '250.5', sideFlipped: true,
+  });
+  assert.notEqual(sm.placementInput.along.v1, input.along.v1, '保存値の座標オブジェクトを共有しない');
   sm.dispose();
+  project.site.setPlacement({ rotationDeg: 90, tx: 0, ty: 0, input: { ...input, along: { ...input.along, v2: null } } });
+  const smLegacy = new SiteModeState(project.site, project);
+  await smLegacy.init();
+  assert.equal(smLegacy.placementInput.along.v2, null, '旧データの頂点2 は null のまま');
+  assert.deepEqual(smLegacy.placementInput.along.v1, { x: 13000, y: 0 });
+  smLegacy.dispose();
   project.site.setPlacement({ rotationDeg: 90, tx: 0, ty: 0, input: { ...input, along: null } });
   const sm2 = new SiteModeState(project.site, project);
   await sm2.init();

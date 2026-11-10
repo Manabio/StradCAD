@@ -8,9 +8,9 @@ import {
   SITE_PLACEMENT_DISTANCE_LABEL, SITE_PLACEMENT_DISTANCE_NUMPAD_LABEL, SITE_PLACEMENT_FLIP_ROTATION_LABEL,
   SITE_PLACEMENT_FLIP_SIDE_LABEL, SITE_PLACEMENT_COMMIT_LABEL, SITE_PLACEMENT_CLEAR_LABEL,
   SITE_PLACEMENT_VERTEX_NONE, SITE_PLACEMENT_VERTEX_SET, SITE_PLACEMENT_STALE_LABEL, SITE_PLACEMENT_ALONG_CENTER_LINE_LABEL,
-  SITE_PLACEMENT_ALONG_LABEL, SITE_PLACEMENT_ALONG_VERTEX_LABEL,
+  SITE_PLACEMENT_ALONG_LABEL, SITE_PLACEMENT_FIRST_PAIR_LABEL, SITE_PLACEMENT_ALONG_UNSHARED_LABEL,
   SITE_PLACEMENT_ALONG_DISTANCE_LABEL, SITE_PLACEMENT_ALONG_DISTANCE_NUMPAD_LABEL,
-  SITE_PLACEMENT_ALONG_FLIP_SIDE_LABEL, SITE_PLACEMENT_ALONG_CLEAR_LABEL, SitePlacementAlongVertex,
+  SITE_PLACEMENT_ALONG_FLIP_SIDE_LABEL, SITE_PLACEMENT_ALONG_CLEAR_LABEL,
 } from '../core/constants.js';
 import { rowDeleteAction, triangleNumber } from '../site/triangleDeletion.js';
 import {
@@ -365,9 +365,12 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
               const lineText = (line, stale) => (stale ? SITE_PLACEMENT_STALE_LABEL : line ? (line.label || String(line.value)) : SITE_PLACEMENT_VERTEX_NONE);
               const actionButton = { padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff', cursor: 'pointer', fontSize: 13 };
               const along = pin.along;
+              const ast = mode.placementAlongVertexStates;
+              const alongVertexText = s => (s === 'unshared' ? SITE_PLACEMENT_ALONG_UNSHARED_LABEL : vertexText(s));
               return (
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                   <div style={{ ...PANEL_ROW_TEXT, color: '#64748b' }}>{SITE_PLACEMENT_HINT}</div>
+                  <div style={{ ...PANEL_ROW_TEXT, fontWeight: 600 }}>{SITE_PLACEMENT_FIRST_PAIR_LABEL}</div>
                   <div style={PANEL_ROW_TEXT}><span style={PANEL_LABEL}>{SITE_PLACEMENT_VERTEX1_LABEL}：</span>{vertexText(st.v1)}</div>
                   <div style={PANEL_ROW_TEXT}><span style={PANEL_LABEL}>{SITE_PLACEMENT_VERTEX2_LABEL}：</span>{vertexText(st.v2)}</div>
                   <div style={PANEL_ROW_TEXT}>
@@ -382,16 +385,13 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                     >{pin.distanceValue || ' '}</span>
                   </div>
                   <div style={{ ...PANEL_ROW_TEXT, fontWeight: 600 }}>{SITE_PLACEMENT_ALONG_LABEL}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', ...PANEL_ROW_TEXT }}>
-                    <span style={PANEL_LABEL}>{SITE_PLACEMENT_ALONG_VERTEX_LABEL}：</span>
-                    {[[SitePlacementAlongVertex.V1, SITE_PLACEMENT_VERTEX1_LABEL], [SitePlacementAlongVertex.V2, SITE_PLACEMENT_VERTEX2_LABEL]].map(([v, label]) => (
-                      <button
-                        key={v}
-                        onClick={() => mode.setPlacementAlongVertex(v)}
-                        style={{ ...segmentButtonStyle(along.vertex === v), flex: '0 0 auto', padding: '6px 10px' }}
-                      >{label}</button>
-                    ))}
-                    {mode.placementAlongVertexStale && SITE_PLACEMENT_STALE_LABEL}
+                  <div style={PANEL_ROW_TEXT}>
+                    <span style={PANEL_LABEL}>{SITE_PLACEMENT_VERTEX1_LABEL}：</span>
+                    {alongVertexText(ast.v1)}
+                  </div>
+                  <div style={PANEL_ROW_TEXT}>
+                    <span style={PANEL_LABEL}>{SITE_PLACEMENT_VERTEX2_LABEL}：</span>
+                    {alongVertexText(ast.v2)}
                   </div>
                   <div style={PANEL_ROW_TEXT}>
                     <span style={PANEL_LABEL}>{SITE_PLACEMENT_ALONG_CENTER_LINE_LABEL}：</span>

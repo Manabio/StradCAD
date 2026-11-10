@@ -526,7 +526,9 @@ export const SITE_BOUNDARY_LABEL_ROAD = '道路境界線';
  */
 export const SITE_BOUNDARY_LABEL_VERTICAL_EPS_DEG = 1e-6;
 /** 配置指定 UI（ui/SiteInfoPanel.jsx）の文言。 */
-export const SITE_PLACEMENT_HINT = '配置図の敷地の角と通り芯ラベルをタップ';
+export const SITE_PLACEMENT_HINT = '配置図の敷地の角（1 対目→2 対目の順）と通り芯ラベルをタップ';
+/** 配置パネルの 1 対目（頂点1・頂点2・通り芯・距離）の見出し。 */
+export const SITE_PLACEMENT_FIRST_PAIR_LABEL = '1 対目';
 export const SITE_PLACEMENT_VERTEX1_LABEL = '頂点1';
 export const SITE_PLACEMENT_VERTEX2_LABEL = '頂点2';
 export const SITE_PLACEMENT_CENTER_LINE_LABEL = '通り芯';
@@ -539,16 +541,17 @@ export const SITE_PLACEMENT_CLEAR_LABEL = '解除';
 export const SITE_PLACEMENT_VERTEX_NONE = '未指定';
 export const SITE_PLACEMENT_VERTEX_SET = '指定済み';
 export const SITE_PLACEMENT_STALE_LABEL = '（失効）';
-/** 配置の 2 段目「位置」（通り芯沿いの位置の拘束）の UI 文言。 */
-export const SITE_PLACEMENT_ALONG_LABEL = '位置';
-/** 配置パネルの 2 段目の通り芯の行見出し（1 段目の「通り芯」と区別する）。 */
+/** 配置の 2 対目（通り芯沿いの位置の拘束。頂点1＝1 対目の頂点との共有点・頂点2・通り芯・離れ）の UI 文言。 */
+export const SITE_PLACEMENT_ALONG_LABEL = '2 対目';
+/** 配置パネルの 2 対目の通り芯の行見出し（1 対目の「通り芯」と区別する）。 */
 export const SITE_PLACEMENT_ALONG_CENTER_LINE_LABEL = '位置の通り芯';
-export const SITE_PLACEMENT_ALONG_VERTEX_LABEL = '共有点';
+/** 2 対目の頂点1 が角としては存在するが 1 対目の頂点のどちらとも一致しないときの表示。 */
+export const SITE_PLACEMENT_ALONG_UNSHARED_LABEL = '（1 対目の頂点と一致しません）';
 export const SITE_PLACEMENT_ALONG_DISTANCE_LABEL = '離れ';
 export const SITE_PLACEMENT_ALONG_DISTANCE_NUMPAD_LABEL = '共有点から通り芯までの離れ';
 export const SITE_PLACEMENT_ALONG_FLIP_SIDE_LABEL = '側反転（位置）';
 export const SITE_PLACEMENT_ALONG_CLEAR_LABEL = '位置の解除';
-/** 配置の 2 段目の共有点（1 段目の頂点1／頂点2 のどちら）。FBS の int8（NONE＝無し）と UI の切替で共用。メモリ上の along.vertex は V1|V2。 */
+/** 解に渡す共有点（1 対目の頂点1／頂点2 のどちらか）。FBS の ALONG_VERTEX（int8。NONE＝無し・旧データの読込み・旧読み手との整合用）と SiteModeState の解決で共用。 */
 export const SitePlacementAlongVertex = Object.freeze({ NONE: 0, V1: 1, V2: 2 });
 /** 敷地モード（modes/SiteModeState.js・site/sitePlacementView.js）のログの接頭辞。 */
 export const SITE_LOG_TAG = '[site]';

@@ -56,12 +56,13 @@ test('SitePlacementLayer: 角の当たり丸は SITE_HIT_NODE_NAME・透明ス�
   assert.ok(layer.indexOf('name={SITE_HIT_NODE_NAME}') < layer.indexOf('</Group>'));
 });
 
-test('SitePlacementLayer: 選択中の頂点は placementVertexIndex で引き、塗り＋番号「1」「2」を選択色で。選択中の通り芯は選択色の線', () => {
+test('SitePlacementLayer: 選択中の頂点は placementVertexLabelText で引き、塗り＋番号（1 対目「1」「2」・2 対目「1\'」「2\'」・共有は「1·1\'」）を選択色で。選択中の通り芯は選択色の線', () => {
   assert.match(layer, /const input = mode\.placementInput;/);
-  assert.match(layer, /const idx = placementVertexIndex\(input, c\);/);
-  assert.match(layer, /const color = idx \? MEMBER_SELECTION_COLOR : SITE_LINE_COLOR;/);
+  assert.match(layer, /const idx = placementVertexLabelText\(input, c\);/);
+  assert.ok(!/placementVertexIndex/.test(layer), '番号の組み立ては純モジュール 1 か所');
+  assert.match(layer, /const color = idx \? MEMBER_SELECTION_COLOR : SITE_LINE_COLOR;/, '2 対目の頂点も 1 対目と同じ選択色');
   assert.match(layer, /fill=\{idx \? color : undefined\}/);
-  assert.match(layer, /text=\{String\(idx\)\}/);
+  assert.match(layer, /text=\{idx\}/);
   assert.match(layer, /fontSize=\{numFontSize\}/);
   assert.match(layer, /const numFontSize = NUM_FONT_PX \/ viewport\.scaleX;/);
   assert.match(layer, /fill=\{MEMBER_SELECTION_COLOR\}/, '番号の文字も選択色');
@@ -98,10 +99,11 @@ test('編集画面（SiteLinesLayer・SiteRectsLayer）には境界線ラベル�
   assert.ok(!/layoutBoundaryLabels|siteBoundaryLabels/.test(code('./SiteRectsLayer.jsx')));
 });
 
-test('SiteModeState: 頂点の一致判定は純モジュール（samePlacementVertex・placementVertexIndex）だけを使う（比較を2か所に書かない）', () => {
+test('SiteModeState: 頂点の一致判定は純モジュール（samePlacementVertex・alongSharedVertex）だけを使う（比較を2か所に書かない）', () => {
   const state = code('../modes/SiteModeState.js');
-  assert.match(state, /placementVertexIndex\(inp, p\)/);
+  assert.match(state, /samePlacementVertex\(slotPoint\(inp, s\), p\)/);
   assert.match(state, /samePlacementVertex\(c, v\)/);
+  assert.match(state, /alongSharedVertex\(this\.placementInput\)/);
   assert.ok(!/SITE_PLACEMENT_VERTEX_EPS_MM/.test(state), 'EPS を SiteModeState に持ち込まない');
 });
 
@@ -227,21 +229,28 @@ test('SitePlacementLayer: 位置（2 段目）の通り芯B は input.along.cent
   assert.equal(count(layer, /selectedAlongKey/g), 2, '定義と色の判定の 2 か所だけ');
 });
 
-test('SiteInfoPanel: 位置の段（共有点の切替・通り芯B の一覧・離れ・側反転・解除）が SiteModeState の口と文言定数に配線されている', () => {
+test('SiteInfoPanel: 1 対目・2 対目の段（見出し・頂点1/頂点2 の状態・通り芯B・離れ・側反転・解除）が SiteModeState の口と文言定数に配線されている。共有点の切替は撤去', () => {
   for (const name of [
-    'SITE_PLACEMENT_ALONG_LABEL', 'SITE_PLACEMENT_ALONG_VERTEX_LABEL',
+    'SITE_PLACEMENT_ALONG_LABEL', 'SITE_PLACEMENT_FIRST_PAIR_LABEL', 'SITE_PLACEMENT_ALONG_UNSHARED_LABEL',
     'SITE_PLACEMENT_ALONG_DISTANCE_LABEL', 'SITE_PLACEMENT_ALONG_DISTANCE_NUMPAD_LABEL',
-    'SITE_PLACEMENT_ALONG_FLIP_SIDE_LABEL', 'SITE_PLACEMENT_ALONG_CLEAR_LABEL', 'SitePlacementAlongVertex',
+    'SITE_PLACEMENT_ALONG_FLIP_SIDE_LABEL', 'SITE_PLACEMENT_ALONG_CLEAR_LABEL',
   ]) {
     assert.ok(count(panel, new RegExp(`\\{?${name}\\b`, 'g')) >= 2, `${name} を import して使う`);
   }
-  assert.match(panel, /\[\[SitePlacementAlongVertex\.V1, SITE_PLACEMENT_VERTEX1_LABEL\], \[SitePlacementAlongVertex\.V2, SITE_PLACEMENT_VERTEX2_LABEL\]\]/);
-  assert.match(panel, /onClick=\{\(\) => mode\.setPlacementAlongVertex\(v\)\}/);
-  assert.match(panel, /\{mode\.placementAlongVertexStale && SITE_PLACEMENT_STALE_LABEL\}/);
+  assert.ok(!/SitePlacementAlongVertex|setPlacementAlongVertex|SITE_PLACEMENT_ALONG_VERTEX_LABEL|placementAlongVertexStale/.test(panel), '共有点の［頂点1｜頂点2］切替は撤去');
+  assert.ok(!/SITE_PLACEMENT_ALONG_VERTEX_LABEL/.test(code('../core/constants.js')), '共有点ラベル定数は削除');
+  assert.match(panel, /const ast = mode\.placementAlongVertexStates;/);
+  assert.match(panel, /const alongVertexText = s => \(s === 'unshared' \? SITE_PLACEMENT_ALONG_UNSHARED_LABEL : vertexText\(s\)\);/);
+  assert.match(panel, /\{SITE_PLACEMENT_VERTEX1_LABEL\}：<\/span>\s*\{alongVertexText\(ast\.v1\)\}/, '2 対目の頂点1（共有）');
+  assert.match(panel, /\{SITE_PLACEMENT_VERTEX2_LABEL\}：<\/span>\s*\{alongVertexText\(ast\.v2\)\}/, '2 対目の頂点2');
+  assert.match(panel, /\{SITE_PLACEMENT_FIRST_PAIR_LABEL\}<\/div>/);
+  assert.ok(panel.indexOf('SITE_PLACEMENT_FIRST_PAIR_LABEL}</div>') < panel.indexOf('vertexText(st.v1)'), '1 対目の見出しは頂点1 行の上');
   assert.match(panel, /\{SITE_PLACEMENT_ALONG_CENTER_LINE_LABEL\}：<\/span>\s*\{lineText\(mode\.placementAlongCenterLine, mode\.placementAlongStale\)\}/, '「位置の通り芯：<ラベル>」（見出しは定数 1 つ）');
   assert.ok(!/SITE_PLACEMENT_ALONG_HINT/.test(panel), '1 段目未選択の案内文は廃止');
   assert.ok(!/SITE_PLACEMENT_ALONG_HINT/.test(code('../core/constants.js')), '定数も削除');
-  assert.match(code('../core/constants.js'), /export const SITE_PLACEMENT_HINT = '配置図の敷地の角と通り芯ラベルをタップ';/);
+  assert.match(code('../core/constants.js'), /export const SITE_PLACEMENT_HINT = '配置図の敷地の角（1 対目→2 対目の順）と通り芯ラベルをタップ';/);
+  assert.match(code('../core/constants.js'), /export const SITE_PLACEMENT_ALONG_LABEL = '2 対目';/);
+  assert.match(code('../core/constants.js'), /export const SITE_PLACEMENT_FIRST_PAIR_LABEL = '1 対目';/);
   assert.match(panel, /onClick=\{\(\) => mode\.setPlacementAlongDistanceFocused\(true\)\}/);
   assert.match(panel, /\{mode\.placementAlongState !== 'none' && \(\s*<>\s*<button style=\{actionButton\} onClick=\{\(\) => reportPlacement\(mode\.togglePlacementAlongSide\(\)\)\}>[^<]*<\/button>\s*<button style=\{actionButton\} onClick=\{\(\) => reportPlacement\(mode\.clearPlacementAlong\(\)\)\}>/, '側反転（位置）・位置の解除は位置が none でないときだけ');
   // 位置の段は 1 段目の最終ボタン列（回転反転・側反転・配置・解除）の前

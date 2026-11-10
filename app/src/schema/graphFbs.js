@@ -15,6 +15,7 @@ import { UNSPECIFIED_STRUCTURE, MAT_FOUNDATION, normalizeBasementStructure } fro
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { normalizeDetailRefs } from '../core/detailRefs.js';
 import { StairPortSide, StairSoffitFinish, KneeDropFrontSide, SitePlacementAlongVertex } from '../core/constants.js';
+import { alongSharedVertex } from '../site/sitePlacementVertex.js';
 import { DEFAULT_PLAN_CUT_HEIGHT_MM, DEFAULT_CEILING_CUT_HEIGHT_MM } from '../core/plane.js';
 
 // CenterLine.beamAxisOrigin の許容値集合（BeamAxisOriginの値のみ。未知の文字列はnullへ正規化する
@@ -269,12 +270,16 @@ const PLN = {
 // 末尾追加（長方形。無い旧データは読み側で空配列）
 // 末尾追加（配置。無い旧データは読み側で null）
 const SITE = { POINTS: 0, LINES: 1, TRIANGLES: 2, LINE_ORDER: 3, HISTORY: 4, RECTS: 5, PLACEMENT: 6 };
-// SitePlacement（敷地の配置: 変換＋S4 の再編集用の入力）: 14 フィールド。float64 は mm／度、V1/V2 は敷地座標の頂点
+// SitePlacement（敷地の配置: 変換＋S4 の再編集用の入力）: 18 フィールド。float64 は mm／度、V1/V2 は敷地座標の頂点
 // FLAGS: int8 のビット集合（PLACEMENT_FLAG_BIT。reader に bool が無いため RECT_SIDE_BIT と同形）
-// ALONG_*（10〜13）: 末尾追加。2 段目「位置」（共有点・通り芯B・離れ・側反転）。旧データは ALONG_VERTEX=0＝なし
+// ALONG_*（10〜17）: 末尾追加。2 対目（通り芯B・離れ・側反転・頂点1＝共有点 V1X/V1Y・頂点2 V2X/V2Y）。
+// ALONG_VERTEX（10）は旧形式（共有点＝1 対目の頂点 1|2）。旧データの読込みと旧読み手との整合のために残し、
+// 新データでも「2 対目の頂点1 が 1 対目のどちらと一致するか」(1|2) を書く（一致しなければ書かない）。旧データ（V1X..が無い）は
+// ALONG_VERTEX から 1 対目の頂点の座標を 2 対目の頂点1 とし、頂点2 は null で読む。
 const SPLC = {
   ROTATION_DEG: 0, TX: 1, TY: 2, V1X: 3, V1Y: 4, V2X: 5, V2Y: 6, CENTER_LINE_ID: 7, DISTANCE: 8, FLAGS: 9,
   ALONG_VERTEX: 10, ALONG_CENTER_LINE_ID: 11, ALONG_DISTANCE: 12, ALONG_FLAGS: 13,
+  ALONG_V1X: 14, ALONG_V1Y: 15, ALONG_V2X: 16, ALONG_V2Y: 17,
 };
 export const PLACEMENT_FLAG_BIT = Object.freeze({ rotationFlipped: 1, sideFlipped: 2 });
 export const PLACEMENT_ALONG_FLAG_BIT = Object.freeze({ sideFlipped: 1 });
@@ -1057,7 +1062,7 @@ function writeSitePlacement(b, p) {
     | (input.sideFlipped ? PLACEMENT_FLAG_BIT.sideFlipped : 0);
   const { along } = input;
   const sAlongClId = along ? b.createString(along.centerLineId) : 0;
-  b.startObject(14);
+  b.startObject(18);
   b.addFieldFloat64(SPLC.ROTATION_DEG, p.rotationDeg, 0.0);
   b.addFieldFloat64(SPLC.TX, p.tx, 0.0);
   b.addFieldFloat64(SPLC.TY, p.ty, 0.0);
@@ -1069,10 +1074,18 @@ function writeSitePlacement(b, p) {
   b.addFieldFloat64(SPLC.DISTANCE, input.distance, 0.0);
   b.addFieldInt8(SPLC.FLAGS, flags, 0);
   if (along) {
-    b.addFieldInt8(SPLC.ALONG_VERTEX, along.vertex, SitePlacementAlongVertex.NONE);
+    // 旧読み手との整合: 2 対目の頂点1 が 1 対目のどちらと一致するか（一致しなければ書かない＝旧読み手では along なし）
+    b.addFieldInt8(SPLC.ALONG_VERTEX, alongSharedVertex(input) ?? SitePlacementAlongVertex.NONE, SitePlacementAlongVertex.NONE);
     b.addFieldOffset(SPLC.ALONG_CENTER_LINE_ID, sAlongClId, 0);
     b.addFieldFloat64(SPLC.ALONG_DISTANCE, along.distance, 0.0);
     b.addFieldInt8(SPLC.ALONG_FLAGS, along.sideFlipped ? PLACEMENT_ALONG_FLAG_BIT.sideFlipped : 0, 0);
+    // 座標は 0 も実値なので、既定値に NaN を渡して常に書く（reader の has で有無を見分ける）。頂点2 は null なら書かない
+    b.addFieldFloat64(SPLC.ALONG_V1X, along.v1.x, NaN);
+    b.addFieldFloat64(SPLC.ALONG_V1Y, along.v1.y, NaN);
+    if (along.v2) {
+      b.addFieldFloat64(SPLC.ALONG_V2X, along.v2.x, NaN);
+      b.addFieldFloat64(SPLC.ALONG_V2Y, along.v2.y, NaN);
+    }
   }
   return b.endObject();
 }
@@ -1397,6 +1410,7 @@ function writeSleeve(b, s) {
 function makeReader(bb, tablePos) {
   function f(n) { return bb.__offset(tablePos, 4 + n * 2); }
   return {
+    has:    n => f(n) !== 0,
     str:    n => { const o = f(n); return o ? bb.__string(tablePos + o) : ''; },
     f64:    n => { const o = f(n); return o ? bb.readFloat64(tablePos + o) : 0.0; },
     i8:     n => { const o = f(n); return o ? bb.readInt8(tablePos + o) : 0; },
@@ -1881,19 +1895,28 @@ function readSitePlacement(bb, tablePos) {
   if (!tablePos) return null;
   const r = makeReader(bb, tablePos);
   const flags = r.i8(SPLC.FLAGS);
+  const v1 = { x: r.f64(SPLC.V1X), y: r.f64(SPLC.V1Y) };
+  const v2 = { x: r.f64(SPLC.V2X), y: r.f64(SPLC.V2Y) };
+  // 2 対目の頂点: 新形式（ALONG_V1X..）はそのまま。旧形式（ALONG_VERTEX だけ）は 1 対目の頂点の座標を頂点1、頂点2 は null。どちらでもなければ along なし
   const alongVertex = r.i8(SPLC.ALONG_VERTEX);
-  const hasAlong = alongVertex === SitePlacementAlongVertex.V1 || alongVertex === SitePlacementAlongVertex.V2;
+  const point = (xSlot, ySlot) => {
+    if (!r.has(xSlot) || !r.has(ySlot)) return null;
+    const p = { x: r.f64(xSlot), y: r.f64(ySlot) };
+    return Number.isFinite(p.x) && Number.isFinite(p.y) ? p : null;
+  };
+  const alongV1 = point(SPLC.ALONG_V1X, SPLC.ALONG_V1Y)
+    ?? (alongVertex === SitePlacementAlongVertex.V1 ? { ...v1 } : alongVertex === SitePlacementAlongVertex.V2 ? { ...v2 } : null);
+  const alongV2 = point(SPLC.ALONG_V1X, SPLC.ALONG_V1Y) ? point(SPLC.ALONG_V2X, SPLC.ALONG_V2Y) : null;
   return {
     rotationDeg: r.f64(SPLC.ROTATION_DEG), tx: r.f64(SPLC.TX), ty: r.f64(SPLC.TY),
     input: {
-      v1: { x: r.f64(SPLC.V1X), y: r.f64(SPLC.V1Y) },
-      v2: { x: r.f64(SPLC.V2X), y: r.f64(SPLC.V2Y) },
+      v1, v2,
       centerLineId: r.str(SPLC.CENTER_LINE_ID),
       distance: r.f64(SPLC.DISTANCE),
       rotationFlipped: (flags & PLACEMENT_FLAG_BIT.rotationFlipped) !== 0,
       sideFlipped: (flags & PLACEMENT_FLAG_BIT.sideFlipped) !== 0,
-      along: hasAlong ? {
-        vertex: alongVertex,
+      along: alongV1 ? {
+        v1: alongV1, v2: alongV2,
         centerLineId: r.str(SPLC.ALONG_CENTER_LINE_ID),
         distance: r.f64(SPLC.ALONG_DISTANCE),
         sideFlipped: (r.i8(SPLC.ALONG_FLAGS) & PLACEMENT_ALONG_FLAG_BIT.sideFlipped) !== 0,

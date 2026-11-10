@@ -1,6 +1,6 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Circle, Group, Text } from 'react-konva';
-import { placementVertexIndex } from '../site/sitePlacementView.js';
+import { placementVertexLabelText } from '../site/sitePlacementView.js';
 import { siteTransformGroupProps, applySiteTransform } from '../site/siteTransform.js';
 import { layoutBoundaryLabels } from '../site/siteBoundaryLabels.js';
 import {
@@ -27,7 +27,7 @@ const BOUNDARY_LABEL_BOX_PX = 200;
 // 敷地の外周は図芯合わせの変換（siteTransformGroupProps）を掛けた Group の中。線は listening しない。
 // 当たりを持つのは敷地の角の丸（タップ＝配置指定の頂点。mode.pickPlacementVertex。Group の中なので座標は敷地座標のまま渡る）と、
 // 外周の通り芯（exterior）の丸ラベル（タップ＝配置指定の通り芯。mode.pickPlacementCenterLine）。
-// 選択中の頂点（mode.placementInput の v1/v2）は塗り＋番号、選択中の通り芯（線と丸ラベル）は選択色。
+// 選択中の頂点（mode.placementInput の v1/v2・along.v1/v2）は塗り＋番号、選択中の通り芯（線と丸ラベル）は選択色。
 export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd, onToast }) => {
   // パンの終了後も Konva は click を出すので、直前がパンの終了なら無視する（SceneLayers の onSelectRectEdge と同じ）
   const pick = c => { if (didPanEnd?.()) return; mode.pickPlacementVertex({ x: c.x, y: c.y }); };
@@ -90,7 +90,8 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd, o
           />
         ))}
         {view.siteCorners.flatMap(c => {
-          const idx = placementVertexIndex(input, c);
+          // 番号: 1 対目「1」「2」・2 対目「1'」「2'」・共有の角は併記。空文字＝どの枠でもない
+          const idx = placementVertexLabelText(input, c);
           const color = idx ? MEMBER_SELECTION_COLOR : SITE_LINE_COLOR;
           return [
             <Circle
@@ -122,7 +123,7 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd, o
                 x={c.x} y={c.y}
                 offsetX={-markR} offsetY={markR + numFontSize}
                 rotation={-view.siteTransform.rotationDeg}
-                text={String(idx)}
+                text={idx}
                 fontSize={numFontSize}
                 fill={MEMBER_SELECTION_COLOR}
                 listening={false}

@@ -8,7 +8,7 @@ import {
 } from './core.js';
 import { NON_DEFAULT_ROOF_SPEC } from './finish/roofTestFixtures.js';
 import { setExteriorCeilingEnabled, exteriorCeilingEnabled, EXTERIOR_CEILING_KEY } from './ceiling/exteriorCeiling.js';
-import { ByteBuffer } from 'flatbuffers';
+import { Builder, ByteBuffer } from 'flatbuffers';
 import { runInAction } from 'mobx';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, serializePlanes, decodePlanes,
@@ -2182,7 +2182,38 @@ const PLACEMENT_BASE = {
   rotationDeg: -37.5, tx: 12345.25, ty: -678.5,
   input: { v1: { x: 100.5, y: -200 }, v2: { x: 3100.5, y: 800.25 }, centerLineId: 'cl-x1', distance: 1820.5, rotationFlipped: false, sideFlipped: false, along: null },
 };
-const PLACEMENT_ALONG = { vertex: 2, centerLineId: 'cl-y2', distance: 455.75, sideFlipped: true };
+// 2 対目: 頂点1＝共有点（PLACEMENT_BASE の v2 と同じ点）・頂点2＝境界線のもう一端
+const PLACEMENT_ALONG = { v1: { x: 3100.5, y: 800.25 }, v2: { x: 5000, y: 0 }, centerLineId: 'cl-y2', distance: 455.75, sideFlipped: true };
+
+// 旧形式（ALONG_VERTEX だけ。ALONG_V1X.. が無い）の配置を FlatBuffers で直に組んでデコードする（現行の encode は旧形式を書けないため）
+function decodeLegacyAlongPlacement(alongVertex) {
+  const b = new Builder(256);
+  const sCl = b.createString('cl-x1');
+  const sAlongCl = b.createString('cl-y2');
+  b.startObject(14);
+  b.addFieldFloat64(0, -37.5, 0.0);
+  b.addFieldFloat64(1, 12345.25, 0.0);
+  b.addFieldFloat64(2, -678.5, 0.0);
+  b.addFieldFloat64(3, 100.5, 0.0);
+  b.addFieldFloat64(4, -200, 0.0);
+  b.addFieldFloat64(5, 3100.5, 0.0);
+  b.addFieldFloat64(6, 800.25, 0.0);
+  b.addFieldOffset(7, sCl, 0);
+  b.addFieldFloat64(8, 1820.5, 0.0);
+  b.addFieldInt8(9, 0, 0);
+  b.addFieldInt8(10, alongVertex, 0);
+  b.addFieldOffset(11, sAlongCl, 0);
+  b.addFieldFloat64(12, 455.75, 0.0);
+  b.addFieldInt8(13, 1, 0);
+  const placement = b.endObject();
+  b.startObject(7);
+  b.addFieldOffset(6, placement, 0);
+  const site = b.endObject();
+  b.startObject(48);
+  b.addFieldOffset(47, site, 0);
+  b.finish(b.endObject());
+  return decodeSite(b.asUint8Array().slice());
+}
 
 test('serializeSite → restoreSite: 配置（全フィールド）の往復。フラグ4通り（なし・回転のみ・側のみ・両方）が独立に戻る', () => {
   for (const [rotationFlipped, sideFlipped] of [[false, false], [true, false], [false, true], [true, true]]) {
@@ -2195,15 +2226,22 @@ test('serializeSite → restoreSite: 配置（全フィールド）の往復。�
   }
 });
 
-test('serializeSite → restoreSite: 2 段目「位置」（along）あり・なしの往復。共有点 1/2・側反転の有無が独立に戻り、along なしは null', () => {
-  for (const [vertex, sideFlipped] of [[1, false], [1, true], [2, false], [2, true]]) {
+test('serializeSite → restoreSite: 2 対目（along）あり・なしの往復。頂点1・頂点2（座標 0 を含む）・側反転が独立に戻り、頂点2 が null でも戻り、along なしは null', () => {
+  for (const [v2, sideFlipped] of [[{ x: 5000, y: 0 }, false], [{ x: 0, y: 0 }, true], [null, false], [null, true]]) {
     const site = new Site();
-    site.setPlacement({ ...PLACEMENT_BASE, input: { ...PLACEMENT_BASE.input, along: { ...PLACEMENT_ALONG, vertex, sideFlipped } } });
+    site.setPlacement({ ...PLACEMENT_BASE, input: { ...PLACEMENT_BASE.input, along: { ...PLACEMENT_ALONG, v2, sideFlipped } } });
     const restored = new Site();
     restoreSite(restored, decodeSite(serializeSite(site)));
-    assert.deepEqual(restored.placement, site.placement, `共有点=${vertex} 側反転=${sideFlipped}`);
+    assert.deepEqual(restored.placement, site.placement, `頂点2=${JSON.stringify(v2)} 側反転=${sideFlipped}`);
     assert.notEqual(restored.placement.input.along, site.placement.input.along, 'along も deep copy');
+    assert.notEqual(restored.placement.input.along.v1, site.placement.input.along.v1, '頂点も deep copy');
   }
+  // 頂点1 の座標が 0 でも「無し」と取り違えない（0 は実値）
+  const origin = new Site();
+  origin.setPlacement({ ...PLACEMENT_BASE, input: { ...PLACEMENT_BASE.input, along: { ...PLACEMENT_ALONG, v1: { x: 0, y: 0 }, v2: { x: 0, y: 0 } } } });
+  const originRestored = new Site();
+  restoreSite(originRestored, decodeSite(serializeSite(origin)));
+  assert.deepEqual(originRestored.placement.input.along.v1, { x: 0, y: 0 });
   const plain = new Site();
   plain.setPlacement({ ...PLACEMENT_BASE });
   const restored = new Site();
@@ -2211,19 +2249,51 @@ test('serializeSite → restoreSite: 2 段目「位置」（along）あり・な
   assert.equal(restored.placement.input.along, null);
 });
 
-test('【失敗系】along の旧データ（ALONG 無し）は null・共有点が 1/2 以外（0・3）や通り芯 id 欠落の壊れた along は null（配置本体は残る）', () => {
-  // 旧データ: ALONG_VERTEX を書かない（along: null で書いた FBS）→ 読みは null
+test('2 対目の保存: 頂点1 が 1 対目の頂点1・頂点2 のどちらと一致するかを旧読み手向けの ALONG_VERTEX へ書く（一致しなければ書かない）', () => {
+  const read = along => {
+    const data = decodeLegacyReadOnlyVertex(encode({ site: { placement: { ...PLACEMENT_BASE, input: { ...PLACEMENT_BASE.input, along } } } }));
+    return data;
+  };
+  assert.equal(read({ ...PLACEMENT_ALONG, v1: { ...PLACEMENT_BASE.input.v1 } }), 1, '1 対目の頂点1 と一致 → 1');
+  assert.equal(read({ ...PLACEMENT_ALONG, v1: { ...PLACEMENT_BASE.input.v2 } }), 2, '1 対目の頂点2 と一致 → 2');
+  assert.equal(read({ ...PLACEMENT_ALONG, v1: { x: 1, y: 2 } }), 0, 'どちらとも一致しない → 書かない（0）');
+});
+
+// ALONG_VERTEX（スロット 10）の生の値を読む（旧読み手の見え方）。root→Site(47)→SitePlacement(6)
+function decodeLegacyReadOnlyVertex(bytes) {
+  const bb = new ByteBuffer(bytes);
+  const table = (pos, slot) => { const o = bb.__offset(pos, 4 + slot * 2); return o ? bb.__indirect(pos + o) : 0; };
+  const root = bb.readInt32(bb.position()) + bb.position();
+  const placement = table(table(root, 47), 6);
+  const o = bb.__offset(placement, 4 + 10 * 2);
+  return o ? bb.readInt8(placement + o) : 0;
+}
+
+test('along の旧データ（ALONG_VERTEX だけ）: 共有点 1 → 1 対目の頂点1 の座標が 2 対目の頂点1・頂点2 は null、共有点 2 → 頂点2 の座標。通り芯・離れ・側は旧値のまま', () => {
+  const v1 = decodeLegacyAlongPlacement(1).placement.input.along;
+  assert.deepEqual(v1, { v1: { x: 100.5, y: -200 }, v2: null, centerLineId: 'cl-y2', distance: 455.75, sideFlipped: true });
+  const v2 = decodeLegacyAlongPlacement(2).placement.input.along;
+  assert.deepEqual(v2.v1, { x: 3100.5, y: 800.25 });
+  assert.equal(v2.v2, null);
+});
+
+test('【失敗系】along の旧データ（ALONG 無し）は null・旧形式の共有点が 0・3 の壊れた along も null・頂点1 や通り芯 id 欠落の壊れた along は null（配置本体は残る）', () => {
+  // 旧データ: ALONG を書かない（along: null で書いた FBS）→ 読みは null
   const legacy = decodeSite(encode({ site: { placement: { ...PLACEMENT_BASE } } }));
   assert.equal(legacy.placement.input.along, null);
   assert.equal(legacy.placement.input.distance, 1820.5, '1 段目は無傷');
-  // FBS に 0 や 3 が書かれていても読みは null（encode へ直接渡して serialize の正規化を通さない）
+  // 旧形式の共有点が 0 や 3 で座標も無い → null
   for (const vertex of [0, 3]) {
-    const bytes = encode({ site: { placement: { ...PLACEMENT_BASE, input: { ...PLACEMENT_BASE.input, along: { ...PLACEMENT_ALONG, vertex } } } } });
-    assert.equal(decodeSite(bytes).placement.input.along, null, `FBS の共有点=${vertex}`);
+    const placement = decodeLegacyAlongPlacement(vertex).placement;
+    assert.equal(placement.input.along, null, `旧形式の共有点=${vertex}`);
+    assert.equal(placement.input.distance, 1820.5, '1 段目は無傷');
   }
+  // 頂点1 の座標が有限でない新形式 → 旧形式の ALONG_VERTEX も無いので null
+  const nan = decodeSite(encode({ site: { placement: { ...PLACEMENT_BASE, input: { ...PLACEMENT_BASE.input, along: { ...PLACEMENT_ALONG, v1: { x: NaN, y: 0 } } } } } }));
+  assert.equal(nan.placement.input.along, null);
   // メモリ上のコピー（serialize・restore 共通）も同じ規則
   for (const bad of [
-    { ...PLACEMENT_ALONG, vertex: 0 }, { ...PLACEMENT_ALONG, vertex: 3 },
+    { ...PLACEMENT_ALONG, v1: null }, { ...PLACEMENT_ALONG, v1: undefined }, { ...PLACEMENT_ALONG, v1: { x: NaN, y: 0 } },
     { ...PLACEMENT_ALONG, centerLineId: undefined }, { ...PLACEMENT_ALONG, centerLineId: '' },
   ]) {
     const site = new Site();

@@ -9,7 +9,9 @@ import {
   roofPlanLines, siteOutlineSegments, siteOutlineCorners, boundsOfPointLists,
   composeSitePlacementView,
   samePlacementVertex, placementVertexIndex,
+  placementAlongVertexIndex, placementVertexLabels, placementVertexLabelText,
 } from './sitePlacementView.js';
+import { alongSharedVertex } from './sitePlacementVertex.js';
 import { applySiteTransform, siteTransformGroupProps } from './siteTransform.js';
 import { SITE_PLACEMENT_VERTEX_EPS_MM } from '../core/constants.js';
 
@@ -264,4 +266,45 @@ test('placementVertexIndex: v1 なら 1・v2 なら 2・どちらでもなけれ
   assert.equal(placementVertexIndex(null, { x: 1, y: 2 }), null);
   assert.equal(placementVertexIndex({ v1: null, v2: { x: 3, y: 4 } }, { x: 3, y: 4 }), 2, 'v1 が空なら v2 だけを見る');
   assert.equal(placementVertexIndex({ v1: { x: 1, y: 1 }, v2: { x: 1, y: 1 } }, { x: 1, y: 1 }), 1);
+});
+
+const PAIRS = { v1: { x: 1, y: 2 }, v2: { x: 3, y: 4 }, along: { v1: { x: 3, y: 4 }, v2: { x: 5, y: 6 } } };
+
+test('placementVertexLabels: 1 対目は「1」「2」・2 対目は「1\'」「2\'」・共有の角は両方（1 対目→2 対目の順）・どの枠でもなければ []', () => {
+  assert.deepEqual(placementVertexLabels(PAIRS, { x: 1, y: 2 }), ['1']);
+  assert.deepEqual(placementVertexLabels(PAIRS, { x: 3, y: 4 }), ['2', "1'"], '1 対目の頂点2 と 2 対目の頂点1 の共有');
+  assert.deepEqual(placementVertexLabels(PAIRS, { x: 5, y: 6 }), ["2'"]);
+  assert.deepEqual(placementVertexLabels(PAIRS, { x: 9, y: 9 }), []);
+  assert.deepEqual(placementVertexLabels({ ...PAIRS, along: { v1: { x: 1, y: 2 }, v2: { x: 5, y: 6 } } }, { x: 1, y: 2 }), ['1', "1'"], '1 対目の頂点1 との共有');
+});
+
+test('placementVertexLabelText: 共有の角は「·」で連結（「2·1\'」）。単独は 1 つだけ・枠なしは空文字', () => {
+  assert.equal(placementVertexLabelText(PAIRS, { x: 3, y: 4 }), "2·1'");
+  assert.equal(placementVertexLabelText(PAIRS, { x: 1, y: 2 }), '1');
+  assert.equal(placementVertexLabelText(PAIRS, { x: 5, y: 6 }), "2'");
+  assert.equal(placementVertexLabelText(PAIRS, { x: 0, y: 0 }), '');
+});
+
+test('【失敗系】placementVertexLabels: input が null・along が null・頂点が null の枠は無視（落ちない）', () => {
+  assert.deepEqual(placementVertexLabels(null, { x: 1, y: 2 }), []);
+  assert.deepEqual(placementVertexLabels({ v1: { x: 1, y: 2 }, v2: null, along: null }, { x: 1, y: 2 }), ['1']);
+  assert.deepEqual(placementVertexLabels({ v1: null, v2: null, along: { v1: null, v2: { x: 5, y: 6 } } }, { x: 5, y: 6 }), ["2'"]);
+  assert.equal(placementVertexLabelText(undefined, { x: 1, y: 2 }), '');
+});
+
+test('placementAlongVertexIndex: 2 対目の頂点1 なら 1・頂点2 なら 2・それ以外は null（along.v1 を優先）', () => {
+  assert.equal(placementAlongVertexIndex(PAIRS, { x: 3, y: 4 }), 1);
+  assert.equal(placementAlongVertexIndex(PAIRS, { x: 5, y: 6 }), 2);
+  assert.equal(placementAlongVertexIndex(PAIRS, { x: 1, y: 2 }), null);
+  assert.equal(placementAlongVertexIndex({ v1: null, v2: null, along: null }, { x: 1, y: 2 }), null);
+});
+
+test('alongSharedVertex: 2 対目の頂点1 が 1 対目の頂点1 なら 1・頂点2 なら 2・どちらでもなければ null・2 対目が無ければ null（1 対目の頂点1 が優先）', () => {
+  assert.equal(alongSharedVertex({ v1: { x: 1, y: 2 }, v2: { x: 3, y: 4 }, along: { v1: { x: 1, y: 2 } } }), 1);
+  assert.equal(alongSharedVertex({ v1: { x: 1, y: 2 }, v2: { x: 3, y: 4 }, along: { v1: { x: 3, y: 4 } } }), 2);
+  assert.equal(alongSharedVertex({ v1: { x: 1, y: 2 }, v2: { x: 3, y: 4 }, along: { v1: { x: 7, y: 8 } } }), null);
+  assert.equal(alongSharedVertex({ v1: { x: 1, y: 2 }, v2: { x: 3, y: 4 }, along: null }), null);
+  assert.equal(alongSharedVertex({ v1: null, v2: null, along: { v1: { x: 1, y: 2 } } }), null);
+  assert.equal(alongSharedVertex(null), null);
+  assert.equal(alongSharedVertex({ v1: { x: 1, y: 1 }, v2: { x: 1, y: 1 }, along: { v1: { x: 1, y: 1 } } }), 1);
 });

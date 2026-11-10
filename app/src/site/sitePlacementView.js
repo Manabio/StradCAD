@@ -11,7 +11,8 @@
  * 写像は p' = R(rotationDeg)·p + (tx, ty)（原点まわりの回転＋平行移動。pivot は持たない＝敷地の図芯は形で動くため）。
  * 写像の口（applySiteTransform・siteTransformGroupProps）は site/siteTransform.js だけが持つ（ここからは再 export しない）。
  */
-import { SitePlacementCenterSource, SITE_LOG_TAG, SITE_PLACEMENT_VERTEX_EPS_MM } from '../core/constants.js';
+import { SitePlacementCenterSource, SITE_LOG_TAG } from '../core/constants.js';
+import { samePlacementVertex } from './sitePlacementVertex.js';
 import { roofPlanRegionFigure } from '../finish/roof/roofPlanFigure.js';
 import { computeOuterLineIds, computeOuterCornerPoints } from './lineClassification.js';
 import { computeOutlinePieces, computeOutlineCorners } from './siteRectGeometry.js';
@@ -142,16 +143,46 @@ export function composeSitePlacementView({ site, roof }) {
   };
 }
 
-/** 配置指定の頂点どうしが同じ角か（SITE_PLACEMENT_VERTEX_EPS_MM 以内。どちらかが null なら false）。判定の唯一の口。 */
-export function samePlacementVertex(a, b) {
-  if (!a || !b) return false;
-  return Math.abs(a.x - b.x) <= SITE_PLACEMENT_VERTEX_EPS_MM && Math.abs(a.y - b.y) <= SITE_PLACEMENT_VERTEX_EPS_MM;
-}
+// 頂点の一致判定の口は site/sitePlacementVertex.js（保存側 schema からも使うため軽い別モジュール）。ここからも従来どおり引ける
+export { samePlacementVertex };
 
-/** pt が配置指定の頂点1なら 1、頂点2なら 2、どちらでもなければ null（input.v1 が優先）。 */
+/** pt が配置指定の 1 対目の頂点1なら 1、頂点2なら 2、どちらでもなければ null（input.v1 が優先）。 */
 export function placementVertexIndex(input, pt) {
   if (!input) return null;
   if (samePlacementVertex(input.v1, pt)) return 1;
   if (samePlacementVertex(input.v2, pt)) return 2;
   return null;
+}
+
+/** pt が 2 対目の頂点1なら 1、頂点2なら 2、どちらでもなければ null（along.v1 が優先）。 */
+export function placementAlongVertexIndex(input, pt) {
+  const a = input?.along;
+  if (!a) return null;
+  if (samePlacementVertex(a.v1, pt)) return 1;
+  if (samePlacementVertex(a.v2, pt)) return 2;
+  return null;
+}
+
+// 番号の書式部品（共有の角は「1·1'」のように併記する）
+const PLACEMENT_VERTEX_LABEL_SECOND_PAIR_MARK = "'";
+const PLACEMENT_VERTEX_LABEL_JOINER = '·';
+
+/**
+ * pt の角に付ける番号ラベルの配列（1 対目「1」「2」→ 2 対目「1'」「2'」の順。どの枠でもなければ []）。
+ * 共有の角は複数入る。表示は '·' で連結（placementVertexLabelText）。番号の組み立ては 1 か所（ここ）。
+ */
+export function placementVertexLabels(input, pt) {
+  if (!input) return [];
+  const labels = [];
+  const first = placementVertexIndex(input, pt);
+  if (first !== null) labels.push(String(first));
+  // 1 対目の頂点1・頂点2 が同じ点でも「1」だけ（placementVertexIndex は v1 優先）。2 対目も同様
+  const second = placementAlongVertexIndex(input, pt);
+  if (second !== null) labels.push(`${second}${PLACEMENT_VERTEX_LABEL_SECOND_PAIR_MARK}`);
+  return labels;
+}
+
+/** placementVertexLabels を '·' で連結した表示文字列（空配列なら ''）。 */
+export function placementVertexLabelText(input, pt) {
+  return placementVertexLabels(input, pt).join(PLACEMENT_VERTEX_LABEL_JOINER);
 }

@@ -2,7 +2,6 @@ import { runInAction } from 'mobx';
 import { ShapeType, CenterLine, isGridCenterLine, HDimensionLine, VDimensionLine, DimensionAnchor, DimensionKind, DimensionSide, Room, RoomKind, RoomFeature, IndependentFooting, ExteriorFinishRow, EquipmentRow, RoofSpec, SiteLineKind, isDefaultRoofSpec, restoreCeilingZones, restoreRoofZones, restorePlacedFigures } from '@core';
 import { encode, decode, countClEccentricities } from './schema/graphFbs.js';
 import { normalizeDetailRefs } from './core/detailRefs.js';
-import { SitePlacementAlongVertex } from './core/constants.js';
 import { kneeDropFrontSideOf } from './core/kneeDropRecord.js';
 import { normalizeBasementStructure } from './structural/structureRules.js';
 import { packExtraFields, unpackExtraFields } from './structural/fieldPacking.js';
@@ -492,10 +491,13 @@ function copySitePlacement(p) {
   };
 }
 
-// 2 段目「位置」の deep copy。無い・共有点が 1/2 でない・通り芯 id が無いものは null（centerLineId は '' に正規化しない）
+// 2 対目の deep copy。無い・頂点1（共有点）が無い・通り芯 id が無いものは null（centerLineId は '' に正規化しない）。
+// 頂点2 は null 可（旧データ。座標が壊れていても null）。vertex（旧形式の共有点）は持たない
 function copyPlacementAlong(a) {
-  const ok = a && (a.vertex === SitePlacementAlongVertex.V1 || a.vertex === SitePlacementAlongVertex.V2) && a.centerLineId;
-  return ok ? { vertex: a.vertex, centerLineId: a.centerLineId, distance: a.distance, sideFlipped: !!a.sideFlipped } : null;
+  const point = p => (p && Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: p.x, y: p.y } : null);
+  const v1 = point(a?.v1);
+  if (!v1 || !a.centerLineId) return null;
+  return { v1, v2: point(a.v2), centerLineId: a.centerLineId, distance: a.distance, sideFlipped: !!a.sideFlipped };
 }
 
 export function serializeSite(site) {
