@@ -18,6 +18,7 @@ import { computeOuterLineIds, computeOuterCornerPoints } from './lineClassificat
 import { computeOutlinePieces, computeOutlineCorners } from './siteRectGeometry.js';
 import { composeSitePlacementGrid } from './sitePlacementGrid.js';
 import { boundaryPieces, mergeCollinearPieces } from './siteBoundaryLabels.js';
+import { applySiteTransform } from './siteTransform.js';
 
 // Konva の key の組み立て部品。種別ごとの id 空間の衝突を避けるためだけに付け、比較には使わない。
 const SITE_PLACEMENT_KEY_PREFIX = Object.freeze({ LEAN: 'l', RECT: 'r', POINT: 'p', CORNER: 'c' });
@@ -130,12 +131,18 @@ export function composeSitePlacementView({ site, roof }) {
   const siteTransform = placement
     ? { rotationDeg: placement.rotationDeg, tx: placement.tx, ty: placement.ty }
     : { rotationDeg: 0, tx: aligned ? buildingCenter.x - siteCenter.x : 0, ty: aligned ? buildingCenter.y - siteCenter.y : 0 };
+  // 配置図座標での敷地の外周の外接矩形（通り芯の線と丸ラベルを敷地の外へ出すための枠）。敷地が無ければ null
+  const siteBounds = boundsOfPointLists(siteSegments.map(s => {
+    const a = applySiteTransform({ x: s.points[0], y: s.points[1] }, siteTransform);
+    const b = applySiteTransform({ x: s.points[2], y: s.points[3] }, siteTransform);
+    return [a.x, a.y, b.x, b.y];
+  }));
   return {
     roofLines, roofFailedCount, roofEmpty: roofLines.length === 0,
     siteSegments, siteCorners,
     buildingCenter, centerSource, siteCenter,
     // 通り芯の線・丸ラベル・寸法（図芯の基準 gridBounds とは別の入力。ここから図芯は求めない）
-    grid: composeSitePlacementGrid({ gridLines: roof?.gridLines ?? [], roofBounds }),
+    grid: composeSitePlacementGrid({ gridLines: roof?.gridLines ?? [], roofBounds, siteBounds }),
     // 境界線ラベルの片（敷地座標・結合済み。字の位置は scale に依るのでレイヤーが layoutBoundaryLabels で出す）
     boundaryPieces: mergeCollinearPieces(boundaryPieces(site)),
     siteTransform,

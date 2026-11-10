@@ -235,6 +235,29 @@ test('composeSitePlacementView: site.placement があればその {rotationDeg,t
   assert.deepEqual(v.buildingCenter, { x: 53000, y: 32000 });
 });
 
+test('composeSitePlacementView: grid.lineFrame は配置図座標の敷地の外接矩形を含む（回転 90°: 長方形 4000×2000・tx=10000・ty=5000 → x 8000..10000・y 5000..9000）。frame は屋根と通り芯のまま', () => {
+  const site = new Site();
+  site.addRect(0, 0, 4000, 2000);
+  const input = { v1: { x: 0, y: 0 }, v2: { x: 4000, y: 0 }, centerLineId: 'c1', distance: 3000, rotationFlipped: false, sideFlipped: false };
+  site.setPlacement({ rotationDeg: 90, tx: 10000, ty: 5000, input });
+  const roof = {
+    floors: [{ planeId: 'p1', regions: [{ key: 'r', outlineOnly: true, exposedPaths: [{ points: [9000, 6000, 9500, 6000, 9500, 7000, 9000, 7000], closed: true }] }] }],
+    gridBounds: null,
+    gridLines: [{ id: 'x0', centerLineType: 'X', value: 9000, label: 'X1' }, { id: 'y0', centerLineType: 'Y', value: 6000, label: 'Y1' }],
+    readFailed: false,
+  };
+  const v = composeSitePlacementView({ site, roof });
+  const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} vs ${b}`);
+  assert.deepEqual(v.grid.frame, { x: [9000, 9500], y: [6000, 7000] });
+  near(v.grid.lineFrame.x[0], 8000); near(v.grid.lineFrame.x[1], 10000);
+  near(v.grid.lineFrame.y[0], 5000); near(v.grid.lineFrame.y[1], 9000);
+});
+
+test('【失敗系】composeSitePlacementView: 敷地が空なら siteBounds が無く lineFrame は frame と同じ', () => {
+  const v = composeSitePlacementView({ site: new Site(), roof: farRoof() });
+  assert.deepEqual(v.grid.lineFrame, v.grid.frame);
+});
+
 test('【失敗系】composeSitePlacementView: placement があれば敷地が空・屋根なしでも変換は placement のまま（placed:true）', () => {
   const site = new Site();
   site.setPlacement({ rotationDeg: -90, tx: 10, ty: 20, input: { v1: { x: 0, y: 0 }, v2: { x: 1, y: 0 }, centerLineId: 'c', distance: 1, rotationFlipped: true, sideFlipped: true } });
