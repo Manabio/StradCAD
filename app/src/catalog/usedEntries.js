@@ -176,12 +176,16 @@ function placedFigureViewKeys(figure) {
  */
 function detailFigureMaterialCodes(figure) {
   const codes = new Set();
-  const strokes = Array.isArray(figure?.strokes) ? figure.strokes : [];
-  for (const stroke of strokes) {
-    const moves = Array.isArray(stroke?.moves) ? stroke.moves : [];
-    for (const move of moves) {
-      for (const part of moveParts(move) ?? []) {
-        if (part.len?.mode === DetailLenMode.MATERIAL && isMaterialCode(part.len.code)) codes.add(part.len.code);
+  // 建具一式（parts）は部品の図に埋め込みの strokes を持つ（最上位の strokes は空）。部品は入れ子にしない前提で 1 段だけ歩く。
+  const bodies = [figure, ...(Array.isArray(figure?.parts) ? figure.parts.map(p => p?.figure) : [])];
+  for (const body of bodies) {
+    const strokes = Array.isArray(body?.strokes) ? body.strokes : [];
+    for (const stroke of strokes) {
+      const moves = Array.isArray(stroke?.moves) ? stroke.moves : [];
+      for (const move of moves) {
+        for (const part of moveParts(move) ?? []) {
+          if (part.len?.mode === DetailLenMode.MATERIAL && isMaterialCode(part.len.code)) codes.add(part.len.code);
+        }
       }
     }
   }

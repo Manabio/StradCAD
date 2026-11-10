@@ -92,13 +92,13 @@ test('【失敗系】登録表: keyOf／parseKey は空・欠落の key を例�
 
 test('登録表: 照合・比較・重複禁止の項目', () => {
   const def = kindDef(DF);
-  assert.deepEqual(def.knownFields, ['key', 'version', 'label', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', 'views']);
+  assert.deepEqual(def.knownFields, ['key', 'version', 'label', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', 'views', 'parts']);
   assert.deepEqual(def.requiredFields, ['key', 'label', 'category', 'view', 'strokes']);
-  assert.deepEqual(def.compareFields, ['version', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', 'views']);
+  assert.deepEqual(def.compareFields, ['version', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', 'views', 'parts']);
   assert.deepEqual(def.silentDiffFields, ['label']);
-  assert.deepEqual(def.matchFields, ['strokes', 'category', 'view', 'subject', 'label']);
+  assert.deepEqual(def.matchFields, ['strokes', 'category', 'view', 'subject', 'label', 'parts']);
   assert.equal(def.minMatchFields, 2);
-  assert.deepEqual(def.dedupeFields, ['strokes', 'label', 'category', 'view', 'subject']);
+  assert.deepEqual(def.dedupeFields, ['parts', 'strokes', 'label', 'category', 'view', 'subject']);
   assert.deepEqual(def.keyBoundFields, ['key']);
   assert.deepEqual(def.overrideLockedFields, []);
 });
