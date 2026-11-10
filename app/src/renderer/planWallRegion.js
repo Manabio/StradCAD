@@ -94,7 +94,7 @@ export function regionSpan(wall, junction) {
  * 壁1本ぶんの領域入力（POJO）。`materialRange`/`backingRange` は MobX の computed なので
  * 1回だけ読んで写す（`wallJunctionResolve.js` の makeView と同じ手口）。
  */
-function wallInput(wall, { junction, cuts, kneeDrop, clipGroup }) {
+function wallInput(wall, { junction, cuts, recesses, kneeDrop, clipGroup }) {
   const [lo, hi] = regionSpan(wall, junction);
   // 天板（腰壁・垂れ壁）の壁は `spanCuts`（パス0「高い壁の帯に覆われる区間は描かない」）を使わない
   // ——同じことを天板の領域から全高の材を差し引いて表す（`resolveCapLines`）。
@@ -119,6 +119,7 @@ function wallInput(wall, { junction, cuts, kneeDrop, clipGroup }) {
     id: wall.id,
     isVertical: wall.isVertical,
     spanLo: lo, spanHi: hi, spans,
+    recesses: recesses ?? [],
     material,
     backing,
     extentLo: wall.axisCL?.extentLo ?? null,
@@ -225,6 +226,27 @@ function rect(isVertical, alongLo, alongHi, acrossLo, acrossHi, id, tag, hide) {
     : rectFromMm(alongLo, alongHi, acrossLo, acrossHi, id, tag);
   if (r && hide?.length) r.hide = hide;
   return r;
+}
+
+/**
+ * 長さ方向 [lo,hi]×厚み方向 [perpLo,perpHi] の矩形から、引き代の欠き込みの帯（{along, across}。世界座標）を差し引いた
+ * 矩形の列 [[lo,hi,perpLo,perpHi],…] を返す。厚み方向が帯の across と交わらない帯は無視する＝交わる帯が無ければ
+ * 入力の矩形 1 つがそのまま返る（矩形不変）。帯の along の端で長さ方向を分け、分けた各区間では覆う帯の across を
+ * 1 次元の区間差（subtractIntervals）で引く。
+ * @returns {Array<[number,number,number,number]>}
+ */
+export function carveRecesses(lo, hi, perpLo, perpHi, recesses) {
+  const bands = (recesses ?? []).filter(b => b.across[0] < perpHi && b.across[1] > perpLo && b.along[0] < hi && b.along[1] > lo);
+  if (bands.length === 0) return [[lo, hi, perpLo, perpHi]];
+  const cuts = [...new Set([lo, hi, ...bands.flatMap(b => b.along).filter(v => v > lo && v < hi)])].sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i + 1 < cuts.length; i += 1) {
+    const a = cuts[i], b = cuts[i + 1];
+    const mid = (a + b) / 2;
+    const covering = bands.filter(band => band.along[0] <= mid && band.along[1] >= mid).map(band => band.across);
+    for (const [pLo, pHi] of subtractIntervals(perpLo, perpHi, covering)) out.push([a, b, pLo, pHi]);
+  }
+  return out;
 }
 
 // 対称壁の軸CL側（材の面ではない継ぎ目）の side 名。
@@ -365,6 +387,7 @@ function wrapEndsFor(w, junction, endpointAt, freeEndPoints) {
  * @param {{
  *   junctions?: Map<string, object>|null,
  *   cutsByWall?: Map<string, [number,number][]>,
+ *   recessesByWall?: Map<string, Array<{along:[number,number], across:[number,number]}>>,
  *   kneeDropOverlays?: Map<string, object>|null,
  *   endpointAtByWall?: Map<string, {lo:boolean, hi:boolean}>,
  *   columnWraps?: Array<{id:string, outer:{xLo:number,xHi:number,yLo:number,yHi:number},
@@ -380,7 +403,7 @@ function wrapEndsFor(w, junction, endpointAt, freeEndPoints) {
  *   backingSpans: 壁id → 下地スタッドを並べる長さ方向の範囲（取り合い・回り込みの正規化済み）。
  */
 export function resolveWallRegionLines(walls, {
-  junctions = null, cutsByWall = null, kneeDropOverlays = null,
+  junctions = null, cutsByWall = null, recessesByWall = null, kneeDropOverlays = null,
   endpointAtByWall = null, columnWraps = null, clipGroups = null, detail = true,
   freeEndPoints = null,
 } = {}) {
@@ -390,6 +413,7 @@ export function resolveWallRegionLines(walls, {
     inputs.push(wallInput(wall, {
       junction: junctions?.get(wall.id),
       cuts: cutsByWall?.get(wall.id),
+      recesses: recessesByWall?.get(wall.id),
       kneeDrop: kneeDropOverlays?.get(wall.id),
       clipGroup: clipGroups?.get(wall.id) ?? null,
     }));
@@ -413,15 +437,20 @@ export function resolveWallRegionLines(walls, {
       // 端の正規化は壁の**物理端に接する区間**だけに効かせる（開口で分かれた内側の端は
       // 開口の縁であって壁の端ではない）。
       const atLo = a <= w.spanLo, atHi = b >= w.spanHi;
-      const m = rect(w.isVertical, atLo ? mSpan[0] : a, atHi ? mSpan[1] : b,
-        w.material.lo, w.material.hi, w.id, tag, hide);
-      if (m) materialRects.push(m);
+      // 引き代の欠き込みの帯（外付け引き戸。w.recesses）は材・下地の厚み方向から引く（carveRecesses。帯が無ければ矩形 1 つ）。
+      for (const [aLo, aHi, pLo, pHi] of carveRecesses(atLo ? mSpan[0] : a, atHi ? mSpan[1] : b,
+        w.material.lo, w.material.hi, w.recesses)) {
+        const m = rect(w.isVertical, aLo, aHi, pLo, pHi, w.id, tag, hide);
+        if (m) materialRects.push(m);
+      }
       if (!bSpan) continue;
       const bLo = atLo ? bSpan[0] : a;
       const bHi = atHi ? bSpan[1] : b;
       if (bHi <= bLo) continue;
-      const r = rect(w.isVertical, bLo, bHi, w.backing.lo, w.backing.hi, w.id, tag);
-      if (r) backingRects.push(r);
+      for (const [aLo, aHi, pLo, pHi] of carveRecesses(bLo, bHi, w.backing.lo, w.backing.hi, w.recesses)) {
+        const r = rect(w.isVertical, aLo, aHi, pLo, pHi, w.id, tag);
+        if (r) backingRects.push(r);
+      }
     }
   }
 

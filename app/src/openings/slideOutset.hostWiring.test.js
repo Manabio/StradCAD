@@ -69,6 +69,23 @@ test('【配線】renderer/wallDrawPlan.js は openingCutSpan を host（壁）�
   assert.ok(/findHostWallIndexed\(o,\s*wallIndex\)/.test(code), 'hostOf が findHostWallIndexed でない（描いている壁を host にしてはいけない）');
 });
 
+test('【配線】slideRecessBand の消費側の全呼び出しが、実ホスト壁（hostOf）の wallFaceRange を面範囲に渡す', () => {
+  let found = 0;
+  for (const file of sourceFiles(SRC)) {
+    const code = stripComments(fs.readFileSync(file, 'utf8'));
+    for (const m of code.matchAll(/(?<![\w.])slideRecessBand\(([^;]*)/g)) {
+      if (/function\s+$/.test(code.slice(0, m.index))) continue;
+      found += 1;
+      assert.ok(/^\s*layout\.recess,\s*wallFaceRange\(host,\s*graph\)\)/.test(m[1]),
+        `${path.relative(SRC, file)} の slideRecessBand( が wallFaceRange(host, graph) を渡していない: ${m[1].slice(0, 80)}`);
+    }
+  }
+  assert.equal(found, 1, '前提: 消費側は renderer/wallDrawPlan.js の 1 か所');
+  const code = stripComments(fs.readFileSync(path.join(SRC, 'renderer', 'wallDrawPlan.js'), 'utf8'));
+  assert.ok(/const host = hostOf\(o\);/.test(code), 'host が実ホスト壁（hostOf）でない（描いている壁を使ってはいけない）');
+  assert.ok(/import \{[^}]*wallFaceRange[^}]*\} from '\.\.\/openings\/openingGeometry\.js'/.test(code), 'wallFaceRange は openingGeometry.js のものを使う');
+});
+
 test('callArities（走査器の自己検証）: 引数の数・入れ子・複数行・定義の除外・コメント外の取りこぼし', () => {
   assert.deepEqual(callArities('openingCutSpan(o, m, w)', 'openingCutSpan'), [3]);
   assert.deepEqual(callArities('openingCutSpan(o, m)', 'openingCutSpan'), [2], '失敗側: host 無しは 2');

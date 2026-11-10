@@ -10,7 +10,7 @@
 
 import { OpeningMechanism } from './openingCatalog.js';
 import { swingSideTowardPerp } from './openingGeometry.js';
-import { SLIDE_OUTSET_WIDTH_DEDUCT_MM } from '../core/constants.js';
+import { SLIDE_OUTSET_WIDTH_DEDUCT_MM, SLIDE_OUTSET_RECESS_DEPTH_MM } from '../core/constants.js';
 
 /** 外付け引き戸か（唯一の定義）。 */
 export function isOutsetSlide(mechanism) {
@@ -36,6 +36,7 @@ export function slideTailSide(opening) {
  * runPerpDir＝扉が走る面の直交方向の符号＝(isVertical?1:−1)×swingSide×hingeSide（開き戸の開く側と同じ積。openingGeometry.js
  * swingSideTowardPerp に委ねる）。swingSide が ±1 でないときは 0（走る面が決まらない。swingSideTowardPerp の「0→1 の fallback」は
  * 開き戸の既定値決定のためのもので、ここで黙って片面に寄せると平面・展開の穴の側が一致しないので採らない）。
+ * recess＝引き代区間の欠き込み { span: pull, perpSide: runPerpDir, depth }（runPerpDir 0＝走る面不定は null＝欠き込まない）。
  * host（任意・ホスト壁）が外壁（isExteriorWall===true）なら null（R12: 外壁の引き戸は外付けにしない＝従来描き）。
  */
 export function outsetSlideLayout(opening, mechanism, host = null) {
@@ -53,7 +54,8 @@ export function outsetSlideLayout(opening, mechanism, host = null) {
   const pull = tailSide < 0 ? [lo, hi - cutLength] : [lo + cutLength, hi];
   const swingSide = opening.swingSide;
   const runPerpDir = swingSide === 1 || swingSide === -1 ? swingSideTowardPerp(opening.isVertical, tailSide, swingSide) : 0;
-  return { doorWidth, cutLength, tailSide, cut, pull, runPerpDir };
+  const recess = runPerpDir === 0 ? null : { span: pull, perpSide: runPerpDir, depth: SLIDE_OUTSET_RECESS_DEPTH_MM };
+  return { doorWidth, cutLength, tailSide, cut, pull, runPerpDir, recess };
 }
 
 /** 壁を全厚で欠く区間 [lo,hi]。外付け引き戸（配置が決まる）は穴 cut、それ以外（引き戸でない・不正・host が外壁〔R12〕）は開口全幅（恒等）。coord 非有限は null。 */
@@ -61,4 +63,23 @@ export function openingCutSpan(opening, mechanism, host = null) {
   const { coord1, coord2 } = opening ?? {};
   if (!Number.isFinite(coord1) || !Number.isFinite(coord2)) return null;
   return outsetSlideLayout(opening, mechanism, host)?.cut ?? [Math.min(coord1, coord2), Math.max(coord1, coord2)];
+}
+
+/**
+ * 引き代区間の欠き込みの帯（世界座標）。recess は outsetSlideLayout().recess、faceRange は実ホスト壁の
+ * wallFaceRange(host, graph)＝[面の小, 面の大]（呼び元が実ホスト壁で求める）。
+ * 走る面＝perpSide>0 なら faceRange[1]・perpSide<0 なら faceRange[0]。across＝その面から深さ d だけ壁の内側。
+ * recess が無い・perpSide 0・faceRange が非有限・壁厚（faceRange の幅）が d 以下（T3）は null（欠き込まない）。
+ * @returns {{along:[number,number], across:[number,number]}|null}
+ */
+export function slideRecessBand(recess, faceRange) {
+  if (!recess || !Array.isArray(recess.span) || !Array.isArray(faceRange)) return null;
+  const [f0, f1] = faceRange;
+  const d = recess.depth;
+  if (![f0, f1, d, recess.span[0], recess.span[1]].every(Number.isFinite)) return null;
+  if (f1 - f0 <= d) return null;
+  const along = [recess.span[0], recess.span[1]];
+  if (recess.perpSide > 0) return { along, across: [f1 - d, f1] };
+  if (recess.perpSide < 0) return { along, across: [f0, f0 + d] };
+  return null;
 }

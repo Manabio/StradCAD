@@ -134,6 +134,73 @@ test('【配線】ShapesLayer の wallDrawPlan のキャッシュ鍵にカタロ
   assert.ok(lines.some(l => /^import \{ overlayGeneration \} from '\.\.\/catalog\/catalogRegistry\.js';/.test(l)), 'overlayGeneration を import していない');
 });
 
+// ---- 引き代区間の欠き込み（S3b）。壁は水平・軸 y=0・室内向き壁 axisOffset −t/2（材 y∈[−t/2,0]）。建具の pull＝[1000,1800]。
+// swingSide −1 → runPerpDir −1（hingeSide −1・水平）＝小さい側の面から深さ 50。
+function recessFixture({ t = 150, wallSide = -1, exterior = false, withCounterpart = true } = {}) {
+  const graph = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
+  const cl = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
+  const [x0, x1, y] = [cl(CenterLineType.VERTICAL, 0), cl(CenterLineType.VERTICAL, 6000), cl(CenterLineType.HORIZONTAL, 0)];
+  const inner = graph.addWall(y, -t / 2, false, x0, 0, x1, 0, { isExteriorWall: exterior });
+  const outer = withCounterpart ? graph.addWall(y, t / 2, false, x0, 0, x1, 0, { isExteriorWall: !exterior }) : null;
+  const slide = (props = {}) => graph.addOpening(y, wallSide, false, x0, 1775, 1550, OpeningCategory.FITTING, 'sliding', { swingSide: -1, hingeSide: -1, ...props });
+  const door = () => graph.addOpening(y, wallSide, false, x0, 1400, 800, OpeningCategory.FITTING, 'singleSwing', { swingSide: -1, hingeSide: -1 });
+  const lines = (wall, opts) => buildWallDrawPlan(graph, LodLevel.STANDARD, opts).wallLines.get(wall.id).lines;
+  return { graph, inner, outer, slide, door, lines };
+}
+const faceAt = (lines, v) => lines.filter(l => !l.vertical && Math.abs(l.at - v) < 1e-6).map(l => [l.lo, l.hi]).sort((a, b) => a[0] - b[0]);
+
+test('buildWallDrawPlan: 内壁の引き戸は pull 区間［1000,1800］で走る面（y 小）から 50 欠き込む（面線の段差）', () => {
+  const { inner, outer, slide, lines } = recessFixture();
+  slide();
+  // 室内向き壁（材 y∈[−75,0]）: 面 y=−75 は穴 [1800,2550] と引き代 [1000,1800] で途切れ、引き代では y=−25 に段差。
+  assert.deepEqual(faceAt(lines(inner), -75), [[0, 1000], [2550, 6000]]);
+  assert.deepEqual(faceAt(lines(inner), -25), [[1000, 1800]]);
+  // 外壁側の壁（材 y∈[0,75]）は帯（y∈[−75,−25]）と交わらない＝穴の区間以外は不変。
+  assert.deepEqual(faceAt(lines(outer), 75), [[0, 1800], [2550, 6000]]);
+});
+
+test('buildWallDrawPlan: 走る面が反対（swingSide +1）なら欠き込みは y 大の面側（外壁側の壁が段差になる）', () => {
+  const { inner, outer, slide, lines } = recessFixture();
+  slide({ swingSide: 1 });
+  assert.deepEqual(faceAt(lines(outer), 75), [[0, 1000], [2550, 6000]]);
+  assert.deepEqual(faceAt(lines(outer), 25), [[1000, 1800]]);
+  assert.deepEqual(faceAt(lines(inner), -75), [[0, 1800], [2550, 6000]], '室内向き壁は穴だけ');
+});
+
+test('【失敗系】buildWallDrawPlan: 外壁ホストの引き戸は帯なし（R12）＝段差の面線が出ない', () => {
+  const e = recessFixture({ wallSide: 1 }); // wallSide +1＝外壁（outer）がホスト
+  e.slide();
+  for (const wall of [e.inner, e.outer]) {
+    assert.equal(faceAt(e.lines(wall), -25).length, 0, '段差の面線なし');
+    assert.equal(faceAt(e.lines(wall), 25).length, 0);
+  }
+  assert.deepEqual(faceAt(e.lines(e.inner), -75), [[0, 1000], [2550, 6000]], '外壁ホストは W 全幅（従来）');
+});
+
+test('【失敗系】buildWallDrawPlan: 天伏で描かない建具（hiddenOpeningIds）は欠き込みの帯も作らない（T2）', () => {
+  const { inner, slide, lines } = recessFixture();
+  const o = slide();
+  assert.deepEqual(faceAt(lines(inner, { hiddenOpeningIds: new Set([o.id]) }), -75), [[0, 6000]]);
+  assert.equal(faceAt(lines(inner, { hiddenOpeningIds: new Set([o.id]) }), -25).length, 0);
+});
+
+test('【失敗系】buildWallDrawPlan: 壁厚≤50（T3）・swingSide 0 は帯なし（穴だけ）', () => {
+  const thin = recessFixture({ t: 50 });
+  thin.slide();
+  assert.deepEqual(faceAt(thin.lines(thin.inner), -25), [[0, 1800], [2550, 6000]], '壁厚 50: 面線は穴だけで途切れ、引き代 1000〜1800 に段差なし');
+  const zero = recessFixture();
+  zero.slide({ swingSide: 0 });
+  assert.deepEqual(faceAt(zero.lines(zero.inner), -75), [[0, 1800], [2550, 6000]]);
+  assert.equal(faceAt(zero.lines(zero.inner), -25).length, 0);
+});
+
+test('buildWallDrawPlan: 引き戸以外（片開き戸）は帯を作らない', () => {
+  const { inner, door, lines } = recessFixture();
+  door();
+  assert.deepEqual(faceAt(lines(inner), -75), [[0, 1000], [1800, 6000]], '開口全幅だけ欠く');
+  assert.equal(faceAt(lines(inner), -25).length, 0);
+});
+
 test('【失敗系】幅が非有限の建具は壁にぶら下がらず切れ目を作らない', () => {
   const { open, segments } = fixture();
   open('sliding', 1000, NaN);

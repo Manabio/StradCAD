@@ -4,8 +4,9 @@ import assert from 'node:assert/strict';
 import { OpeningMechanism, findCatalogEntry } from './openingCatalog.js';
 import { swingOpenPerpDir } from './openingPlanSymbolGeometry.js';
 import {
-  isOutsetSlide, slideDoorWidth, slideTailSide, outsetSlideLayout, openingCutSpan,
+  isOutsetSlide, slideDoorWidth, slideTailSide, outsetSlideLayout, openingCutSpan, slideRecessBand,
 } from './slideOutset.js';
+import { SLIDE_OUTSET_RECESS_DEPTH_MM } from '../core/constants.js';
 
 const SLIDE = OpeningMechanism.SLIDE_SINGLE;
 const op = over => ({ coord1: 1000, coord2: 2550, hingeSide: -1, swingSide: 1, isVertical: false, ...over });
@@ -149,6 +150,44 @@ test('R12: host が内壁・null・undefined・省略なら従来どおり（穴
     assert.deepEqual(openingCutSpan(o, SLIDE, host), [1800, 2550]);
   }
   assert.ok(outsetSlideLayout(o, SLIDE));
+});
+
+test('layout.recess: span は pull と同じ・perpSide は runPerpDir・depth は 50（SLIDE_OUTSET_RECESS_DEPTH_MM）', () => {
+  const l = outsetSlideLayout(op(), SLIDE);
+  assert.deepEqual(l.recess, { span: l.pull, perpSide: l.runPerpDir, depth: SLIDE_OUTSET_RECESS_DEPTH_MM });
+  assert.equal(l.recess.depth, 50);
+  assert.deepEqual(l.recess.span, [1000, 1800]);
+  const r = outsetSlideLayout(op({ hingeSide: 1 }), SLIDE);
+  assert.deepEqual(r.recess.span, [1750, 2550], 'hingeSide +1 は引き代が hi 側');
+  assert.equal(r.recess.perpSide, -l.recess.perpSide, '引き代の左右を替えると走る面（積）も替わる');
+});
+
+test('【失敗系】layout.recess: swingSide 0（走る面不定）・引き戸以外・host 外壁は null', () => {
+  assert.equal(outsetSlideLayout(op({ swingSide: 0 }), SLIDE).recess, null);
+  assert.equal(outsetSlideLayout(op({ swingSide: 0 }), SLIDE).runPerpDir, 0);
+  assert.equal(outsetSlideLayout(op(), OpeningMechanism.SWING), null);
+  assert.equal(outsetSlideLayout(op(), SLIDE, { isExteriorWall: true }), null);
+});
+
+test('slideRecessBand: perpSide +1 は大きい側の面から d 内側・−1 は小さい側の面から d 内側（位置をずらした壁 y 1000〜1150）', () => {
+  const span = [1000, 1800];
+  assert.deepEqual(slideRecessBand({ span, perpSide: 1, depth: 50 }, [1000, 1150]), { along: [1000, 1800], across: [1100, 1150] });
+  assert.deepEqual(slideRecessBand({ span, perpSide: -1, depth: 50 }, [1000, 1150]), { along: [1000, 1800], across: [1000, 1050] });
+  assert.deepEqual(slideRecessBand(outsetSlideLayout(op(), SLIDE).recess, [-75, 75]), { along: [1000, 1800], across: [25, 75] }, 'layout 経由（swingSide 1・hingeSide −1・水平＝+側）');
+});
+
+test('【失敗系】slideRecessBand: 壁厚が d 以下（T3）・recess null・perpSide 0・faceRange 非有限は null', () => {
+  const rec = { span: [1000, 1800], perpSide: 1, depth: 50 };
+  assert.equal(slideRecessBand(rec, [1000, 1050]), null, '壁厚 50＝d');
+  assert.equal(slideRecessBand(rec, [1000, 1025]), null, '壁厚 25<d');
+  assert.ok(slideRecessBand(rec, [1000, 1050.5]), '壁厚が d を超えれば欠き込む');
+  assert.equal(slideRecessBand(null, [1000, 1150]), null);
+  assert.equal(slideRecessBand(undefined, [1000, 1150]), null);
+  assert.equal(slideRecessBand({ ...rec, perpSide: 0 }, [1000, 1150]), null);
+  assert.equal(slideRecessBand(rec, [NaN, 1150]), null);
+  assert.equal(slideRecessBand(rec, [1000, Infinity]), null);
+  assert.equal(slideRecessBand(rec, null), null);
+  assert.equal(slideRecessBand(rec, undefined), null);
 });
 
 test('非整数 W でも DW の誤差は 1e-9 以下', () => {

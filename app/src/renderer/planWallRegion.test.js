@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ShapeType } from '@core';
-import { resolveWallRegionLines, wallSpanIntervals } from './planWallRegion.js';
+import { resolveWallRegionLines, wallSpanIntervals, carveRecesses } from './planWallRegion.js';
 import { resolveWallTJunctions } from './wallJunctionResolve.js';
 
 // 最小スタブ壁（resolveWallRegionLines が読むフィールドのみ）。
@@ -539,6 +539,90 @@ test('wallSpanIntervals: 穴の区間 cuts で壁を分割し、spanCuts をさ�
   assert.deepEqual(wallSpanIntervals(0, 6000, [[1000, 1800]], [[500, 1200]]), [[0, 500], [1800, 6000]], 'spanCuts は分割後の区間から引く');
   assert.deepEqual(wallSpanIntervals(0, 6000, [[0, 800]], []), [[800, 6000]], '壁の端に接する穴');
   assert.deepEqual(wallSpanIntervals(0, 6000, [[5200, 6000]], []), [[0, 5200]]);
+});
+
+// ---- 引き代の欠き込み（外付け引き戸。recessesByWall）。壁は水平・y 1000〜1100（原点からずらす）----
+// 帯＝along [1500,2300]×across [1050,1100]（壁の + 側の面 y=1100 から深さ 50）。
+const BAND = { along: [1500, 2300], across: [1050, 1100] };
+function ownerWall(props = {}) {
+  return stubWall({ id: 'O', isVertical: false, axis: 1000, face: 1087.5, faceDir: 1, coord1: 500, coord2: 4500,
+    backingDepth: 87.5, backingRange: { lo: 1000, hi: 1087.5 }, materialRange: { lo: 1000, hi: 1087.5 }, ...props });
+}
+function thinWall(props = {}) {
+  return stubWall({ id: 'T', isVertical: false, axis: 1000, face: 1100, faceDir: 1, coord1: 500, coord2: 4500,
+    backingDepth: 0, backingRange: null, materialRange: { lo: 1087.5, hi: 1100 }, ...props });
+}
+const recessed = (walls, band = BAND) => resolveWallRegionLines(walls, { recessesByWall: new Map(walls.map(w => [w.id, [band]])) });
+
+test('【欠き込み】単独の壁（材 y1000〜1100）: 面線が引き代区間で y=1100→1050 の段差になり、両端に短い線（x=1500・2300）が出る', () => {
+  const lines = allLines(recessed([stubWall({ id: 'S', isVertical: false, axis: 1000, face: 1100, faceDir: 1,
+    coord1: 500, coord2: 4500, backingDepth: 90, backingRange: { lo: 1005, hi: 1095 }, materialRange: { lo: 1000, hi: 1100 } })]));
+  assert.deepEqual(at(lines, false, 1100), [[500, 1500], [2300, 4500]], '+ 側の面線は帯の along で途切れる');
+  assert.deepEqual(at(lines, false, 1050), [[1500, 2300]], '段差の面線');
+  assert.deepEqual(at(lines, false, 1000), [[500, 4500]], '反対側の面線は不変');
+  assert.deepEqual(at(lines, true, 1500), [[1050, 1100]], '段差の短い線（左）');
+  assert.deepEqual(at(lines, true, 2300), [[1050, 1100]], '段差の短い線（右）');
+});
+
+test('【欠き込み】2 枚壁: 薄壁 12.5 は帯の区間で全厚消え、オーナー壁は 37.5 削れる（同じ帯を両方から引く）', () => {
+  const lines = allLines(recessed([ownerWall(), thinWall()]));
+  assert.deepEqual(at(lines, false, 1100), [[500, 1500], [2300, 4500]], '外面は帯の外だけ');
+  assert.deepEqual(at(lines, false, 1050), [[1500, 2300]], '欠き込み底＝オーナー壁の残り面（1087.5−37.5）');
+  assert.deepEqual(at(lines, false, 1087.5), [[500, 1500], [2300, 4500]], '薄壁とオーナー壁の継ぎ目線は帯の外だけ');
+  assert.deepEqual(at(lines, false, 1000), [[500, 4500]]);
+  assert.deepEqual(at(lines, true, 1500), [[1050, 1100]]);
+  assert.deepEqual(at(lines, true, 2300), [[1050, 1100]]);
+});
+
+test('【欠き込み】相手の壁が帯の途中で終わる: 壁の範囲内（〜1800）だけ欠き、その先は壁が無い（妻の線は y 1000〜1050）', () => {
+  const lines = allLines(recessed([ownerWall({ coord2: 1800 })]));
+  assert.deepEqual(at(lines, false, 1050), [[1500, 1800]]);
+  assert.deepEqual(at(lines, false, 1087.5), [[500, 1500]], '+ 側の面線は帯の手前まで');
+  assert.deepEqual(at(lines, true, 1800), [[1000, 1050]], '壁の端の妻線は残った厚みぶんだけ');
+});
+
+test('【欠き込み】帯が壁と交わらなければ（別の面・別の区間）矩形不変＝線は帯なしと同じ', () => {
+  const base = resolveWallRegionLines([ownerWall(), thinWall()]);
+  const sameSet = (r) => JSON.stringify(allLines(r).map(l => [l.vertical, l.at, l.lo, l.hi, l.kind]).sort());
+  const farAcross = recessed([ownerWall(), thinWall()], { along: [1500, 2300], across: [1200, 1250] });
+  const farAlong = recessed([ownerWall(), thinWall()], { along: [5000, 5800], across: [1050, 1100] });
+  assert.equal(sameSet(farAcross), sameSet(base), 'across が壁の厚みと交わらない');
+  assert.equal(sameSet(farAlong), sameSet(base), 'along が壁の範囲の外');
+  assert.equal(sameSet(resolveWallRegionLines([ownerWall(), thinWall()], { recessesByWall: new Map() })), sameSet(base), '帯の写像が空');
+});
+
+test('【欠き込み】穴（cutsByWall）と併用: 穴の区間は全厚で欠け、引き代の帯は穴の隣で段差になる', () => {
+  const w = ownerWall();
+  const result = resolveWallRegionLines([w], {
+    cutsByWall: new Map([['O', [[2300, 3050]]]]), recessesByWall: new Map([['O', [BAND]]]),
+  });
+  const lines = allLines(result);
+  assert.deepEqual(at(lines, false, 1050), [[1500, 2300]]);
+  assert.deepEqual(at(lines, false, 1087.5), [[500, 1500], [3050, 4500]]);
+});
+
+test('carveRecesses: 帯なし・交わらない帯は入力の矩形 1 つ／帯の along 端で分割し覆う帯の across を引く', () => {
+  assert.deepEqual(carveRecesses(0, 10, 100, 200, undefined), [[0, 10, 100, 200]]);
+  assert.deepEqual(carveRecesses(0, 10, 100, 200, []), [[0, 10, 100, 200]]);
+  assert.deepEqual(carveRecesses(0, 10, 100, 200, [{ along: [2, 4], across: [300, 350] }]), [[0, 10, 100, 200]]);
+  assert.deepEqual(carveRecesses(0, 10, 100, 200, [{ along: [20, 40], across: [150, 200] }]), [[0, 10, 100, 200]]);
+  assert.deepEqual(carveRecesses(0, 10, 100, 200, [{ along: [2, 4], across: [150, 200] }]),
+    [[0, 2, 100, 200], [2, 4, 100, 150], [4, 10, 100, 200]]);
+  assert.deepEqual(carveRecesses(0, 10, 100, 200, [{ along: [2, 4], across: [100, 200] }]),
+    [[0, 2, 100, 200], [4, 10, 100, 200]], '全厚を覆えば区間ごと消える');
+});
+
+test('carveRecesses: 2 本の帯が同じ区間に重なると、重なる区間では両方の across を引く', () => {
+  assert.deepEqual(carveRecesses(0, 10, 100, 200, [{ along: [2, 6], across: [150, 200] }, { along: [4, 8], across: [100, 130] }]),
+    [[0, 2, 100, 200], [2, 4, 100, 150], [4, 6, 130, 150], [6, 8, 130, 200], [8, 10, 100, 200]]);
+});
+
+test('【欠き込み】隣り合う 2 本の引き代（同じ壁）: 面線の段差が 2 区間に出る', () => {
+  const w = ownerWall();
+  const bands = [BAND, { along: [3000, 3600], across: [1050, 1100] }];
+  const lines = allLines(resolveWallRegionLines([w], { recessesByWall: new Map([['O', bands]]) }));
+  assert.deepEqual(at(lines, false, 1050), [[1500, 2300], [3000, 3600]]);
+  assert.deepEqual(at(lines, false, 1087.5), [[500, 1500], [2300, 3000], [3600, 4500]]);
 });
 
 test('【失敗系】wallSpanIntervals: cuts が無ければ全長・壁より広い穴は空・重なる穴は後ろへ延びる側だけ採る', () => {

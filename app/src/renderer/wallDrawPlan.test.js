@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Plane, PlanGraph, Project, StairType, CenterLineType, Discipline, edgeKey, StructuralMaterialType, ShapeType } from '@core';
+import { Plane, PlanGraph, Project, StairType, CenterLineType, Discipline, edgeKey, StructuralMaterialType, ShapeType, OpeningCategory } from '@core';
 import { generateStairPartitionWalls, wrapStairPartitionFreeEnds } from '../finish/stair/stairPartitionWalls.js';
 import { studRects } from './wallStudLayout.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
@@ -471,6 +471,32 @@ test('buildWallDrawPlan: 在来木造でも柱の無い壁は面が1つ＝下地
   // 自由端の柱包みでwallFinish(12.5)ぶん縮んだ[12.5,3627.5]（上のテストと同じ理由）——
   // L=3615(=3627.5-12.5): 商7 → 内側6ピッチ=2730、両端442.5（+下地帯の始端12.5を加算）。
   assert.deepEqual(plan.wallStuds.get(w.id).centers, [455, 910, 1365, 1820, 2275, 2730, 3185]);
+});
+
+// 外付け引き戸の引き代区間（欠き込みの帯の along）は間柱を描かない（T4）。穴（全厚）の区間は従来どおり間柱が無い。
+function studsWithSlide(props) {
+  const { g, w, yAxis, cls } = buildStudGraph('S造');
+  g.addOpening(yAxis, 1, false, cls[0], 1775, 1550, OpeningCategory.FITTING, 'sliding', { swingSide: 1, hingeSide: -1, ...props });
+  return buildWallDrawPlan(g, LodLevel.DETAIL).wallStuds.get(w.id).centers;
+}
+
+test('buildWallDrawPlan: 引き戸の引き代区間［1000,1800］には間柱が無い（T4）。穴［1800,2550］の区間だけなら 1350 に立つ', () => {
+  assert.deepEqual(studsWithSlide({}), [450, 900, 2700, 3150, 3600], '引き代の 1350 は除かれる');
+  assert.ok(studsWithSlide({ swingSide: 0 }).includes(1350), '【失敗系】走る面不定（swingSide 0）は欠き込みなし＝穴だけ除く従来どおり 1350 に立つ');
+});
+
+test('buildWallDrawPlan: 下地帯が帯の across に届かない壁では引き代区間の間柱を消さない', () => {
+  const g = new PlanGraph(new Plane('p', 0, '1階', 1, 1));
+  g.structureOverride = 'S造';
+  const yAxis = hCL(g, 0);
+  const x0 = vCL(g, 0), x2 = vCL(g, 3640);
+  // 下地帯を軸から −50 偏芯（backing y∈[−110,10]）。帯（走る面 y=72.5 から 50＝y∈[22.5,72.5]）には届かない。
+  const w = wall(g, yAxis, 72.5, false, x0, 0, x2, 0, { backingOffset: -50, backingDepth: 120, finishSide: 1 });
+  g.addOpening(yAxis, 1, false, x0, 1775, 1550, OpeningCategory.FITTING, 'sliding', { swingSide: 1, hingeSide: -1 });
+  const plan = buildWallDrawPlan(g, LodLevel.DETAIL);
+  assert.ok(w.backingRange.hi < 22.5, '前提: 下地帯が帯に届かない');
+  assert.ok(plan.wallStuds.get(w.id).centers.includes(1350), '引き代区間の間柱が残る');
+  assert.ok(!plan.wallStuds.get(w.id).centers.includes(2250), '穴の区間（1800〜2550）は従来どおり間柱なし');
 });
 
 test('buildWallDrawPlan: 在来以外（S造）は従来どおり壁の始端から450固定ピッチ・見かけ幅45', () => {

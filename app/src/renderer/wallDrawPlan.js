@@ -36,9 +36,9 @@ import { isEndpointAt } from '../transform/centerLineExtend.js';
 import { resolveKneeDropOverlays } from '../finish/kneeDropWall.js';
 import { columnWallCuts, columnWrapSolids, bareColumnRect } from '../finish/columnWrap.js';
 import { resolveWallStuds, columnIntervalsOnWall } from './wallStudLayout.js';
-import { indexByAxis, findOpeningsOnWallIndexed, findHostWallIndexed } from '../openings/openingGeometry.js';
+import { indexByAxis, findOpeningsOnWallIndexed, findHostWallIndexed, wallFaceRange } from '../openings/openingGeometry.js';
 import { findCatalogEntry } from '../openings/openingCatalog.js';
-import { openingCutSpan } from '../openings/slideOutset.js';
+import { openingCutSpan, outsetSlideLayout, slideRecessBand } from '../openings/slideOutset.js';
 import { resolveWallRegionLines, wallSpanIntervals } from './planWallRegion.js';
 import { graphComputed } from './graphDerived.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
@@ -211,12 +211,30 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null, kneeDrop
     if (!hostById.has(o.id)) hostById.set(o.id, findHostWallIndexed(o, wallIndex));
     return hostById.get(o.id);
   };
+  // 引き代区間の欠き込みの帯（S3b）。帯は建具ごとに実ホスト壁の面範囲（wallFaceRange）で 1 回だけ求め、その建具を拾う壁
+  // （同じ境界の 2 枚＝下地オーナー壁＋仕上げ薄壁）すべてへ同じ帯を配る＝どの壁も同じ面から同じ深さを引く。
+  // 壁厚が深さ以下・走る面不定（swingSide 0）・外壁ホストは帯なし（slideRecessBand / outsetSlideLayout が null）。
+  const bandById = new Map();
+  const bandOf = (o) => {
+    if (!bandById.has(o.id)) {
+      const host = hostOf(o);
+      const layout = host ? outsetSlideLayout(o, mechanismOf(o), host) : null;
+      bandById.set(o.id, layout ? slideRecessBand(layout.recess, wallFaceRange(host, graph)) : null);
+    }
+    return bandById.get(o.id);
+  };
   const cutsByWall = new Map();
+  const recessesByWall = new Map();
   for (const wall of walls) {
     const cuts = [];
     for (const o of findOpeningsOnWallIndexed(wall, openingIndex)) {
       const span = openingCutSpan(o, mechanismOf(o), hostOf(o));
       if (span) cuts.push(span);
+      const band = bandOf(o);
+      if (band) {
+        const list = recessesByWall.get(wall.id) ?? recessesByWall.set(wall.id, []).get(wall.id);
+        list.push(band);
+      }
     }
     if (cuts.length > 0) cutsByWall.set(wall.id, cuts.sort((a, b) => a[0] - b[0]));
   }
@@ -272,7 +290,7 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null, kneeDrop
     ? [...wallRunFreeEnds(ownSegments), ...stairPartitionEnds(graph, undefined, undefined, ownSegments).filter(e => e.free)]
     : null;
   const region = schematic ? null : resolveWallRegionLines(walls, {
-    junctions: wallJunctions, cutsByWall, kneeDropOverlays, endpointAtByWall,
+    junctions: wallJunctions, cutsByWall, recessesByWall, kneeDropOverlays, endpointAtByWall,
     columnWraps, clipGroups, detail, freeEndPoints,
   });
 
@@ -313,7 +331,9 @@ export function buildWallDrawPlan(graph, lodLevel, { clipGroups = null, kneeDrop
       const studs = resolveWallStuds(wallLines.get(wall.id), {
         layout: rules.studLayout, backing: rules.backing,
         columnIntervals,
-        studCuts: columnCuts?.get(wall.id)?.backing ?? [],
+        // 引き代区間（欠き込み帯の along）は間柱を描かない（T4。穴と同じ扱い）。
+        studCuts: [...(columnCuts?.get(wall.id)?.backing ?? []), ...(recessesByWall.get(wall.id) ?? [])
+          .filter(b => b.across[0] < wall.backingRange.hi && b.across[1] > wall.backingRange.lo).map(b => b.along)],
         endMembers: wallEndMembers,
       });
       if (studs) wallStuds.set(wall.id, studs);
