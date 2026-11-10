@@ -60,16 +60,20 @@ test('SitePlacementLayer: 選択中の頂点は placementVertexLabelText で引�
   assert.match(layer, /const input = mode\.placementInput;/);
   assert.match(layer, /const idx = placementVertexLabelText\(input, c\);/);
   assert.ok(!/placementVertexIndex/.test(layer), '番号の組み立ては純モジュール 1 か所');
-  assert.match(layer, /const color = idx \? MEMBER_SELECTION_COLOR : SITE_LINE_COLOR;/, '2 対目の頂点も 1 対目と同じ選択色');
+  assert.match(layer, /const color = VERTEX_COLOR_BY_KIND\[placementVertexColorKind\(input, c\)\] \?\? SITE_LINE_COLOR;/, '色は純モジュールの種別から（1 対目＝選択色・2 対目＝赤・共有＝紫）');
+  assert.match(layer, /\[PlacementVertexColorKind\.FIRST\]: MEMBER_SELECTION_COLOR,/);
+  assert.match(layer, /\[PlacementVertexColorKind\.SECOND\]: SITE_PLACEMENT_SECOND_PAIR_COLOR,/);
+  assert.match(layer, /\[PlacementVertexColorKind\.SHARED\]: SITE_PLACEMENT_SHARED_VERTEX_COLOR,/);
   assert.match(layer, /fill=\{idx \? color : undefined\}/);
   assert.match(layer, /text=\{idx\}/);
   assert.match(layer, /fontSize=\{numFontSize\}/);
   assert.match(layer, /const numFontSize = NUM_FONT_PX \/ viewport\.scaleX;/);
-  assert.match(layer, /fill=\{MEMBER_SELECTION_COLOR\}/, '番号の文字も選択色');
+  assert.match(layer, /text=\{idx\}\s+fontSize=\{numFontSize\}\s+fill=\{color\}/, '番号の文字も角と同じ色');
   assert.match(layer, /rotation=\{-view\.siteTransform\.rotationDeg\}/, 'Group の回転を打ち消して正立');
   assert.match(layer, /const selectedGridId = mode\.placementCenterLine\?\.id \?\? null;/, '失効した通り芯は印を出さない（R9）');
   assert.match(layer, /view\.grid\.lines\.find\(l => l\.id === selectedGridId\)/);
-  assert.match(layer, /stroke=\{l\.key === selectedGridKey \|\| l\.key === selectedAlongKey \? MEMBER_SELECTION_COLOR : originColor\(SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY\)\}/);
+  assert.match(layer, /const selected = l\.key === selectedGridKey \|\| l\.key === selectedAlongKey;/);
+  assert.match(layer, /stroke=\{selected \? MEMBER_SELECTION_COLOR : originColor\(SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY\)\}/);
   assert.ok(!/Math\.abs\(/.test(layer), '一致判定を描画側に書かない（純モジュールの口だけ）');
 });
 
@@ -121,13 +125,21 @@ test('SitePlacementLayer: 通り芯（線・寸法・丸ラベル）は layoutSi
   assert.ok(rowsAt < labelsAt, '丸ラベルは寸法行より上（後に描く）');
   assert.match(layer, /dimensionRow\(\{/);
   assert.match(layer, /g\.labels\.flatMap\(l => \{/);
-  assert.match(layer, /\.\.\.labelCircle\(l\.key, l\.x, l\.y, l\.label, viewport, selected \? \{ stroke: MEMBER_SELECTION_COLOR, textFill: MEMBER_SELECTION_COLOR \} : \{\}\),/);
+  assert.match(layer, /\.\.\.labelCircle\(l\.key, l\.x, l\.y, l\.label, viewport, selected/);
   assert.match(layer, /: originColor\(SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY\)\}/);
-  assert.match(layer, /dash=\{gridLineDash\(gridLineWidth\)\}/);
+  assert.match(layer, /dash=\{gridLineDash\(width\)\}/);
   assert.match(layer, /const gridLineWidth = viewport\.lineWeightsPx\[SITE_PLACEMENT_GRID_LINE_WEIGHT\];/);
   assert.match(layer, /color: GRID_DIM_COLOR, strokeWidth: viewport\.lineWeightsPx\[DIMENSION_LINE_WEIGHT\]/);
   assert.match(layer, /fontSize: NUM_FONT_PX \/ viewport\.scaleX, gap: TEXT_GAP_PX \/ viewport\.scaleX/);
   assert.match(layer, /const dimDotR = GRID_DIM_DOT_RADIUS_PX \/ viewport\.scaleX;/);
+});
+
+test('SitePlacementLayer: 押せない（外周でない）通り芯ラベルは塗りなし、選択中は選択色の塗り・縁・白文字、選択中の線は太線のキー', () => {
+  assert.match(layer, /\? \{ fill: MEMBER_SELECTION_COLOR, stroke: MEMBER_SELECTION_COLOR, textFill: SITE_PLACEMENT_SELECTED_LABEL_TEXT_COLOR \}/);
+  assert.match(layer, /: l\.exterior \? \{\} : \{ fill: 'transparent' \}\),/, '外周のラベルは従来の塗り（opts 空）・外周でないものだけ透明');
+  assert.match(layer, /const selectedLineWidth = viewport\.lineWeightsPx\[SITE_PLACEMENT_SELECTED_LINE_WEIGHT\];/);
+  assert.match(layer, /const width = selected \? selectedLineWidth : gridLineWidth;/);
+  assert.match(layer, /strokeWidth=\{width\}/);
 });
 
 test('SceneLayers: 配置図の表示中（sitePlacementShown）は敷地の3レイヤを出さず、SitePlacementLayer を出す（平面図一式は述語 shouldShowPlanFigure が site で false）', () => {
@@ -210,13 +222,13 @@ test('SitePlacementLayer: 通り芯の丸ラベルの当たりは外周（exteri
   assert.match(block, /const selected = l\.id === selectedGridId \|\| l\.id === selectedAlongId;/, '選択中の A・B の丸ラベルを選択色に');
 });
 
-test('gutterPrimitives.labelCircle: 色の上書きは省略可能な opts.stroke・opts.textFill で、既定は固定色（GutterLayer の呼び出しは不変）', () => {
+test('gutterPrimitives.labelCircle: 色の上書きは省略可能な opts.fill・opts.stroke・opts.textFill で、既定は固定色（GutterLayer の呼び出しは不変）', () => {
   const prim = code('./gutterPrimitives.jsx');
   assert.match(prim, /export function labelCircle\(keyBase, x, y, label, viewport, opts = \{\}\) \{/);
-  assert.match(prim, /const \{ stroke = '#93c5fd', textFill = '#3b82f6' \} = opts;/);
-  assert.match(prim, /stroke=\{stroke\} strokeWidth/);
+  assert.match(prim, /const \{ fill = '#dbeafe', stroke = '#93c5fd', textFill = '#3b82f6' \} = opts;/, '既定は従来の固定色');
+  assert.match(prim, /fill=\{fill\} stroke=\{stroke\} strokeWidth/);
   assert.match(prim, /fill=\{textFill\} listening/);
-  assert.match(prim, /fill="#dbeafe"/, '塗りは固定');
+  assert.ok(!/fill="#dbeafe"/.test(prim), '塗りの固定色は既定値の 1 か所だけ');
 });
 
 test('SceneLayers: SitePlacementLayer へ onToast を渡す（通り芯タップの即時再配置の拒否理由を App のトーストへ）', () => {

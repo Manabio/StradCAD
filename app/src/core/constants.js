@@ -573,6 +573,14 @@ export const SITE_PLACEMENT_GRID_TOTAL_MIN_LINES = 3;
 export const SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY = 'grid';
 /** 配置図の通り芯の線の太さ（viewport.lineWeightsPx のキー。平面の通り芯と同じ細線）。 */
 export const SITE_PLACEMENT_GRID_LINE_WEIGHT = 'thin';
+/** 配置図の 2 対目の頂点の色（選択色 MEMBER_SELECTION_COLOR と同じ Tailwind 600 系の赤）。 */
+export const SITE_PLACEMENT_SECOND_PAIR_COLOR = '#dc2626';
+/** 配置図の共有の頂点（1 対目と 2 対目の両方）の色（青と赤の混色を紫 1 色で）。 */
+export const SITE_PLACEMENT_SHARED_VERTEX_COLOR = '#7c3aed';
+/** 配置図で選択中の通り芯の丸ラベル（選択色の塗り）の文字色。 */
+export const SITE_PLACEMENT_SELECTED_LABEL_TEXT_COLOR = '#ffffff';
+/** 配置図で選択中の通り芯の線の太さ（viewport.lineWeightsPx のキー。通常の通り芯の細線より太い）。 */
+export const SITE_PLACEMENT_SELECTED_LINE_WEIGHT = 'medium';
 /** 配置図の図芯合わせで、建物側の基準にした情報源（屋根の線の外接矩形／通り芯の範囲／基準なし）。 */
 export const SitePlacementCenterSource = Object.freeze({ ROOF: 'roof', GRID: 'grid', NONE: 'none' });
 /** 立面の入力組み立て（facade/facadeInputs.js）で階を飛ばした理由。 */

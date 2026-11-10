@@ -1,6 +1,6 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Circle, Group, Text } from 'react-konva';
-import { placementVertexLabelText } from '../site/sitePlacementView.js';
+import { placementVertexLabelText, placementVertexColorKind, PlacementVertexColorKind } from '../site/sitePlacementView.js';
 import { siteTransformGroupProps, applySiteTransform } from '../site/siteTransform.js';
 import { layoutBoundaryLabels } from '../site/siteBoundaryLabels.js';
 import {
@@ -12,6 +12,8 @@ import { layoutSitePlacementGrid } from '../site/sitePlacementGrid.js';
 import {
   SITE_PLACEMENT_ROOF_LINE_WEIGHT, SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY, SITE_PLACEMENT_GRID_LINE_WEIGHT,
   GRID_DIM_COLOR, GRID_DIM_DOT_RADIUS_PX,
+  SITE_PLACEMENT_SECOND_PAIR_COLOR, SITE_PLACEMENT_SHARED_VERTEX_COLOR,
+  SITE_PLACEMENT_SELECTED_LABEL_TEXT_COLOR, SITE_PLACEMENT_SELECTED_LINE_WEIGHT,
 } from '../core/constants.js';
 import { PLAN_SOLIDS_COLOR } from './PlanSolidsLayer.jsx';
 import { originColor } from './canvasStyle.js';
@@ -21,6 +23,13 @@ import { labelCircleRadius } from '../layout.js';
 
 // 境界線ラベルの Text の箱幅（画面 px）。実幅に依らず中心を合わせるための箱で、描画都合の値。
 const BOUNDARY_LABEL_BOX_PX = 200;
+
+// 敷地の角の色（1 対目＝選択色・2 対目＝赤・共有＝紫）。どの枠でもない角は呼び出し側で SITE_LINE_COLOR
+const VERTEX_COLOR_BY_KIND = Object.freeze({
+  [PlacementVertexColorKind.FIRST]: MEMBER_SELECTION_COLOR,
+  [PlacementVertexColorKind.SECOND]: SITE_PLACEMENT_SECOND_PAIR_COLOR,
+  [PlacementVertexColorKind.SHARED]: SITE_PLACEMENT_SHARED_VERTEX_COLOR,
+});
 
 // 敷地モードの配置図（site/sitePlacementView.js の composeSitePlacementView の結果を写すだけ。判断は純モジュール側）。
 // 屋根伏せ図の線・通り芯（線・寸法・丸ラベル。site/sitePlacementGrid.js が画面 px の離れを世界座標へ直す）は世界座標、
@@ -49,23 +58,28 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd, o
   const siteWidth = viewport.lineWeightsPx[siteLineWeightKey(true, false)];
   const g = layoutSitePlacementGrid(view.grid, viewport.scaleX);
   const gridLineWidth = viewport.lineWeightsPx[SITE_PLACEMENT_GRID_LINE_WEIGHT];
+  const selectedLineWidth = viewport.lineWeightsPx[SITE_PLACEMENT_SELECTED_LINE_WEIGHT];
   const dimDotR = GRID_DIM_DOT_RADIUS_PX / viewport.scaleX;
   const boundaryBoxW = BOUNDARY_LABEL_BOX_PX / viewport.scaleX;
   const fallbackCenter = view.siteCenter ? applySiteTransform(view.siteCenter, view.siteTransform) : null;
   const boundaryLabels = layoutBoundaryLabels(view.boundaryPieces, view.siteTransform, viewport.scaleX, fallbackCenter);
   return (
     <>
-      {g.lines.map(l => (
-        <Line
-          key={l.key}
-          points={l.points}
-          stroke={l.key === selectedGridKey || l.key === selectedAlongKey ? MEMBER_SELECTION_COLOR : originColor(SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY)}
-          strokeWidth={gridLineWidth}
-          dash={gridLineDash(gridLineWidth)}
-          strokeScaleEnabled={false}
-          listening={false}
-        />
-      ))}
+      {g.lines.map(l => {
+        const selected = l.key === selectedGridKey || l.key === selectedAlongKey;
+        const width = selected ? selectedLineWidth : gridLineWidth;
+        return (
+          <Line
+            key={l.key}
+            points={l.points}
+            stroke={selected ? MEMBER_SELECTION_COLOR : originColor(SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY)}
+            strokeWidth={width}
+            dash={gridLineDash(width)}
+            strokeScaleEnabled={false}
+            listening={false}
+          />
+        );
+      })}
       {view.roofLines.map(l => (
         <Line
           key={`rf-${l.key}`}
@@ -92,7 +106,7 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd, o
         {view.siteCorners.flatMap(c => {
           // 番号: 1 対目「1」「2」・2 対目「1'」「2'」・共有の角は併記。空文字＝どの枠でもない
           const idx = placementVertexLabelText(input, c);
-          const color = idx ? MEMBER_SELECTION_COLOR : SITE_LINE_COLOR;
+          const color = VERTEX_COLOR_BY_KIND[placementVertexColorKind(input, c)] ?? SITE_LINE_COLOR;
           return [
             <Circle
               key={`sc-${c.key}`}
@@ -125,7 +139,7 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd, o
                 rotation={-view.siteTransform.rotationDeg}
                 text={idx}
                 fontSize={numFontSize}
-                fill={MEMBER_SELECTION_COLOR}
+                fill={color}
                 listening={false}
               />,
             ] : []),
@@ -149,7 +163,10 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd, o
       {g.labels.flatMap(l => {
         const selected = l.id === selectedGridId || l.id === selectedAlongId;
         return [
-          ...labelCircle(l.key, l.x, l.y, l.label, viewport, selected ? { stroke: MEMBER_SELECTION_COLOR, textFill: MEMBER_SELECTION_COLOR } : {}),
+          // 選択中＝選択色の塗り＋白文字／押せない（外周でない）ラベル＝塗りなし（枠線と文字は従来色）
+          ...labelCircle(l.key, l.x, l.y, l.label, viewport, selected
+            ? { fill: MEMBER_SELECTION_COLOR, stroke: MEMBER_SELECTION_COLOR, textFill: SITE_PLACEMENT_SELECTED_LABEL_TEXT_COLOR }
+            : l.exterior ? {} : { fill: 'transparent' }),
           // 当たり専用の透明な丸（外周の通り芯のラベルだけ。外周でないものは今までどおり描くだけで押せない）
           ...(l.exterior ? [
             <Circle

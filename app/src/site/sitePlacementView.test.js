@@ -10,6 +10,7 @@ import {
   composeSitePlacementView,
   samePlacementVertex, placementVertexIndex,
   placementAlongVertexIndex, placementVertexLabels, placementVertexLabelText,
+  placementVertexColorKind, PlacementVertexColorKind,
 } from './sitePlacementView.js';
 import { alongSharedVertex } from './sitePlacementVertex.js';
 import { applySiteTransform, siteTransformGroupProps } from './siteTransform.js';
@@ -235,7 +236,7 @@ test('composeSitePlacementView: site.placement があればその {rotationDeg,t
   assert.deepEqual(v.buildingCenter, { x: 53000, y: 32000 });
 });
 
-test('composeSitePlacementView: grid.lineFrame は配置図座標の敷地の外接矩形を含む（回転 90°: 長方形 4000×2000・tx=10000・ty=5000 → x 8000..10000・y 5000..9000）。frame は屋根と通り芯のまま', () => {
+test('composeSitePlacementView: grid.frame は配置図座標の敷地の外接矩形を含む（回転 90°: 長方形 4000×2000・tx=10000・ty=5000 → x 8000..10000・y 5000..9000）', () => {
   const site = new Site();
   site.addRect(0, 0, 4000, 2000);
   const input = { v1: { x: 0, y: 0 }, v2: { x: 4000, y: 0 }, centerLineId: 'c1', distance: 3000, rotationFlipped: false, sideFlipped: false };
@@ -248,14 +249,13 @@ test('composeSitePlacementView: grid.lineFrame は配置図座標の敷地の外
   };
   const v = composeSitePlacementView({ site, roof });
   const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} vs ${b}`);
-  assert.deepEqual(v.grid.frame, { x: [9000, 9500], y: [6000, 7000] });
-  near(v.grid.lineFrame.x[0], 8000); near(v.grid.lineFrame.x[1], 10000);
-  near(v.grid.lineFrame.y[0], 5000); near(v.grid.lineFrame.y[1], 9000);
+  near(v.grid.frame.x[0], 8000); near(v.grid.frame.x[1], 10000);
+  near(v.grid.frame.y[0], 5000); near(v.grid.frame.y[1], 9000);
 });
 
-test('【失敗系】composeSitePlacementView: 敷地が空なら siteBounds が無く lineFrame は frame と同じ', () => {
+test('【失敗系】composeSitePlacementView: 敷地が空なら siteBounds が無く frame は屋根の外接矩形のまま', () => {
   const v = composeSitePlacementView({ site: new Site(), roof: farRoof() });
-  assert.deepEqual(v.grid.lineFrame, v.grid.frame);
+  assert.deepEqual(v.grid.frame, { x: [50000, 56000], y: [30000, 34000] });
 });
 
 test('【失敗系】composeSitePlacementView: placement があれば敷地が空・屋根なしでも変換は placement のまま（placed:true）', () => {
@@ -299,6 +299,20 @@ test('placementVertexLabels: 1 対目は「1」「2」・2 対目は「1\'」「
   assert.deepEqual(placementVertexLabels(PAIRS, { x: 5, y: 6 }), ["2'"]);
   assert.deepEqual(placementVertexLabels(PAIRS, { x: 9, y: 9 }), []);
   assert.deepEqual(placementVertexLabels({ ...PAIRS, along: { v1: { x: 1, y: 2 }, v2: { x: 5, y: 6 } } }, { x: 1, y: 2 }), ['1', "1'"], '1 対目の頂点1 との共有');
+});
+
+test('placementVertexColorKind: 1 対目だけ first・2 対目だけ second・両方 shared・どれでもない／input なしは null', () => {
+  assert.equal(placementVertexColorKind(PAIRS, { x: 1, y: 2 }), PlacementVertexColorKind.FIRST);
+  assert.equal(placementVertexColorKind(PAIRS, { x: 5, y: 6 }), PlacementVertexColorKind.SECOND);
+  assert.equal(placementVertexColorKind(PAIRS, { x: 3, y: 4 }), PlacementVertexColorKind.SHARED);
+  assert.equal(placementVertexColorKind(PAIRS, { x: 9, y: 9 }), null);
+  assert.equal(placementVertexColorKind(null, { x: 1, y: 2 }), null);
+  assert.deepEqual([PlacementVertexColorKind.FIRST, PlacementVertexColorKind.SECOND, PlacementVertexColorKind.SHARED], ['first', 'second', 'shared']);
+});
+
+test('placementVertexColorKind: 共有していない 2 対目の頂点1（unshared）は SECOND', () => {
+  const input = { v1: { x: 1, y: 2 }, v2: { x: 3, y: 4 }, along: { v1: { x: 7, y: 7 }, v2: { x: 5, y: 6 } } };
+  assert.equal(placementVertexColorKind(input, { x: 7, y: 7 }), PlacementVertexColorKind.SECOND);
 });
 
 test('placementVertexLabelText: 共有の角は「·」で連結（「2·1\'」）。単独は 1 つだけ・枠なしは空文字', () => {

@@ -24,15 +24,15 @@ export function gutterEdgeCoord(viewport, width, height, side) {
   }
 }
 
-// 丸ラベル（塗り・縁取り・太字青文字）。(x, y) は丸の中心。opts.stroke・opts.textFill は縁取り・文字の色の上書き（省略時は固定色）。
+// 丸ラベル（塗り・縁取り・太字青文字）。(x, y) は丸の中心。opts.fill・opts.stroke・opts.textFill は塗り・縁取り・文字の色の上書き（省略時は固定色）。
 export function labelCircle(keyBase, x, y, label, viewport, opts = {}) {
-  const { stroke = '#93c5fd', textFill = '#3b82f6' } = opts;
+  const { fill = '#dbeafe', stroke = '#93c5fd', textFill = '#3b82f6' } = opts;
   const r         = labelCircleRadius(viewport);
   const labelSize = RULER / viewport.scaleX;
   const fontSize  = 11 / viewport.scaleX;
   return [
     <Circle key={`${keyBase}-circle`} x={x} y={y} radius={r}
-      fill="#dbeafe" stroke={stroke} strokeWidth={viewport.lineWeightsPx.medium} strokeScaleEnabled={false} listening={false} />,
+      fill={fill} stroke={stroke} strokeWidth={viewport.lineWeightsPx.medium} strokeScaleEnabled={false} listening={false} />,
     <Text key={`${keyBase}-text`} x={x - labelSize / 2} y={y - labelSize / 2}
       width={labelSize} height={labelSize} align="center" verticalAlign="middle"
       text={label} fontSize={fontSize} fontStyle="bold" fill={textFill} listening={false} />,

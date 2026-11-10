@@ -189,6 +189,22 @@ export function placementVertexLabels(input, pt) {
   return labels;
 }
 
+/**
+ * pt の角の色の種別。1 対目だけ 'first'・2 対目だけ 'second'・両方 'shared'・どれでもなければ null。
+ * 描画（SitePlacementLayer）が種別ごとの色へ写す。
+ */
+export function placementVertexColorKind(input, pt) {
+  const inFirst = placementVertexIndex(input, pt) !== null;
+  const inSecond = placementAlongVertexIndex(input, pt) !== null;
+  if (inFirst && inSecond) return PlacementVertexColorKind.SHARED;
+  if (inFirst) return PlacementVertexColorKind.FIRST;
+  if (inSecond) return PlacementVertexColorKind.SECOND;
+  return null;
+}
+
+/** placementVertexColorKind の値。 */
+export const PlacementVertexColorKind = Object.freeze({ FIRST: 'first', SECOND: 'second', SHARED: 'shared' });
+
 /** placementVertexLabels を '·' で連結した表示文字列（空配列なら ''）。 */
 export function placementVertexLabelText(input, pt) {
   return placementVertexLabels(input, pt).join(PLACEMENT_VERTEX_LABEL_JOINER);

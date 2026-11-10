@@ -110,7 +110,7 @@ test('composeSitePlacementGrid: 線は { key, id, centerLineType, value, label }
 });
 
 test('【失敗系】composeSitePlacementGrid: 通り芯 0 本・屋根なしは空（例外なし）。屋根だけのときも線・行は無い', () => {
-  assert.deepEqual(composeSitePlacementGrid({ gridLines: [], roofBounds: null }), { frame: { x: null, y: null }, lineFrame: { x: null, y: null }, lines: [], rows: [] });
+  assert.deepEqual(composeSitePlacementGrid({ gridLines: [], roofBounds: null }), { frame: { x: null, y: null }, lines: [], rows: [] });
   const roofOnly = composeSitePlacementGrid({ gridLines: [], roofBounds: { minX: 0, minY: 0, maxX: 10, maxY: 10 } });
   assert.deepEqual(roofOnly.frame, { x: [0, 10], y: [0, 10] });
   assert.deepEqual([roofOnly.lines, roofOnly.rows], [[], []]);
@@ -185,9 +185,9 @@ test('layoutSitePlacementGrid: 丸の中心は枠から（最も外の行の数�
   near(y0[1].x - 62000, 47);
   assert.deepEqual([y0[0].y, y0[1].y], [30000, 30000]);
   const lineX1 = l.lines.find(t => t.key.endsWith('/x1'));
-  assert.deepEqual(lineX1.points, [x1[0].x, x1[0].y, x1[1].x, x1[1].y]);
+  assert.deepEqual(lineX1.points, [x1[0].x, x1[0].y + 12, x1[1].x, x1[1].y - 12], '線の端は丸の縁（中心から半径 12px 手前）');
   const lineY0 = l.lines.find(t => t.key.endsWith('/y0'));
-  assert.deepEqual(lineY0.points, [y0[0].x, y0[0].y, y0[1].x, y0[1].y]);
+  assert.deepEqual(lineY0.points, [y0[0].x + 12, y0[0].y, y0[1].x - 12, y0[1].y]);
   assert.equal(l.lines.length, 5);
   assert.equal(l.labels.length, 10);
 });
@@ -203,7 +203,7 @@ test('layoutSitePlacementGrid: 通り芯 0 本は空（例外なし）。行が 
 });
 
 // ---- 敷地の外周（siteBounds）で線と丸ラベルの枠を広げる ----
-// scale 1: 丸の離れ (a) X 軸（行 2 段）71・Y 軸（行 1 段）47、(b) 敷地の縁から 2＋11＋6＋12＝31
+// scale 1: 丸の離れ X 軸（行 2 段）71・Y 軸（行 1 段）47
 
 const withSite = siteBounds => composeSitePlacementGrid({
   gridLines: mkLines([50000, 53640, 57280], [30000, 34000]),
@@ -212,57 +212,70 @@ const withSite = siteBounds => composeSitePlacementGrid({
 });
 const labelsOf = (l, id) => l.labels.filter(t => t.id === id);
 
-test('composeSitePlacementGrid: lineFrame＝frame ∪ siteBounds。frame は変わらない。siteBounds なし・敷地が内側なら lineFrame＝frame', () => {
-  const g = withSite({ minX: 40000, minY: 20000, maxX: 70000, maxY: 45000 });
-  assert.deepEqual(g.frame, { x: [48000, 62000], y: [28000, 36000] });
-  assert.deepEqual(g.lineFrame, { x: [40000, 70000], y: [20000, 45000] });
-  assert.deepEqual(withSite(null).lineFrame, g.frame);
-  assert.deepEqual(withSite({ minX: 49000, minY: 29000, maxX: 61000, maxY: 35000 }).lineFrame, g.frame);
-  assert.deepEqual(withSite({ minX: 47000, minY: 29000, maxX: 61000, maxY: 37000 }).lineFrame, { x: [47000, 62000], y: [28000, 37000] });
+test('composeSitePlacementGrid: frame＝屋根 ∪ 通り芯 ∪ siteBounds。siteBounds なし・敷地が内側なら従来の枠', () => {
+  assert.deepEqual(withSite({ minX: 40000, minY: 20000, maxX: 70000, maxY: 45000 }).frame, { x: [40000, 70000], y: [20000, 45000] });
+  assert.deepEqual(withSite(null).frame, { x: [48000, 62000], y: [28000, 36000] });
+  assert.deepEqual(withSite({ minX: 49000, minY: 29000, maxX: 61000, maxY: 35000 }).frame, { x: [48000, 62000], y: [28000, 36000] });
+  assert.deepEqual(withSite({ minX: 47000, minY: 29000, maxX: 61000, maxY: 37000 }).frame, { x: [47000, 62000], y: [28000, 37000] });
+  assert.equal(withSite({ minX: 40000, minY: 20000, maxX: 70000, maxY: 45000 }).lineFrame, undefined, 'lineFrame は廃止（frame に一本化）');
 });
 
-test('【失敗系】composeSitePlacementGrid: 枠が無い軸（通り芯 0 本・屋根なし）は敷地があっても lineFrame も null で線を描かない', () => {
-  const g = composeSitePlacementGrid({ gridLines: [], roofBounds: null, siteBounds: { minX: 0, minY: 0, maxX: 10, maxY: 10 } });
-  assert.deepEqual(g, { frame: { x: null, y: null }, lineFrame: { x: null, y: null }, lines: [], rows: [] });
+test('【失敗系】composeSitePlacementGrid: 屋根も通り芯も無い軸は、敷地だけがあっても枠が null で線も寸法も描かない', () => {
+  const site = { minX: 0, minY: 0, maxX: 10, maxY: 10 };
+  assert.deepEqual(composeSitePlacementGrid({ gridLines: [], roofBounds: null, siteBounds: site }), { frame: { x: null, y: null }, lines: [], rows: [] });
+  // 片軸だけ（X の通り芯だけ・屋根なし）は y の枠が無いので縦線も寸法も出ない（敷地があっても）
+  const xOnly = composeSitePlacementGrid({ gridLines: mkLines([5, 8, 11], []), roofBounds: null, siteBounds: site });
+  assert.equal(xOnly.frame.y, null);
+  assert.deepEqual([xOnly.lines, xOnly.rows], [[], []]);
 });
 
-test('layoutSitePlacementGrid: 敷地が寸法の枠より大きいと、丸の中心は敷地の縁から 31px 外。寸法行は frame 基準のまま', () => {
-  const l = layoutSitePlacementGrid(withSite({ minX: 40000, minY: 20000, maxX: 70000, maxY: 45000 }), 1);
+// 敷地 13000×15000 を配置（左縁 x=−2000・右縁 11000・下縁 y=1500・上縁 y=−13500）。通り芯 X 3 本・Y 2 本は敷地の中
+const placedGrid = () => composeSitePlacementGrid({
+  gridLines: mkLines([0, 3640, 7280], [-4000, 0]),
+  roofBounds: { minX: -500, minY: -4500, maxX: 7800, maxY: 500 },
+  siteBounds: { minX: -2000, minY: -13500, maxX: 11000, maxY: 1500 },
+});
+
+test('layoutSitePlacementGrid: 寸法行は敷地込みの枠の縁から 16px 外（X 行 y＝−13500−16・Y 行 x＝−2000−16）。2 段目はさらに 24px 外', () => {
+  const l = layoutSitePlacementGrid(placedGrid(), 1);
+  near(l.rows.find(r => r.axis === V && r.key.endsWith('/0')).lineCoord, -13500 - 16);
+  near(l.rows.find(r => r.axis === V && r.key.endsWith('/1')).lineCoord, -13500 - 40);
+  near(l.rows.find(r => r.axis === H).lineCoord, -2000 - 16);
+});
+
+test('layoutSitePlacementGrid: Y 軸の寸法（HORIZONTAL・左側）の行が出て、位置は敷地込みの枠の左縁基準。点は x＝線・y＝通り芯', () => {
+  const g = placedGrid();
+  const rowsY = g.rows.filter(r => r.axis === H);
+  assert.equal(rowsY.length, 1, 'Y 2 本は間隔の段だけ');
+  assert.equal(rowsY[0].side, DimensionSide.LEFT);
+  assert.deepEqual(rowsY[0].segments, [{ v1: -4000, v2: 0, length: 4000 }]);
+  const l = layoutSitePlacementGrid(g, 1);
+  const y0 = l.rows.find(r => r.axis === H);
+  near(y0.lineCoord, g.frame.x[0] - 16);
+  assert.deepEqual(y0.dots.map(d => [d.x, d.y]), [[-2000 - 16, -4000], [-2000 - 16, 0]]);
+});
+
+test('layoutSitePlacementGrid: 丸ラベルは寸法行（数値帯まで）のさらに外。X 行 2 段なら y＝−13500−71、Y 行 1 段なら x＝−2000−47。線の端は丸の縁', () => {
+  const l = layoutSitePlacementGrid(placedGrid(), 1);
   const x1 = labelsOf(l, 'x1');
-  near(x1[0].y, 20000 - 31);
-  near(x1[1].y, 45000 + 31);
+  near(x1[0].y, -13500 - 71);
+  near(x1[1].y, 1500 + 71);
   const y0 = labelsOf(l, 'y0');
-  near(y0[0].x, 40000 - 31);
-  near(y0[1].x, 70000 + 31);
-  assert.deepEqual(l.lines.find(t => t.key.endsWith('/x1')).points, [53640, 20000 - 31, 53640, 45000 + 31]);
-  // 寸法行は従来どおり（X 行 1 段目＝28000−16・Y 行＝48000−16）
-  near(l.rows.find(r => r.axis === V && r.key.endsWith('/0')).lineCoord, 28000 - 16);
-  near(l.rows.find(r => r.axis === H).lineCoord, 48000 - 16);
+  near(y0[0].x, -2000 - 47);
+  near(y0[1].x, 11000 + 47);
+  const row2 = l.rows.find(r => r.axis === V && r.key.endsWith('/1'));
+  assert.ok(x1[0].y < row2.normalNumCoord - 11, '丸の中心は最も外の寸法行の数値より外');
 });
 
-test('layoutSitePlacementGrid: 敷地が小さく (a) が勝つなら丸の中心は従来の位置（X 71・Y 47）。縁がわずかに外でも (a) が勝てば従来どおり', () => {
-  for (const sb of [{ minX: 49000, minY: 29000, maxX: 61000, maxY: 35000 }, { minX: 49000, minY: 27990, maxX: 61000, maxY: 36010 }]) { // 2 つ目は枠のわずかに外（(b)=27959 より (a)=27929 が外）
-    const l = layoutSitePlacementGrid(withSite(sb), 1);
-    near(labelsOf(l, 'x1')[0].y, 28000 - 71);
-    near(labelsOf(l, 'x1')[1].y, 36000 + 71);
-    near(labelsOf(l, 'y0')[0].x, 48000 - 47);
-    near(labelsOf(l, 'y0')[1].x, 62000 + 47);
-  }
-});
-
-test('layoutSitePlacementGrid: 片側だけ (b) が勝つ（敷地が下へ寄る）。上端は (a)＝28000−71、下端は敷地の縁 36100＋31', () => {
-  const l = layoutSitePlacementGrid(withSite({ minX: 49000, minY: 27990, maxX: 61000, maxY: 36100 }), 1);
+test('layoutSitePlacementGrid: 敷地が小さく枠が屋根・通り芯で決まるなら従来の位置（丸 X 71・Y 47）。敷地込みでも離れは画面 px 固定（scale 2 で半分）', () => {
+  const l = layoutSitePlacementGrid(withSite({ minX: 49000, minY: 29000, maxX: 61000, maxY: 35000 }), 1);
   near(labelsOf(l, 'x1')[0].y, 28000 - 71);
-  near(labelsOf(l, 'x1')[1].y, 36100 + 31);
+  near(labelsOf(l, 'x1')[1].y, 36000 + 71);
   near(labelsOf(l, 'y0')[0].x, 48000 - 47);
   near(labelsOf(l, 'y0')[1].x, 62000 + 47);
-});
-
-test('layoutSitePlacementGrid: 敷地の縁からの離れも画面 px 固定（scale 2 では 15.5mm）', () => {
-  const l = layoutSitePlacementGrid(withSite({ minX: 40000, minY: 20000, maxX: 70000, maxY: 45000 }), 2);
-  // 半径 12px も scale で割られるので離れ全体が半分
-  near(20000 - labelsOf(l, 'x1')[0].y, 15.5);
-  near(labelsOf(l, 'x1')[1].y - 45000, 15.5);
+  const l2 = layoutSitePlacementGrid(placedGrid(), 2);
+  near(l2.rows.find(r => r.axis === V && r.key.endsWith('/0')).lineCoord, -13500 - 8);
+  near(-13500 - labelsOf(l2, 'x1')[0].y, 35.5);
 });
 
 // ---- composeSitePlacementView への配線 ----
@@ -298,7 +311,7 @@ test('composeSitePlacementView: 通り芯の写し（gridLines）は図芯の基
 test('【失敗系】composeSitePlacementView: gridLines が無い（旧形の roof・null）でも grid は空で例外なし', () => {
   for (const roof of [{ floors: [], gridBounds: null, readFailed: false }, null]) {
     const v = composeSitePlacementView({ site: new Site(), roof });
-    assert.deepEqual(v.grid, { frame: { x: null, y: null }, lineFrame: { x: null, y: null }, lines: [], rows: [] });
+    assert.deepEqual(v.grid, { frame: { x: null, y: null }, lines: [], rows: [] });
   }
 });
 
