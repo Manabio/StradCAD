@@ -24,6 +24,9 @@ function makeOpening(overrides = {}) {
   };
 }
 
+// 外壁をホストにする引き戸は外付けにしない（R12）＝従来の記号（slideSinglePrimitives）。
+const EXTERIOR_HOST = { isExteriorWall: true };
+
 function makeCtx(overrides = {}) {
   return {
     entry: null, lodLevel: LodLevel.STANDARD, axisValue: 500, exteriorDirOf: () => 1,
@@ -395,9 +398,9 @@ test('ピン留め: SLIDE_DOUBLE・DETAIL・category=window → 上と同じ＋�
   ]);
 });
 
-test('ピン留め: SLIDE_SINGLE・STANDARD → 枠矩形(frame)＋全長leaf線1本(symbol)（frame=none。開口全幅のまま）', () => {
+test('ピン留め: SLIDE_SINGLE・外壁ホスト（従来描き）・STANDARD → 枠矩形(frame)＋全長leaf線1本(symbol)（frame=none。開口全幅のまま）', () => {
   const opening = makeOpening();
-  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SLIDE_SINGLE }, lodLevel: LodLevel.STANDARD, axisValue: 500 });
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SLIDE_SINGLE }, host: EXTERIOR_HOST, lodLevel: LodLevel.STANDARD, axisValue: 500 });
   const prims = buildOpeningPlanSymbol(opening, ctx);
   assert.deepEqual(prims.map(p => JSON.stringify(p)), [
     '{"type":"rect","x":0,"y":480,"w":1000,"h":40,"role":"frame","weightMm":0.25}',
@@ -405,9 +408,9 @@ test('ピン留め: SLIDE_SINGLE・STANDARD → 枠矩形(frame)＋全長leaf線
   ]);
 });
 
-test('ピン留め: SLIDE_SINGLE・DETAIL → sashOpen枠（コの字2本）＋内法へ寄せた枠矩形＋leaf線（frame=sashOpen）', () => {
+test('ピン留め: SLIDE_SINGLE・外壁ホスト（従来描き）・DETAIL → sashOpen枠（コの字2本）＋内法へ寄せた枠矩形＋leaf線（frame=sashOpen）', () => {
   const opening = makeOpening();
-  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SLIDE_SINGLE }, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
+  const ctx = makeCtx({ entry: { mechanism: OpeningMechanism.SLIDE_SINGLE }, host: EXTERIOR_HOST, lodLevel: LodLevel.DETAIL, faceLo: -60, faceHi: 60, axisValue: 0 });
   const prims = buildOpeningPlanSymbol(opening, ctx);
   assert.deepEqual(prims.map(p => JSON.stringify(p)), [
     '{"type":"polyline","points":[30,-72,0,-72,0,72,30,72],"role":"frame","weightMm":0.35}',
@@ -1576,7 +1579,8 @@ test('失敗系: SLIDE_DOUBLE・SLIDE_SINGLE・SLIDE_LAYOUT・HUNGはwidth<60（
 
 test('失敗系: SASH_OPEN_GROUP_MECHANISMSはhingeSide/swingSideを問わず出力が同じ（非蝶番系のため無関係）', () => {
   const singleSliding = { mechanism: OpeningMechanism.SLIDE_LAYOUT, slideLayout: { tracks: 2, panels: [{ arrow: 'pos' }, { fix: true }] } };
-  const entries = [{ mechanism: OpeningMechanism.SLIDE_SINGLE }, singleSliding, { mechanism: OpeningMechanism.HUNG }];
+  // 外付け引き戸（SLIDE_SINGLE）は hingeSide/swingSide で記号が変わる（引き代の左右・走る面）ので対象外（下の外付け引き戸のテストで向きごとに固定）。
+  const entries = [singleSliding, { mechanism: OpeningMechanism.HUNG }];
   for (const entry of entries) {
     for (const lodLevel of [LodLevel.STANDARD, LodLevel.DETAIL]) {
       const ctx = makeCtx({ entry, lodLevel, faceLo: -60, faceHi: 60, axisValue: 0 });

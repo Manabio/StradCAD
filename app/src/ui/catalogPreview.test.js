@@ -445,6 +445,11 @@ test('buildCatalogPreview(openingSubType, view:plan): widthはweightMm/LINE_WEIG
   assert.ok(frameRect, 'frame役割の枠（旧rect）が見つからない');
   assert.equal(frameRect.type, 'polyline', 'rectがpolylineへ変換されていない（AutoScaledFigureのrect型は太さ1px固定のため）');
   assert.equal(frameRect.width, 1, `frame役割のwidthが1(medium/medium)でない（実際: ${frameRect.width}）`);
+  // 外付け引き戸（W 800＝DW 425・穴 375）: 開けた扉の破線が 1 本で、along は引き代 pull（0〜425）
+  const slidingDashed = rSliding.primitives.filter(p => p.dash === 'dashed' && p.points.length === 2);
+  assert.equal(slidingDashed.length, 1, '引き戸の開けた扉の破線が 1 本でない');
+  const xs = slidingDashed[0].points.map(pt => pt[0]);
+  assert.deepEqual([Math.min(...xs), Math.max(...xs)], [0, 425]);
 });
 
 // ================================================================

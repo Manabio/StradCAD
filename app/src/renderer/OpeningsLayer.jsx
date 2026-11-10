@@ -114,7 +114,7 @@ export const OpeningsLayer = observer(({ graph, viewport, direction = 'down' }) 
       : [undefined, undefined];
 
     const prims = buildOpeningPlanSymbol(opening, {
-      entry, lodLevel, axisValue: host.axisValue, faceLo, faceHi,
+      entry, lodLevel, axisValue: host.axisValue, faceLo, faceHi, host,
       exteriorDirOf: () => openingExteriorDir(host, graph, opening.centerCoord),
     });
     const base = { stroke: opening.color, listening: true, hitStrokeWidth, fillEnabled: false };

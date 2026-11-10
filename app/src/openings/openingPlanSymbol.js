@@ -59,11 +59,12 @@ import {
   swingClosedLeafSpan, closedAngleFor, leafOpenAngle, angleVectors,
   swingDoubleLeafSpecs, swingChildLeafSpecs, fireDoorLeafSpecs, fireFoldLeafSpecs,
   trackOf, trackPerp, resolveSlideLayoutPanels, foldZigzagPoints, frameOnlyJambProfiles,
-  frameOnlyPerpRange, clampFrameFaceWidth, jambWidthFor,
+  frameOnlyPerpRange, clampFrameFaceWidth, jambWidthFor, frameInnerSpan,
   DOOR_OPEN_ANGLE_DEG, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
 } from './openingPlanSymbolGeometry.js';
 import { resolveDetailFrame, resolveSwingDoorFrame, frameDefaultKey } from './openingDetailFit.js';
-import { DetailSlot, DetailFigureSource, SWING_LEAF_SUBTYPE, WINDOW_FRAME_JAMB_WIDTH_MM } from '../core/constants.js';
+import { DetailSlot, DetailFigureSource, SWING_LEAF_SUBTYPE, WINDOW_FRAME_JAMB_WIDTH_MM, SLIDE_OUTSET_DOOR_FACE_INSET_MM } from '../core/constants.js';
+import { isOutsetSlide, outsetSlideLayout, slideRecessBand } from './slideOutset.js';
 import { fixtureSymbolOf, effectiveFrameFaceWidth, effectiveFrameProjection } from './openingNumbering.js';
 import { LodLevel } from '../viewport.js';
 import { wallFinishLineWeight } from '../finish/wallFinishJoin.js';
@@ -166,6 +167,7 @@ const FIRE_FOLD_AMP_MM = 60;
 // SHUTTER/OVERHEAD/EMERGENCYの記号寸法（すべてmm。旧 renderer/OpeningsLayer.jsxから移設。11e）。
 const SHUTTER_DASH      = [14, 4, 4, 4]; // シャッターの一点鎖線
 const OVERHEAD_DASH     = [10, 6];       // オーバーヘッドドアの跳ね上げ投影（破線）
+const SLIDE_OPEN_DASH   = OVERHEAD_DASH; // 外付け引き戸の開けた扉（引き代区間）の破線。数値は増やさず別名だけ置く
 const OVERHEAD_DEPTH_MM = 200;
 const EMERGENCY_SIDE_MM = 400; // 非常用進入口の逆三角形の一辺
 
@@ -419,12 +421,66 @@ function sashFrameOpenPrimitives(opening, band, jambWidth, frameWeight) {
   ];
 }
 
+// 外付け引き戸（SLIDE_SINGLE。layoutはoutsetSlideLayoutの結果＝引けたときだけ呼ぶ）の記号。
+// 穴（cut）の枠＋走る面の内側 [面−(5+扉厚), 面−5] を走る閉じた扉（戸先端から戸尻側へDW）＋開けた扉
+// （引き代pull。破線）。一般LODは扉を中心線1本、詳細LODは実寸矩形（詳細の一式は別担当のため常にこの
+// フォールバック）。方立は穴の内側（cutから派生した建具へ既存のsashFrameOpenPrimitives）。
+// 走る面が決まらない（runPerpDir 0）・面が不明（faceLo/faceHi非有限）・壁厚が欠き込み深さ以下は枠＋帯中央の扉線（cut長）のみ。
+function outsetSlidePrimitives(opening, layout, band, { detail, faceRange, jambW, symbolWeight, frameWeight }) {
+  const { isVertical } = opening;
+  const { cut, pull, doorWidth, tailSide, runPerpDir } = layout;
+  const [cutLo, cutHi] = cut;
+  const inner = detail ? frameInnerSpan(cutLo, cutHi, jambW) : null;
+  const spanOpening = detail ? innerSpanOpening(opening, { lo: cutLo, hi: cutHi, width: cutHi - cutLo }) : null;
+  const frame = detail
+    ? [
+      ...sashFrameOpenPrimitives(spanOpening, band, jambW, frameWeight),
+      ...(inner.width > 0 ? [rectPrim('frame', frameWeight, isVertical, inner.lo, inner.hi, band.lo, band.hi)] : []),
+    ]
+    : [rectPrim('frame', frameWeight, isVertical, cutLo, cutHi, band.lo, band.hi)];
+
+  // 走る面が決まらない・面が不明・壁厚が欠き込み深さ以下（S3b と同じ slideRecessBand が null＝欠き込まない）は扉を面の内側へ描けない。
+  if (runPerpDir === 0 || !faceRange || slideRecessBand(layout.recess, faceRange) === null) {
+    const mid = band.center;
+    return [...frame, linePrim('symbol', symbolWeight, toWorld(isVertical, cutLo, mid), toWorld(isVertical, cutHi, mid))];
+  }
+
+  const runFace = runPerpDir > 0 ? faceRange[1] : faceRange[0];
+  const doorCenter = runFace - runPerpDir * (SLIDE_OUTSET_DOOR_FACE_INSET_MM + DOOR_LEAF_THICKNESS_MM / 2);
+  const doorLo = doorCenter - DOOR_LEAF_THICKNESS_MM / 2;
+  const doorHi = doorCenter + DOOR_LEAF_THICKNESS_MM / 2;
+  const tip = tailSide < 0 ? cutHi : cutLo; // 戸先端（閉じ側の端）
+  const closed = [tip, tip + (tailSide < 0 ? -doorWidth : doorWidth)];
+  const closedLo = Math.min(...closed), closedHi = Math.max(...closed);
+  if (detail) {
+    return [
+      ...frame,
+      rectPrim('symbol', symbolWeight, isVertical, closedLo, closedHi, doorLo, doorHi),
+      rectPrim('symbol', symbolWeight, isVertical, pull[0], pull[1], doorLo, doorHi, SLIDE_OPEN_DASH),
+    ];
+  }
+  return [
+    ...frame,
+    linePrim('symbol', symbolWeight, toWorld(isVertical, closedLo, doorCenter), toWorld(isVertical, closedHi, doorCenter)),
+    linePrim('symbol', symbolWeight, toWorld(isVertical, pull[0], doorCenter), toWorld(isVertical, pull[1], doorCenter), SLIDE_OPEN_DASH),
+  ];
+}
+
 // SASH_OPEN_GROUP_MECHANISMSのディスパッチ（J7: jambW・swingOpenPerpDir・planSymbolPlan／
 // J12: sashOpen枠＋内法へ寄せたopeningの移設）。非蝶番系のためswingOpenPerpDirは常に0を返し
 // （HINGED_MECHANISMSに含まれないため）、plan.pivotPerpはaxisValue（詳細LODはband内へ
 // クランプ）のまま——このグループの機構は回転しないためpivotPerp自体は使わない。
-function buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight) {
+// 外付け引き戸（isOutsetSlide）だけは先頭で別記号へ分岐する（layoutが引けないとき＝外壁ホスト・W≤50・
+// coord非有限は下の従来経路）。
+function buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight, host) {
   const jambW = jambWidthFor(opening);
+  if (isOutsetSlide(entry.mechanism)) {
+    const layout = outsetSlideLayout(opening, entry.mechanism, host);
+    if (layout) {
+      const faceRange = Number.isFinite(faceLo) && Number.isFinite(faceHi) ? [Math.min(faceLo, faceHi), Math.max(faceLo, faceHi)] : null;
+      return outsetSlidePrimitives(opening, layout, band, { detail, faceRange, jambW, symbolWeight, frameWeight });
+    }
+  }
   const openPerpDir = swingOpenPerpDir(opening.isVertical, opening.hingeSide, opening.swingSide, entry.mechanism, entry);
   const plan = planSymbolPlan({
     mechanism: entry.mechanism, lodLevel, coord1: opening.coord1, coord2: opening.coord2,
@@ -973,6 +1029,7 @@ function buildHingeGroup2Primitives(opening, entry, lodLevel, band, detail, axis
  *   faceHi?: number, exteriorDirOf: () => number}} ctx
  *   entry: findCatalogEntryの結果（無ければnull）。lodLevel: viewport.js LodLevel。
  *   axisValue: host.axisValue。faceLo/faceHi: 壁面線（略図LODでは未定義）。
+ *   host（任意）: 建具の実ホスト壁。外付け引き戸が外壁ホストか（isExteriorWall）の判定だけに使う（null＝外壁でない扱い）。
  *   exteriorDirOf: 開口の外部側方向(±1)を返すthunk（詳細LODかつframeDepth>0の見込帯、または
  *   OVERHEAD/EMERGENCYの記号自身が参照するときだけ呼ぶ。呼ぶたびに再計算しないよう内部で
  *   1回だけメモ化して呼ぶ）。
@@ -980,7 +1037,7 @@ function buildHingeGroup2Primitives(opening, entry, lodLevel, band, detail, axis
  *   カバーし終えたため、entry無し・未実装機構文字列だけがtickPrimitivesへフォールバックする）。
  */
 export function buildOpeningPlanSymbol(opening, ctx) {
-  const { entry = null, lodLevel, axisValue, faceLo, faceHi, exteriorDirOf } = ctx ?? {};
+  const { entry = null, lodLevel, axisValue, faceLo, faceHi, exteriorDirOf, host = null } = ctx ?? {};
 
   if (!Number.isFinite(axisValue)) {
     throw new TypeError(`buildOpeningPlanSymbol: ctx.axisValueは有限数が必要です（受け取った値: ${axisValue}）`);
@@ -1047,7 +1104,7 @@ export function buildOpeningPlanSymbol(opening, ctx) {
   // STANDARD/DETAILで非蝶番sashOpen系（SASH_OPEN_GROUP_MECHANISMS）: 専用ディスパッチへ。
   if (sashOpenGroup) {
     const frameWeight = planSymbolWeightMm('frame', opening, detail);
-    return buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight);
+    return buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight, host);
   }
 
   // STANDARD/DETAILで非蝶番sash系（SASH_GROUP_MECHANISMS＝FOLD・PIVOT・SHUTTER・OVERHEAD・

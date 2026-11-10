@@ -858,6 +858,8 @@ export const DOOR_LEAF_THICKNESS_MM = 30;
 export const SLIDE_OUTSET_WIDTH_DEDUCT_MM = 50;
 /** 外付け引き戸の引き代区間の欠き込み深さ＝戸尻枠の入り 12＋隙間 3＋扉厚 30＋扉外面の逃げ 5（R-b・R10）。壁厚がこれ以下の壁は欠き込まない（T3）。ユーザー裁定 2026-11-10 */
 export const SLIDE_OUTSET_RECESS_DEPTH_MM = 50;
+/** 外付け引き戸の扉の外面と走る面（壁面）の逃げ（R10 の「扉外面が壁面から 5 内側」。扉は走る面の内側 [面−(5+扉厚), 面−5]）。欠き込み深さ 50 の内訳の 5 と同じ寸法。ユーザー裁定 2026-11-10 */
+export const SLIDE_OUTSET_DOOR_FACE_INSET_MM = 5;
 /** fit の長さ比較の許容（mm）。elevationStyle.js の COORD_EPS_MM と同値だが、detail/ は elevation/ を引けないので別定義。 */
 export const DETAIL_FIT_EPS_MM = 1e-3;
 /** 手の辺に付ける印（Move.edge）。'air'＝空気との境目（室内側の見え掛かりの線。展開図で中線になる。S8a）。 */

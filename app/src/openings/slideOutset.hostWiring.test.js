@@ -76,11 +76,16 @@ test('【配線】slideRecessBand の消費側の全呼び出しが、実ホス�
     for (const m of code.matchAll(/(?<![\w.])slideRecessBand\(([^;]*)/g)) {
       if (/function\s+$/.test(code.slice(0, m.index))) continue;
       found += 1;
-      assert.ok(/^\s*layout\.recess,\s*wallFaceRange\(host,\s*graph\)\)/.test(m[1]),
+      // 唯一の例外: 純モジュール openingPlanSymbol.js は ctx の faceLo/faceHi（OpeningsLayer が実ホスト壁の wallFaceRange で渡す。下で配線を固定）から作った faceRange を渡す。
+      const viaCtx = path.basename(file) === 'openingPlanSymbol.js' && /^\s*layout\.recess,\s*faceRange\)/.test(m[1]);
+      assert.ok(viaCtx || /^\s*layout\.recess,\s*wallFaceRange\(host,\s*graph\)\)/.test(m[1]),
         `${path.relative(SRC, file)} の slideRecessBand( が wallFaceRange(host, graph) を渡していない: ${m[1].slice(0, 80)}`);
     }
   }
-  assert.equal(found, 1, '前提: 消費側は renderer/wallDrawPlan.js の 1 か所');
+  assert.equal(found, 2, '前提: 消費側は renderer/wallDrawPlan.js と openings/openingPlanSymbol.js の 2 か所');
+  const layer = stripComments(fs.readFileSync(path.join(SRC, 'renderer', 'OpeningsLayer.jsx'), 'utf8'));
+  assert.ok(/faceRangeByHostId\.get\(host\.id\) \?\? wallFaceRange\(host, graph\)/.test(layer), 'OpeningsLayer の faceLo/faceHi が実ホスト壁の wallFaceRange でない');
+  assert.ok(/const host = hostByOpening\.get\(opening\.id\)/.test(layer), 'OpeningsLayer の host が hostByOpening でない');
   const code = stripComments(fs.readFileSync(path.join(SRC, 'renderer', 'wallDrawPlan.js'), 'utf8'));
   assert.ok(/const host = hostOf\(o\);/.test(code), 'host が実ホスト壁（hostOf）でない（描いている壁を使ってはいけない）');
   assert.ok(/import \{[^}]*wallFaceRange[^}]*\} from '\.\.\/openings\/openingGeometry\.js'/.test(code), 'wallFaceRange は openingGeometry.js のものを使う');
