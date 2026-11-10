@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project, Site, CenterLineType, Discipline, DimensionSide } from '@core';
 import { SitePlacementCenterSource } from '../core/constants.js';
-import { gridLineSnapshot, composeSitePlacementGrid, layoutSitePlacementGrid } from './sitePlacementGrid.js';
+import { gridLineSnapshot, markExteriorGridLines, composeSitePlacementGrid, layoutSitePlacementGrid } from './sitePlacementGrid.js';
 import { composeSitePlacementView } from './sitePlacementView.js';
 
 const V = CenterLineType.VERTICAL, H = CenterLineType.HORIZONTAL;
@@ -103,7 +103,7 @@ test('composeSitePlacementGrid: 線は { key, id, centerLineType, value, label }
     gridLines: mkLines([50000], [30000, 34000]), roofBounds: { minX: 49000, minY: 29000, maxX: 51000, maxY: 35000 },
   });
   assert.equal(g.lines.length, 3);
-  assert.deepEqual(g.lines[0], { key: g.lines[0].key, id: 'x0', centerLineType: V, value: 50000, label: 'X1' });
+  assert.deepEqual(g.lines[0], { key: g.lines[0].key, id: 'x0', centerLineType: V, value: 50000, label: 'X1', exterior: false });
   assert.equal(new Set(g.lines.map(l => l.key)).size, 3);
   assert.equal(rowOf(g, V, 0), undefined, 'X が 1 本では寸法の行は無い');
   assert.equal(g.rows.length, 1);
@@ -236,5 +236,45 @@ test('【失敗系】composeSitePlacementView: gridLines が無い（旧形の r
   for (const roof of [{ floors: [], gridBounds: null, readFailed: false }, null]) {
     const v = composeSitePlacementView({ site: new Site(), roof });
     assert.deepEqual(v.grid, { frame: { x: null, y: null }, lines: [], rows: [] });
+  }
+});
+
+// ---- markExteriorGridLines・丸ラベルの id / exterior ----
+
+test('markExteriorGridLines: 指定した id だけ exterior: true・他は false。元の配列も要素も変えない', () => {
+  const lines = mkLines([50000, 53000, 57000], [30000, 34000]);
+  const before = JSON.stringify(lines);
+  const marked = markExteriorGridLines(lines, new Set(['x0', 'x2', 'y1']));
+  assert.deepEqual(marked.map(g => [g.id, g.exterior]), [['x0', true], ['x1', false], ['x2', true], ['y0', false], ['y1', true]]);
+  assert.equal(JSON.stringify(lines), before, '元の配列・要素は不変');
+  assert.notEqual(marked, lines);
+  assert.ok(lines.every(g => !('exterior' in g)));
+  assert.deepEqual(marked.map(g => ({ ...g, exterior: undefined })), lines.map(g => ({ ...g, exterior: undefined })), 'exterior 以外の項目はそのまま');
+});
+
+test('markExteriorGridLines: 外周の id が空（外壁が 1 本も無い）なら全部 exterior: true。配列でも受ける。写しが空なら空', () => {
+  const lines = mkLines([50000, 53000], [30000]);
+  assert.ok(markExteriorGridLines(lines, new Set()).every(g => g.exterior === true));
+  assert.ok(markExteriorGridLines(lines, []).every(g => g.exterior === true));
+  assert.deepEqual(markExteriorGridLines(lines, ['x1']).map(g => g.exterior), [false, true, false]);
+  assert.deepEqual(markExteriorGridLines([], new Set(['x0'])), []);
+});
+
+test('markExteriorGridLines: 写しに無い id だけが外周のとき（外壁の軸が全部 階固有の中心線）は全部 true（一致が 0 本＝外周が判定できないので候補を空にしない）', () => {
+  const marked = markExteriorGridLines(mkLines([50000, 53000], [30000]), new Set(['local-cl']));
+  assert.deepEqual(marked.map(g => g.exterior), [true, true, true]);
+  assert.deepEqual(markExteriorGridLines(mkLines([50000, 53000], []), new Set(['local-cl', 'x1'])).map(g => g.exterior), [false, true], '1 本でも一致すれば通常どおり');
+});
+
+test('layoutSitePlacementGrid: labels の各要素に通り芯の id と exterior が載る（両端とも）', () => {
+  const lines = markExteriorGridLines(mkLines([50000, 53000], [30000, 34000]), new Set(['x1', 'y0']));
+  const grid = composeSitePlacementGrid({ gridLines: lines, roofBounds: null });
+  assert.deepEqual(grid.lines.map(l => [l.id, l.exterior]), [['x0', false], ['x1', true], ['y0', true], ['y1', false]]);
+  const l = layoutSitePlacementGrid(grid, 0.1);
+  assert.equal(l.labels.length, 8);
+  for (const [id, exterior] of [['x0', false], ['x1', true], ['y0', true], ['y1', false]]) {
+    const ends = l.labels.filter(t => t.id === id);
+    assert.equal(ends.length, 2, `${id} は両端に丸`);
+    assert.ok(ends.every(t => t.exterior === exterior && t.key.includes(`/${id}/`)), `${id} の exterior は ${exterior}`);
   }
 });

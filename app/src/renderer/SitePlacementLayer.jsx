@@ -17,6 +17,7 @@ import { PLAN_SOLIDS_COLOR } from './PlanSolidsLayer.jsx';
 import { originColor } from './canvasStyle.js';
 import { DIMENSION_LINE_WEIGHT, NUM_FONT_PX, TEXT_GAP_PX, gridLineDash } from './dimensionStyle.js';
 import { labelCircle, dimensionRow } from './gutterPrimitives.jsx';
+import { labelCircleRadius } from '../layout.js';
 
 // 境界線ラベルの Text の箱幅（画面 px）。実幅に依らず中心を合わせるための箱で、描画都合の値。
 const BOUNDARY_LABEL_BOX_PX = 200;
@@ -24,11 +25,19 @@ const BOUNDARY_LABEL_BOX_PX = 200;
 // 敷地モードの配置図（site/sitePlacementView.js の composeSitePlacementView の結果を写すだけ。判断は純モジュール側）。
 // 屋根伏せ図の線・通り芯（線・寸法・丸ラベル。site/sitePlacementGrid.js が画面 px の離れを世界座標へ直す）は世界座標、
 // 敷地の外周は図芯合わせの変換（siteTransformGroupProps）を掛けた Group の中。線は listening しない。
-// 当たりを持つのは敷地の角の丸だけ（タップ＝配置指定の頂点。mode.pickPlacementVertex。Group の中なので座標は敷地座標のまま渡る）。
-// 選択中の頂点（mode.placementInput の v1/v2）は塗り＋番号、選択中の通り芯は選択色。
-export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd }) => {
+// 当たりを持つのは敷地の角の丸（タップ＝配置指定の頂点。mode.pickPlacementVertex。Group の中なので座標は敷地座標のまま渡る）と、
+// 外周の通り芯（exterior）の丸ラベル（タップ＝配置指定の通り芯。mode.pickPlacementCenterLine）。
+// 選択中の頂点（mode.placementInput の v1/v2）は塗り＋番号、選択中の通り芯（線と丸ラベル）は選択色。
+export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd, onToast }) => {
   // パンの終了後も Konva は click を出すので、直前がパンの終了なら無視する（SceneLayers の onSelectRectEdge と同じ）
   const pick = c => { if (didPanEnd?.()) return; mode.pickPlacementVertex({ x: c.x, y: c.y }); };
+  // 通り芯の丸ラベルのタップ。即時再配置の拒否理由は App のトーストへ
+  const pickLabel = id => {
+    if (didPanEnd?.()) return;
+    const r = mode.pickPlacementCenterLine(id);
+    if (r?.toast) onToast?.(r.toast);
+  };
+  const labelR = labelCircleRadius(viewport); // 丸ラベルの半径（labelCircle と同じ式）
   const markR = SITE_CORNER_MARK_RADIUS_PX / viewport.scaleX; // 外周の角の丸の半径（SiteLinesLayer と同じ式）
   const hitW = HIT_PX_MAX / viewport.scaleX; // 角の当たり幅（SiteRectsLayer の anchorCircle と同じ）
   const numFontSize = NUM_FONT_PX / viewport.scaleX;
@@ -136,7 +145,26 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd })
           ...labels,
         ];
       })}
-      {g.labels.flatMap(l => labelCircle(l.key, l.x, l.y, l.label, viewport))}
+      {g.labels.flatMap(l => {
+        const selected = l.id === selectedGridId || l.id === selectedAlongId;
+        return [
+          ...labelCircle(l.key, l.x, l.y, l.label, viewport, selected ? { stroke: MEMBER_SELECTION_COLOR, textFill: MEMBER_SELECTION_COLOR } : {}),
+          // 当たり専用の透明な丸（外周の通り芯のラベルだけ。外周でないものは今までどおり描くだけで押せない）
+          ...(l.exterior ? [
+            <Circle
+              key={`${l.key}-hit`}
+              name={SITE_HIT_NODE_NAME}
+              x={l.x} y={l.y}
+              radius={labelR}
+              fill="transparent"
+              stroke="transparent"
+              strokeWidth={hitW}
+              onClick={() => pickLabel(l.id)}
+              onTap={() => pickLabel(l.id)}
+            />,
+          ] : []),
+        ];
+      })}
       {boundaryLabels.map(l => (
         <Text
           key={`bt-${l.key}`}

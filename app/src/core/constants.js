@@ -526,7 +526,7 @@ export const SITE_BOUNDARY_LABEL_ROAD = '道路境界線';
  */
 export const SITE_BOUNDARY_LABEL_VERTICAL_EPS_DEG = 1e-6;
 /** 配置指定 UI（ui/SiteInfoPanel.jsx）の文言。 */
-export const SITE_PLACEMENT_HINT = '配置図の敷地の角をタップ';
+export const SITE_PLACEMENT_HINT = '配置図の敷地の角と通り芯ラベルをタップ';
 export const SITE_PLACEMENT_VERTEX1_LABEL = '頂点1';
 export const SITE_PLACEMENT_VERTEX2_LABEL = '頂点2';
 export const SITE_PLACEMENT_CENTER_LINE_LABEL = '通り芯';
@@ -541,8 +541,9 @@ export const SITE_PLACEMENT_VERTEX_SET = '指定済み';
 export const SITE_PLACEMENT_STALE_LABEL = '（失効）';
 /** 配置の 2 段目「位置」（通り芯沿いの位置の拘束）の UI 文言。 */
 export const SITE_PLACEMENT_ALONG_LABEL = '位置';
+/** 配置パネルの 2 段目の通り芯の行見出し（1 段目の「通り芯」と区別する）。 */
+export const SITE_PLACEMENT_ALONG_CENTER_LINE_LABEL = '位置の通り芯';
 export const SITE_PLACEMENT_ALONG_VERTEX_LABEL = '共有点';
-export const SITE_PLACEMENT_ALONG_HINT = '先に 1 段目の通り芯を選ぶ';
 export const SITE_PLACEMENT_ALONG_DISTANCE_LABEL = '離れ';
 export const SITE_PLACEMENT_ALONG_DISTANCE_NUMPAD_LABEL = '共有点から通り芯までの離れ';
 export const SITE_PLACEMENT_ALONG_FLIP_SIDE_LABEL = '側反転（位置）';

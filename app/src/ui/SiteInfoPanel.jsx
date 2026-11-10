@@ -3,12 +3,12 @@ import { observer } from 'mobx-react-lite';
 import { isSanshaKind, computeLineTriNums, computeOuterLineIds } from '../site/lineClassification.js';
 import { siteLineKindLabel } from '../site/siteLineStyle.js';
 import {
-  SITE_PLACEMENT_SWITCH_LABEL, SITE_PLACEMENT_SHOW_LABEL, SITE_PLACEMENT_HIDE_LABEL, CenterLineType,
+  SITE_PLACEMENT_SWITCH_LABEL, SITE_PLACEMENT_SHOW_LABEL, SITE_PLACEMENT_HIDE_LABEL,
   SITE_PLACEMENT_HINT, SITE_PLACEMENT_VERTEX1_LABEL, SITE_PLACEMENT_VERTEX2_LABEL, SITE_PLACEMENT_CENTER_LINE_LABEL,
   SITE_PLACEMENT_DISTANCE_LABEL, SITE_PLACEMENT_DISTANCE_NUMPAD_LABEL, SITE_PLACEMENT_FLIP_ROTATION_LABEL,
   SITE_PLACEMENT_FLIP_SIDE_LABEL, SITE_PLACEMENT_COMMIT_LABEL, SITE_PLACEMENT_CLEAR_LABEL,
-  SITE_PLACEMENT_VERTEX_NONE, SITE_PLACEMENT_VERTEX_SET, SITE_PLACEMENT_STALE_LABEL,
-  SITE_PLACEMENT_ALONG_LABEL, SITE_PLACEMENT_ALONG_VERTEX_LABEL, SITE_PLACEMENT_ALONG_HINT,
+  SITE_PLACEMENT_VERTEX_NONE, SITE_PLACEMENT_VERTEX_SET, SITE_PLACEMENT_STALE_LABEL, SITE_PLACEMENT_ALONG_CENTER_LINE_LABEL,
+  SITE_PLACEMENT_ALONG_LABEL, SITE_PLACEMENT_ALONG_VERTEX_LABEL,
   SITE_PLACEMENT_ALONG_DISTANCE_LABEL, SITE_PLACEMENT_ALONG_DISTANCE_NUMPAD_LABEL,
   SITE_PLACEMENT_ALONG_FLIP_SIDE_LABEL, SITE_PLACEMENT_ALONG_CLEAR_LABEL, SitePlacementAlongVertex,
 } from '../core/constants.js';
@@ -360,27 +360,11 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
             {pin && (() => {
               const st = mode.placementVertexStates;
               const vertexText = s => (s === 'stale' ? SITE_PLACEMENT_STALE_LABEL : s === 'set' ? SITE_PLACEMENT_VERTEX_SET : SITE_PLACEMENT_VERTEX_NONE);
-              const gridLines = mode.placementRoof?.gridLines ?? [];
-              const lineButton = (l) => {
-                const active = pin.centerLineId === l.id;
-                return (
-                  <button
-                    key={l.id}
-                    onClick={() => mode.setPlacementCenterLine(l.id)}
-                    style={{ ...segmentButtonStyle(active), flex: '0 0 auto', padding: '6px 10px' }}
-                  >{l.label || String(l.value)}</button>
-                );
-              };
+              // 通り芯の指定は配置図の丸ラベルをタップ（mode.pickPlacementCenterLine）。ここは今の指定を文字で出すだけ
+              // 「未指定」は頂点と同じ文言（SITE_PLACEMENT_VERTEX_NONE）を通り芯にも使う
+              const lineText = (line, stale) => (stale ? SITE_PLACEMENT_STALE_LABEL : line ? (line.label || String(line.value)) : SITE_PLACEMENT_VERTEX_NONE);
               const actionButton = { padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff', cursor: 'pointer', fontSize: 13 };
               const along = pin.along;
-              const alongLines = mode.placementAlongCenterLines;
-              const alongLineButton = (l) => (
-                <button
-                  key={l.id}
-                  onClick={() => mode.setPlacementAlongCenterLine(l.id)}
-                  style={{ ...segmentButtonStyle(along.centerLineId === l.id), flex: '0 0 auto', padding: '6px 10px' }}
-                >{l.label || String(l.value)}</button>
-              );
               return (
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                   <div style={{ ...PANEL_ROW_TEXT, color: '#64748b' }}>{SITE_PLACEMENT_HINT}</div>
@@ -388,13 +372,8 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                   <div style={PANEL_ROW_TEXT}><span style={PANEL_LABEL}>{SITE_PLACEMENT_VERTEX2_LABEL}：</span>{vertexText(st.v2)}</div>
                   <div style={PANEL_ROW_TEXT}>
                     <span style={PANEL_LABEL}>{SITE_PLACEMENT_CENTER_LINE_LABEL}：</span>
-                    {mode.placementCenterLineStale && SITE_PLACEMENT_STALE_LABEL}
+                    {lineText(mode.placementCenterLine, mode.placementCenterLineStale)}
                   </div>
-                  {[CenterLineType.VERTICAL, CenterLineType.HORIZONTAL].map(type => (
-                    <div key={type} style={{ display: 'flex', flexWrap: 'wrap', padding: '0 8px' }}>
-                      {gridLines.filter(l => l.centerLineType === type).map(lineButton)}
-                    </div>
-                  ))}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, ...PANEL_ROW_TEXT }}>
                     <span style={PANEL_LABEL}>{SITE_PLACEMENT_DISTANCE_LABEL}：</span>
                     <span
@@ -414,12 +393,10 @@ export const SiteInfoPanel = observer(({ site, mode, isLandscape, onSelectLine, 
                     ))}
                     {mode.placementAlongVertexStale && SITE_PLACEMENT_STALE_LABEL}
                   </div>
-                  {mode.placementCenterLine === null ? (
-                    <div style={{ ...PANEL_ROW_TEXT, color: '#64748b' }}>{SITE_PLACEMENT_ALONG_HINT}</div>
-                  ) : (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', padding: '0 8px' }}>{alongLines.map(alongLineButton)}</div>
-                  )}
-                  {mode.placementAlongStale && <div style={PANEL_ROW_TEXT}>{SITE_PLACEMENT_CENTER_LINE_LABEL}：{SITE_PLACEMENT_STALE_LABEL}</div>}
+                  <div style={PANEL_ROW_TEXT}>
+                    <span style={PANEL_LABEL}>{SITE_PLACEMENT_ALONG_CENTER_LINE_LABEL}：</span>
+                    {lineText(mode.placementAlongCenterLine, mode.placementAlongStale)}
+                  </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, ...PANEL_ROW_TEXT }}>
                     <span style={PANEL_LABEL}>{SITE_PLACEMENT_ALONG_DISTANCE_LABEL}：</span>
                     <span

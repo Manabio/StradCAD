@@ -32,6 +32,21 @@ export function gridLineSnapshot(graph) {
     gridCenterLinesOnAxis(graph, type).map(cl => ({ id: cl.id, centerLineType: type, value: cl.value, label: cl.label ?? '' })));
 }
 
+/**
+ * 通り芯の写しの各要素に「外周の通り芯か」（exterior）を付けた新配列（元の配列・要素は変えない）。
+ * 外周の通り芯＝建物外形の辺（外壁ループ outer）が載る通り芯。gridLines のうち exteriorIds に一致するものが 0 本
+ * （外壁が 1 本も無い・外壁の軸がすべて通り芯でない等で外周が判定できない）ときは全部を候補にする（全部 exterior: true。
+ * リード裁定 2026-11-10）。
+ * @param {Array<{id:string}>} gridLines
+ * @param {Iterable<string>} exteriorIds
+ * @returns {Array<object>}
+ */
+export function markExteriorGridLines(gridLines, exteriorIds) {
+  const ids = new Set(exteriorIds ?? []);
+  const anyMatch = gridLines.some(g => ids.has(g.id));
+  return gridLines.map(g => ({ ...g, exterior: !anyMatch || ids.has(g.id) }));
+}
+
 /** 値の列と範囲の端（null 可）を合わせた [最小, 最大]。どちらも無ければ null。 */
 function spanOf(values, lo, hi) {
   const all = [...values, ...(lo == null ? [] : [lo, hi])];
@@ -41,11 +56,11 @@ function spanOf(values, lo, hi) {
 /**
  * ズーム非依存の判断。
  * @param {object} p
- * @param {Array<{id:string, centerLineType:string, value:number, label:string}>} p.gridLines gridLineSnapshot の結果（軸ごとに value 昇順）
+ * @param {Array<{id:string, centerLineType:string, value:number, label:string, exterior?:boolean}>} p.gridLines gridLineSnapshot（＋markExteriorGridLines）の結果（軸ごとに value 昇順）
  * @param {{minX:number, minY:number, maxX:number, maxY:number}|null} p.roofBounds 屋根の線の外接矩形
  * @returns {{
  *   frame: {x:[number,number]|null, y:[number,number]|null},
- *   lines: Array<{key:string, id:string, centerLineType:string, value:number, label:string}>,
+ *   lines: Array<{key:string, id:string, centerLineType:string, value:number, label:string, exterior:boolean}>,
  *   rows: Array<{key:string, axis:string, side:string, tier:number,
  *                segments:Array<{v1:number, v2:number, length:number}>, anchors:number[]}>,
  * }}
@@ -63,6 +78,7 @@ export function composeSitePlacementGrid({ gridLines, roofBounds }) {
   const drawable = g => (g.centerLineType === CenterLineType.VERTICAL ? frame.y : frame.x) != null;
   const lines = gridLines.filter(drawable).map(g => ({
     key: `${GRID_KEY_PREFIX.LINE}/${g.id}`, id: g.id, centerLineType: g.centerLineType, value: g.value, label: g.label,
+    exterior: !!g.exterior,
   }));
 
   const rows = [];
@@ -96,7 +112,7 @@ export function composeSitePlacementGrid({ gridLines, roofBounds }) {
  * @param {number} scale viewport.scaleX（世界 mm → 画面 px の倍率）
  * @returns {{
  *   lines: Array<{key:string, points:number[]}>,
- *   labels: Array<{key:string, x:number, y:number, label:string}>,
+ *   labels: Array<{key:string, id:string, exterior:boolean, x:number, y:number, label:string}>,
  *   rows: Array<{key:string, axis:string, side:string, lineCoord:number, normalNumCoord:number,
  *                segments:object[], dots:Array<{key:string, x:number, y:number}>}>,
  * }}
@@ -120,8 +136,8 @@ export function layoutSitePlacementGrid(grid, scale) {
     const a = lo - d, b = hi + d;
     const [ax, ay, bx, by] = isX(g.centerLineType) ? [g.value, a, g.value, b] : [a, g.value, b, g.value];
     lines.push({ key: g.key, points: [ax, ay, bx, by] });
-    labels.push({ key: `${GRID_KEY_PREFIX.LABEL}/${g.id}/${GRID_KEY_PREFIX.END_LO}`, x: ax, y: ay, label: g.label });
-    labels.push({ key: `${GRID_KEY_PREFIX.LABEL}/${g.id}/${GRID_KEY_PREFIX.END_HI}`, x: bx, y: by, label: g.label });
+    labels.push({ key: `${GRID_KEY_PREFIX.LABEL}/${g.id}/${GRID_KEY_PREFIX.END_LO}`, id: g.id, exterior: g.exterior, x: ax, y: ay, label: g.label });
+    labels.push({ key: `${GRID_KEY_PREFIX.LABEL}/${g.id}/${GRID_KEY_PREFIX.END_HI}`, id: g.id, exterior: g.exterior, x: bx, y: by, label: g.label });
   }
 
   const rows = grid.rows.map(row => {

@@ -9,7 +9,8 @@ import { gridBoundsMm } from '../initialView.js';
 import { isSanshaKind, computeLineTriNums } from '../site/lineClassification.js';
 import { rectEdge, pickRectEdgeAnchor, rectNeighbors, deriveRectAttachment } from '../site/siteRectGeometry.js';
 import { composeSitePlacementView, samePlacementVertex, placementVertexIndex } from '../site/sitePlacementView.js';
-import { gridLineSnapshot } from '../site/sitePlacementGrid.js';
+import { gridLineSnapshot, markExteriorGridLines } from '../site/sitePlacementGrid.js';
+import { computeExteriorWallSegments } from '../finish/wallGeneration.js';
 import { evalNumpadExpr } from '../ui/numpadUtils.js';
 import { computeSitePlacement } from '../site/sitePlacementSolve.js';
 import {
@@ -126,6 +127,7 @@ export class SiteModeState {
       togglePlacementAlongSide: action,
       clearPlacementAlong: action,
       pickPlacementVertex: action,
+      pickPlacementCenterLine: action,
       setPlacementCenterLine: action,
       setPlacementDistanceValue: action,
       setPlacementDistanceFocused: action,
@@ -410,8 +412,34 @@ export class SiteModeState {
   // 入力を差し替え、配置済みで確定できる入力なら即座に再配置する
   _updateAndReplace(next) {
     this.placementInput = next;
+    return this._replaceIfPlaced();
+  }
+
+  // 配置済みで確定できる入力なら即座に再配置する（undo 1 件）。それ以外は {ok:true, toast:null}
+  _replaceIfPlaced() {
     if (this.site.placement != null && this.placementCanCommit) return this.commitPlacement();
     return { ok: true, toast: null };
+  }
+
+  /**
+   * 配置図の通り芯の丸ラベルをタップ（外周の通り芯 exterior だけ。写しに無い・外周でない id は無視）。
+   * 軸で段が決まる: 1 段目の通り芯 A が未選択→A／A と同じ軸→A を置換（A 自身なら解除）／A と直交する軸→位置（2 段目）の通り芯
+   * （その通り芯自身なら解除）。2 段目の変更・解除は配置済みで確定できる入力なら即時再配置（1 段目の変更はしない＝［配置］で確定）。
+   * @returns {{ok: boolean, toast: string|null}} 無視は {ok:false, toast:null}
+   */
+  pickPlacementCenterLine(id) {
+    const g = this.placementRoof?.gridLines?.find(l => l.id === id);
+    if (!this.placementInput || !g || !g.exterior) return { ok: false, toast: null };
+    const first = this.placementCenterLine;
+    if (!first || g.centerLineType === first.centerLineType) {
+      this.setPlacementCenterLine(id);
+      return { ok: true, toast: null };
+    }
+    if (ORTHOGONAL_AXIS[first.centerLineType] !== g.centerLineType) return { ok: false, toast: null }; // 放射など直交する軸が無い
+    // B 自身のタップは［位置の解除］と同じ（離れも消し、配置済みなら沿い座標を据え置いて再配置）。離れだけ残すと partial で確定できなくなるため
+    if (id === this.placementInput.along?.centerLineId) return this.clearPlacementAlong();
+    this.setPlacementAlongCenterLine(id);
+    return this._replaceIfPlaced();
   }
 
   /**
@@ -486,11 +514,15 @@ export class SiteModeState {
       const { floors, readFailed } = await collectAdoptedFloors(project, SITE_LOG_TAG);
       if (this._disposed || gen !== this._placementGen || !this.showPlacement) return;
       let regionFailed = false;
+      const exteriorIds = new Set(); // 外周の通り芯（全採用階の外壁ループ outer の軸。courtyard は含めない）
       const graphs = floors.map(f => f.graph).filter(Boolean);
       const regionFloors = withGraphsReadScope(graphs, () => floors.flatMap(f => {
         if (!f.graph) return []; // peek に失敗した階（readFailed は collectAdoptedFloors が立てている）
         try {
-          return [{ planeId: f.plane.id, regions: [...leanToPlanRegions(f.graph), ...topRoofPlanRegions(f.graph, project)] }];
+          const outerAxisIds = computeExteriorWallSegments(f.graph).filter(s => s.loopType === 'outer').map(s => s.axisCLId);
+          const entry = { planeId: f.plane.id, regions: [...leanToPlanRegions(f.graph), ...topRoofPlanRegions(f.graph, project)] };
+          outerAxisIds.forEach(id => exteriorIds.add(id));
+          return [entry];
         } catch (err) {
           console.warn(`${SITE_LOG_TAG} 階「${f.plane.name ?? f.plane.id}」の屋根を解決できませんでした（その階は描かない）:`, err);
           regionFailed = true;
@@ -500,7 +532,7 @@ export class SiteModeState {
       roof = {
         floors: regionFloors,
         gridBounds: project?.structGraph ? gridBoundsMm(project.structGraph) : null,
-        gridLines: gridLineSnapshot(project?.structGraph),
+        gridLines: markExteriorGridLines(gridLineSnapshot(project?.structGraph), exteriorIds),
         readFailed: readFailed || regionFailed,
       };
     } catch (err) {

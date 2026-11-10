@@ -352,3 +352,84 @@ test('最上階の主屋根の線の外接矩形の中心へ敷地の図芯を�
   assert.equal(view.siteTransform.ty, roofC.y - siteC.y);
   sm.dispose();
 });
+
+// ---- 外周の通り芯（exterior）----
+// 通り芯は structGraph に置き、部屋の cell は通り芯 id で作る（階の graph の外壁の軸 id と structGraph の通り芯 id は同じ id 空間）。
+
+/** structGraph の通り芯（V: X1..、H: Y1..）を作り、階の graph に通り芯どうしで囲む部屋を足す。 */
+function gridRoom(graph, project, xi, yi, name) {
+  const [x0, x1] = xi.map(i => project.structGraph.centerLines.find(c => c.centerLineType === CenterLineType.VERTICAL && c.value === i));
+  const [y0, y1] = yi.map(i => project.structGraph.centerLines.find(c => c.centerLineType === CenterLineType.HORIZONTAL && c.value === i));
+  return graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), name);
+}
+function makeGridProject() {
+  const project = new Project('proj', 'test');
+  const st = { labeled: true, discipline: Discipline.STRUCT };
+  for (const v of [0, 4000, 8000, 12000]) project.structGraph.addCenterLine(CenterLineType.VERTICAL, v, st);
+  for (const v of [0, 4000, 9000]) project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, v, st);
+  return project;
+}
+const extOf = sm => Object.fromEntries(sm.placementRoof.gridLines.map(g => [`${g.centerLineType}${g.value}`, g.exterior]));
+
+test('外周の通り芯: 外壁ループ outer の軸になる通り芯だけ exterior（部屋の外周が載る X0・X4000・Y0・Y4000。載らない X8000・X12000・Y9000 は false）', async () => {
+  const project = makeGridProject();
+  const { graph } = project.addPlane(0, '1階', 'p1');
+  project.activePlaneId = 'p1';
+  gridRoom(graph, project, [0, 4000], [0, 4000], '1F');
+  seedSite(project);
+  const sm = new SiteModeState(project.site, project);
+  await sm.setShowPlacement(true);
+  assert.deepEqual(extOf(sm), { X0: true, X4000: true, X8000: false, X12000: false, Y0: true, Y4000: true, Y9000: false });
+  assert.ok(sm.placementRoof.gridLines.every(g => typeof g.exterior === 'boolean'));
+  sm.dispose();
+});
+
+test('外周の通り芯: 全採用階の和（他階の peek で読んだ階の外周も足す）。内側の通り芯（外周でない軸）は false のまま', async () => {
+  const project = makeGridProject();
+  const p1 = project.addPlane(0, '1階', 'p1').graph;
+  const p2 = project.addPlane(3000, '2階', 'p2').graph;
+  project.activePlaneId = 'p2';
+  gridRoom(p1, project, [0, 8000], [0, 4000], '1F'); // 1 階の外周＝X0・X8000・Y0・Y4000（X4000 は内側）
+  gridRoom(p2, project, [0, 4000], [0, 9000], '2F'); // 2 階（自階・live）の外周＝X0・X4000・Y0・Y9000
+  seedSite(project);
+  await withPeek(async plane => project.graphMap.get(plane.id), async () => {
+    const sm = new SiteModeState(project.site, project);
+    await sm.setShowPlacement(true);
+    assert.deepEqual(extOf(sm), { X0: true, X4000: true, X8000: true, X12000: false, Y0: true, Y4000: true, Y9000: true });
+    sm.dispose();
+  });
+});
+
+test('外周の通り芯: 外壁が 1 本も無い（部屋が無い）ときは全部 exterior（外周が判定できないときは全部を候補にする）', async () => {
+  const project = makeGridProject();
+  project.addPlane(0, '1階', 'p1');
+  project.activePlaneId = 'p1';
+  seedSite(project);
+  const sm = new SiteModeState(project.site, project);
+  await sm.setShowPlacement(true);
+  assert.equal(sm.placementRoof.gridLines.length, 7);
+  assert.ok(sm.placementRoof.gridLines.every(g => g.exterior === true));
+  sm.dispose();
+});
+
+test('【失敗系】外周の通り芯: ある階の外壁の解決が例外でも reject せず、その階の外周は足さない（readFailed・warn）。読めた階の外周だけが exterior', async () => {
+  const project = makeGridProject();
+  const p1 = project.addPlane(0, '1階', 'p1').graph;
+  const p2 = project.addPlane(3000, '2階', 'p2').graph;
+  project.activePlaneId = 'p2';
+  gridRoom(p1, project, [0, 8000], [0, 4000], '1F');
+  gridRoom(p2, project, [0, 4000], [0, 4000], '2F');
+  seedSite(project);
+  const boom = new Proxy({}, { get(_t, key) { if (key === 'then') return undefined; throw new Error('graph boom'); } });
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    await withPeek(async plane => (plane.id === 'p1' ? boom : project.graphMap.get(plane.id)), async () => {
+      const sm = new SiteModeState(project.site, project);
+      await sm.setShowPlacement(true);
+      assert.equal(sm.placementRoof.readFailed, true);
+      assert.deepEqual(extOf(sm), { X0: true, X4000: true, X8000: false, X12000: false, Y0: true, Y4000: true, Y9000: false }, '2 階の外周だけ（1 階の X8000 は足さない）');
+      sm.dispose();
+    });
+  } finally { console.warn = warn; }
+});

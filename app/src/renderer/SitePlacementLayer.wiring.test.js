@@ -38,12 +38,12 @@ test('SitePlacementLayer: 屋根線は PLAN_SOLIDS_COLOR・細線、敷地は SI
   assert.match(layer, /radius=\{markR\}/);
   assert.match(layer, /const markR = SITE_CORNER_MARK_RADIUS_PX \/ viewport\.scaleX;/);
   const shapes = count(layer, /<(Line|Circle|Group|Text)\b/g);
-  assert.equal(shapes, 9, '通り芯の Line・屋根の Line・敷地の Line・寸法線上の点の Circle・角の見える Circle・角の当たり Circle・番号の Text・境界線ラベルの Text・Group');
-  assert.equal(count(layer, /listening=\{false\}/g), shapes - 2, '当たり用の丸と Group 以外は listening={false}');
+  assert.equal(shapes, 10, '通り芯の Line・屋根の Line・敷地の Line・寸法線上の点の Circle・角の見える Circle・角の当たり Circle・通り芯ラベルの当たり Circle・番号の Text・境界線ラベルの Text・Group');
+  assert.equal(count(layer, /listening=\{false\}/g), shapes - 3, '当たり用の丸（角・通り芯ラベル）と Group 以外は listening={false}');
 });
 
 test('SitePlacementLayer: 角の当たり丸は SITE_HIT_NODE_NAME・透明ストローク（HIT_PX_MAX / scale）で、onClick/onTap が mode.pickPlacementVertex（敷地座標）を呼ぶ', () => {
-  assert.match(layer, /\(\{ view, viewport, mode, didPanEnd \}\) =>/, 'mode prop を受ける');
+  assert.match(layer, /\(\{ view, viewport, mode, didPanEnd, onToast \}\) =>/, 'mode・onToast prop を受ける');
   assert.match(layer, /const hitW = HIT_PX_MAX \/ viewport\.scaleX;/);
   assert.match(layer, /name=\{SITE_HIT_NODE_NAME\}/);
   assert.match(layer, /stroke="transparent"\s+strokeWidth=\{hitW\}/);
@@ -118,7 +118,8 @@ test('SitePlacementLayer: 通り芯（線・寸法・丸ラベル）は layoutSi
   assert.ok(lineAt < layer.indexOf('view.roofLines.map'), '通り芯の線は屋根線より下（先に描く）');
   assert.ok(rowsAt < labelsAt, '丸ラベルは寸法行より上（後に描く）');
   assert.match(layer, /dimensionRow\(\{/);
-  assert.match(layer, /g\.labels\.flatMap\(l => labelCircle\(l\.key, l\.x, l\.y, l\.label, viewport\)\)/);
+  assert.match(layer, /g\.labels\.flatMap\(l => \{/);
+  assert.match(layer, /\.\.\.labelCircle\(l\.key, l\.x, l\.y, l\.label, viewport, selected \? \{ stroke: MEMBER_SELECTION_COLOR, textFill: MEMBER_SELECTION_COLOR \} : \{\}\),/);
   assert.match(layer, /: originColor\(SITE_PLACEMENT_GRID_ORIGIN_COLOR_KEY\)\}/);
   assert.match(layer, /dash=\{gridLineDash\(gridLineWidth\)\}/);
   assert.match(layer, /const gridLineWidth = viewport\.lineWeightsPx\[SITE_PLACEMENT_GRID_LINE_WEIGHT\];/);
@@ -135,7 +136,7 @@ test('SceneLayers: 配置図の表示中（sitePlacementShown）は敷地の3レ
   assert.match(scene, /\{appMode === 'site' && !sitePlacementShown && <SiteDrawPreview /);
   assert.match(scene, /\{isStairMode && \(\s*<StairLayer/);
   assert.match(scene, /\{shouldShowPlacedFigures\(appMode\) && <PlacedFiguresLayer/);
-  assert.match(scene, /\{sitePlacementShown && mode\.placementView && <SitePlacementLayer view=\{mode\.placementView\} viewport=\{viewport\} mode=\{mode\} didPanEnd=\{didPanEnd\} \/>\}/);
+  assert.match(scene, /\{sitePlacementShown && mode\.placementView && <SitePlacementLayer view=\{mode\.placementView\} viewport=\{viewport\} mode=\{mode\} didPanEnd=\{didPanEnd\} onToast=\{onToast\} \/>\}/);
   // showPlanFigure に乗る平面図一式（壁・建具・柱・立体）は述語を共有する
   for (const name of ['ShapesLayer', 'OpeningsLayer', 'ColumnsLayer', 'PlanSolidsLayer']) {
     assert.match(scene, new RegExp(`\\{showPlanFigure && <${name} `), `${name} は showPlanFigure の下`);
@@ -165,9 +166,9 @@ test('SiteInfoPanel: 配置指定 UI（案内・頂点の状態・通り芯一�
     assert.ok(count(panel, new RegExp(`\\{?${name}\\b`, 'g')) >= 2, `${name} を import して使う`);
   }
   assert.match(panel, /const st = mode\.placementVertexStates;/);
-  assert.match(panel, /onClick=\{\(\) => mode\.setPlacementCenterLine\(l\.id\)\}/);
-  assert.match(panel, /\[CenterLineType\.VERTICAL, CenterLineType\.HORIZONTAL\]\.map\(type =>/);
-  assert.match(panel, /\{mode\.placementCenterLineStale && SITE_PLACEMENT_STALE_LABEL\}/);
+  assert.ok(!/setPlacementCenterLine|setPlacementAlongCenterLine|placementAlongCenterLines|CenterLineType\./.test(panel), '通り芯のボタン列は廃止（配置図の丸ラベルをタップ）');
+  assert.match(panel, /\{SITE_PLACEMENT_CENTER_LINE_LABEL\}：<\/span>\s*\{lineText\(mode\.placementCenterLine, mode\.placementCenterLineStale\)\}/);
+  assert.match(panel, /const lineText = \(line, stale\) => \(stale \? SITE_PLACEMENT_STALE_LABEL : line \? \(line\.label \|\| String\(line\.value\)\) : SITE_PLACEMENT_VERTEX_NONE\);/);
   assert.match(panel, /onClick=\{\(\) => mode\.setPlacementDistanceFocused\(true\)\}/);
   assert.match(panel, /onClick=\{\(\) => reportPlacement\(mode\.togglePlacementRotation\(\)\)\}/);
   assert.match(panel, /onClick=\{\(\) => reportPlacement\(mode\.togglePlacementSide\(\)\)\}/);
@@ -191,6 +192,35 @@ test('SiteInfoPanel: 距離欄の物理キーボードは placementDistanceFocus
   assert.match(panel, /e\.key === 'Enter'\) \{\s*mode\.setPlacementDistanceFocused\(false\);\s*const r = mode\.commitPlacement\(\);\s*if \(r\?\.toast\) onToast\?\.\(r\.toast\);/);
 });
 
+test('SitePlacementLayer: 通り芯の丸ラベルの当たりは外周（exterior）のラベルだけ・敷地 Group の外・半径は labelCircleRadius・透明ストローク・パン直後は無視・toast は onToast', () => {
+  const at = layer.indexOf('g.labels.flatMap');
+  assert.ok(at > layer.indexOf('</Group>'), '丸ラベルは敷地 Group の外（世界座標）');
+  const block = layer.slice(at);
+  assert.match(block, /\.\.\.\(l\.exterior \? \[\s*<Circle\b/, '当たりは exterior のラベルにだけ');
+  assert.equal(count(block, /name=\{SITE_HIT_NODE_NAME\}/g), 1);
+  assert.match(block, /x=\{l\.x\} y=\{l\.y\}/);
+  assert.match(block, /radius=\{labelR\}/);
+  assert.match(block, /stroke="transparent"\s+strokeWidth=\{hitW\}/);
+  assert.match(block, /onClick=\{\(\) => pickLabel\(l\.id\)\}/);
+  assert.match(block, /onTap=\{\(\) => pickLabel\(l\.id\)\}/);
+  assert.match(layer, /const labelR = labelCircleRadius\(viewport\);/);
+  assert.match(layer, /const pickLabel = id => \{\s*if \(didPanEnd\?\.\(\)\) return;\s*const r = mode\.pickPlacementCenterLine\(id\);\s*if \(r\?\.toast\) onToast\?\.\(r\.toast\);\s*\};/);
+  assert.match(block, /const selected = l\.id === selectedGridId \|\| l\.id === selectedAlongId;/, '選択中の A・B の丸ラベルを選択色に');
+});
+
+test('gutterPrimitives.labelCircle: 色の上書きは省略可能な opts.stroke・opts.textFill で、既定は固定色（GutterLayer の呼び出しは不変）', () => {
+  const prim = code('./gutterPrimitives.jsx');
+  assert.match(prim, /export function labelCircle\(keyBase, x, y, label, viewport, opts = \{\}\) \{/);
+  assert.match(prim, /const \{ stroke = '#93c5fd', textFill = '#3b82f6' \} = opts;/);
+  assert.match(prim, /stroke=\{stroke\} strokeWidth/);
+  assert.match(prim, /fill=\{textFill\} listening/);
+  assert.match(prim, /fill="#dbeafe"/, '塗りは固定');
+});
+
+test('SceneLayers: SitePlacementLayer へ onToast を渡す（通り芯タップの即時再配置の拒否理由を App のトーストへ）', () => {
+  assert.match(scene, /<SitePlacementLayer [^>]*onToast=\{onToast\} \/>/);
+});
+
 test('SitePlacementLayer: 位置（2 段目）の通り芯B は input.along.centerLineId から引き、1 段目の通り芯と同じ選択色で描く', () => {
   assert.match(layer, /const selectedAlongId = mode\.placementAlongCenterLine\?\.id \?\? null;/, '失効した通り芯Bは印を出さない（R9）');
   assert.match(layer, /view\.grid\.lines\.find\(l => l\.id === selectedAlongId\)/);
@@ -199,7 +229,7 @@ test('SitePlacementLayer: 位置（2 段目）の通り芯B は input.along.cent
 
 test('SiteInfoPanel: 位置の段（共有点の切替・通り芯B の一覧・離れ・側反転・解除）が SiteModeState の口と文言定数に配線されている', () => {
   for (const name of [
-    'SITE_PLACEMENT_ALONG_LABEL', 'SITE_PLACEMENT_ALONG_VERTEX_LABEL', 'SITE_PLACEMENT_ALONG_HINT',
+    'SITE_PLACEMENT_ALONG_LABEL', 'SITE_PLACEMENT_ALONG_VERTEX_LABEL',
     'SITE_PLACEMENT_ALONG_DISTANCE_LABEL', 'SITE_PLACEMENT_ALONG_DISTANCE_NUMPAD_LABEL',
     'SITE_PLACEMENT_ALONG_FLIP_SIDE_LABEL', 'SITE_PLACEMENT_ALONG_CLEAR_LABEL', 'SitePlacementAlongVertex',
   ]) {
@@ -208,10 +238,10 @@ test('SiteInfoPanel: 位置の段（共有点の切替・通り芯B の一覧・
   assert.match(panel, /\[\[SitePlacementAlongVertex\.V1, SITE_PLACEMENT_VERTEX1_LABEL\], \[SitePlacementAlongVertex\.V2, SITE_PLACEMENT_VERTEX2_LABEL\]\]/);
   assert.match(panel, /onClick=\{\(\) => mode\.setPlacementAlongVertex\(v\)\}/);
   assert.match(panel, /\{mode\.placementAlongVertexStale && SITE_PLACEMENT_STALE_LABEL\}/);
-  assert.match(panel, /const alongLines = mode\.placementAlongCenterLines;/);
-  assert.match(panel, /mode\.placementCenterLine === null \? \(\s*<div style=\{\{ \.\.\.PANEL_ROW_TEXT, color: '#64748b' \}\}>\{SITE_PLACEMENT_ALONG_HINT\}<\/div>/, '案内文は 1 段目の通り芯が未選択のときだけ');
-  assert.match(panel, /onClick=\{\(\) => mode\.setPlacementAlongCenterLine\(l\.id\)\}/);
-  assert.match(panel, /\{mode\.placementAlongStale && /);
+  assert.match(panel, /\{SITE_PLACEMENT_ALONG_CENTER_LINE_LABEL\}：<\/span>\s*\{lineText\(mode\.placementAlongCenterLine, mode\.placementAlongStale\)\}/, '「位置の通り芯：<ラベル>」（見出しは定数 1 つ）');
+  assert.ok(!/SITE_PLACEMENT_ALONG_HINT/.test(panel), '1 段目未選択の案内文は廃止');
+  assert.ok(!/SITE_PLACEMENT_ALONG_HINT/.test(code('../core/constants.js')), '定数も削除');
+  assert.match(code('../core/constants.js'), /export const SITE_PLACEMENT_HINT = '配置図の敷地の角と通り芯ラベルをタップ';/);
   assert.match(panel, /onClick=\{\(\) => mode\.setPlacementAlongDistanceFocused\(true\)\}/);
   assert.match(panel, /\{mode\.placementAlongState !== 'none' && \(\s*<>\s*<button style=\{actionButton\} onClick=\{\(\) => reportPlacement\(mode\.togglePlacementAlongSide\(\)\)\}>[^<]*<\/button>\s*<button style=\{actionButton\} onClick=\{\(\) => reportPlacement\(mode\.clearPlacementAlong\(\)\)\}>/, '側反転（位置）・位置の解除は位置が none でないときだけ');
   // 位置の段は 1 段目の最終ボタン列（回転反転・側反転・配置・解除）の前

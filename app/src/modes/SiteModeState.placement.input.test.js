@@ -728,3 +728,122 @@ test('NumPad のフォーカスの排他: 距離欄と位置の離れ欄は同�
   sm2.dispose();
   assert.equal(sm2.placementAlongDistanceFocused, false);
 });
+
+// ---- 通り芯の丸ラベルをタップ（pickPlacementCenterLine）----
+// 部屋なし＝外周が判定できないので全部 exterior。外周でない通り芯は placementRoof の写しを差し替えて作る。
+
+const gridX6000 = sm => sm.placementRoof.gridLines.find(g => g.centerLineType === CenterLineType.VERTICAL && g.value === 6000);
+const IGNORED = { ok: false, toast: null };
+const PICKED = { ok: true, toast: null };
+const setExterior = (sm, id, exterior) => runInAction(() => {
+  sm.placementRoof = { ...sm.placementRoof, gridLines: sm.placementRoof.gridLines.map(g => (g.id === id ? { ...g, exterior } : g)) };
+});
+
+test('pickPlacementCenterLine: 未選択→1 段目 A。同じ軸の別の線は A を置換、A 自身は解除（2 段目には触れない）', async () => {
+  const sm = await openPlacement();
+  assert.deepEqual(sm.pickPlacementCenterLine(gridX0(sm).id), PICKED);
+  assert.equal(sm.placementInput.centerLineId, gridX0(sm).id);
+  assert.equal(sm.placementInput.along.centerLineId, null);
+  assert.deepEqual(sm.pickPlacementCenterLine(gridX6000(sm).id), PICKED);
+  assert.equal(sm.placementInput.centerLineId, gridX6000(sm).id, '同軸は A の置換');
+  assert.equal(sm.placementInput.along.centerLineId, null);
+  assert.deepEqual(sm.pickPlacementCenterLine(gridX6000(sm).id), PICKED);
+  assert.equal(sm.placementInput.centerLineId, null, 'A 自身は解除');
+  sm.pickPlacementCenterLine(gridY0(sm).id); // A が空なら横線でも A
+  assert.equal(sm.placementInput.centerLineId, gridY0(sm).id);
+  sm.dispose();
+});
+
+test('pickPlacementCenterLine: A と直交する軸の線は 2 段目 B。B 自身は解除、別の直交線は B の置換（A は不変）', async () => {
+  const sm = await openPlacement();
+  sm.pickPlacementCenterLine(gridX0(sm).id);
+  sm.pickPlacementCenterLine(gridY4000(sm).id);
+  assert.equal(sm.placementInput.centerLineId, gridX0(sm).id, 'A は不変');
+  assert.equal(sm.placementInput.along.centerLineId, gridY4000(sm).id);
+  assert.equal(sm.placementAlongCenterLine, gridY4000(sm));
+  sm.pickPlacementCenterLine(gridY0(sm).id);
+  assert.equal(sm.placementInput.along.centerLineId, gridY0(sm).id, 'B の置換');
+  sm.pickPlacementCenterLine(gridY0(sm).id);
+  assert.equal(sm.placementInput.along.centerLineId, null, 'B 自身は解除');
+  assert.equal(sm.placementAlongState, 'none', 'B 自身の解除は［位置の解除］と同じで離れも消える');
+  assert.equal(sm.placementInput.centerLineId, gridX0(sm).id);
+  // A を横線へ付け替えれば、縦線が B の側になる
+  sm.pickPlacementCenterLine(gridY0(sm).id); // A と直交＝B…ではなく A が縦なので横は B
+  sm.pickPlacementCenterLine(gridX0(sm).id); // A 自身を解除
+  sm.pickPlacementCenterLine(gridY4000(sm).id); // A 未選択なので横線が A
+  assert.equal(sm.placementInput.centerLineId, gridY4000(sm).id);
+  sm.pickPlacementCenterLine(gridX6000(sm).id); // 縦線は B
+  assert.equal(sm.placementInput.along.centerLineId, gridX6000(sm).id);
+  sm.dispose();
+});
+
+test('【失敗系】pickPlacementCenterLine: 外周でない通り芯・写しに無い id・配置図を開いていない（入力 null）・直交する軸が無い A は無視（{ok:false}・入力不変）', async () => {
+  const sm = await openPlacement();
+  setExterior(sm, gridX6000(sm).id, false);
+  const before = sm.placementInput;
+  assert.deepEqual(sm.pickPlacementCenterLine(gridX6000(sm).id), IGNORED, '外周でない');
+  assert.deepEqual(sm.pickPlacementCenterLine('gone'), IGNORED, '写しに無い');
+  assert.equal(sm.placementInput, before, '入力は同じ参照のまま');
+  sm.pickPlacementCenterLine(gridX0(sm).id);
+  assert.deepEqual(sm.pickPlacementCenterLine(gridX6000(sm).id), IGNORED, 'A がある状態でも外周でなければ置換しない');
+  assert.equal(sm.placementInput.centerLineId, gridX0(sm).id);
+  runInAction(() => {
+    sm.placementRoof = { ...sm.placementRoof, gridLines: [...sm.placementRoof.gridLines, { id: 'radial', centerLineType: CenterLineType.RADIAL, value: 45, label: 'R1', exterior: true }] };
+  });
+  sm.pickPlacementCenterLine(gridX0(sm).id); // A 解除
+  sm.pickPlacementCenterLine('radial'); // 放射が A
+  assert.equal(sm.placementInput.centerLineId, 'radial');
+  assert.deepEqual(sm.pickPlacementCenterLine(gridX0(sm).id), IGNORED, '放射の A には直交する軸が無い＝B にしない');
+  assert.equal(sm.placementInput.along.centerLineId, null);
+  sm.dispose();
+  const closed = new SiteModeState(makeProject().site);
+  assert.deepEqual(closed.pickPlacementCenterLine('x'), IGNORED);
+});
+
+test('pickPlacementCenterLine: 配置済みで B の変更は即時再配置（undo 1 件・保存の along が更新）。B 自身のタップは［位置の解除］と同じ（離れも消え、沿い座標を据え置いて再配置）', async () => {
+  const sm = await openPlacement();
+  fillInput(sm);
+  fillAlong(sm); // B=Y4000・離れ 500
+  assert.equal(sm.commitPlacement().ok, true);
+  const first = sm.site.placement;
+  assert.equal(first.input.along.centerLineId, gridY4000(sm).id);
+  const before = undoManager.peekUndo();
+  assert.deepEqual(sm.pickPlacementCenterLine(gridY0(sm).id), PICKED);
+  assert.notEqual(sm.site.placement, first, '再配置された');
+  assert.equal(sm.site.placement.input.along.centerLineId, gridY0(sm).id);
+  assert.notEqual(undoManager.peekUndo(), before, 'undo が 1 件増える');
+  undoManager.undo();
+  assert.equal(sm.site.placement, first, '1 件の undo で B の変更前へ戻る');
+  // B 自身のタップ＝［位置の解除］: 離れも消えて none、配置済みなので along なし（R6 据え置き）で再配置し undo が 1 件増える
+  const placed = sm.site.placement;
+  const stackTop = undoManager.peekUndo();
+  assert.deepEqual(sm.pickPlacementCenterLine(gridY4000(sm).id), PICKED);
+  assert.equal(sm.placementInput.along.centerLineId, null);
+  assert.equal(sm.placementAlongState, 'none');
+  assert.notEqual(sm.site.placement, placed, '再配置される');
+  assert.equal(sm.site.placement.input.along, null, '保存の along は無しになる');
+  assert.notEqual(undoManager.peekUndo(), stackTop, 'undo が 1 件増える');
+  sm.dispose();
+});
+
+test('pickPlacementCenterLine: 配置済みでも 1 段目 A の変更は再配置しない（［配置］で確定。placement は同じ参照・undo 不変）。未配置の B 変更も再配置しない', async () => {
+  const sm = await openPlacement();
+  fillInput(sm);
+  assert.equal(sm.commitPlacement().ok, true);
+  const placed = sm.site.placement;
+  const before = undoManager.peekUndo();
+  assert.deepEqual(sm.pickPlacementCenterLine(gridX6000(sm).id), PICKED);
+  assert.equal(sm.placementInput.centerLineId, gridX6000(sm).id);
+  assert.equal(sm.site.placement, placed);
+  assert.equal(undoManager.peekUndo(), before);
+  assert.deepEqual(sm.pickPlacementCenterLine(gridX6000(sm).id), PICKED); // 解除
+  assert.equal(sm.placementInput.centerLineId, null);
+  assert.equal(sm.site.placement, placed);
+  sm.dispose();
+
+  const fresh = await openPlacement();
+  fresh.pickPlacementCenterLine(gridX0(fresh).id);
+  fresh.pickPlacementCenterLine(gridY4000(fresh).id);
+  assert.equal(fresh.site.placement, null, '未配置では配置しない');
+  fresh.dispose();
+});
