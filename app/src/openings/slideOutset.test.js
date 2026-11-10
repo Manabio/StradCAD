@@ -136,6 +136,21 @@ test('失敗側: opening が null・undefined は null', () => {
   assert.equal(openingCutSpan(undefined, OpeningMechanism.SWING), null);
 });
 
+test('R12: host が外壁（isExteriorWall true）なら layout null・cutSpan は開口全幅（恒等）', () => {
+  const o = op();
+  assert.equal(outsetSlideLayout(o, SLIDE, { isExteriorWall: true }), null);
+  assert.deepEqual(openingCutSpan(o, SLIDE, { isExteriorWall: true }), [1000, 2550]);
+});
+
+test('R12: host が内壁・null・undefined・省略なら従来どおり（穴 cut を返す）', () => {
+  const o = op();
+  for (const host of [{ isExteriorWall: false }, {}, null, undefined]) {
+    assert.ok(outsetSlideLayout(o, SLIDE, host), `host=${JSON.stringify(host)}`);
+    assert.deepEqual(openingCutSpan(o, SLIDE, host), [1800, 2550]);
+  }
+  assert.ok(outsetSlideLayout(o, SLIDE));
+});
+
 test('非整数 W でも DW の誤差は 1e-9 以下', () => {
   const l = outsetSlideLayout(op({ coord1: 1000.1, coord2: 2550.1 }), SLIDE);
   assert.ok(Math.abs(l.doorWidth - 800) < 1e-9);

@@ -19,7 +19,7 @@ import { undoManager } from '../undoManager.js';
 import { OpeningCategory } from '../core.js';
 import {
   getFittingOptions, openingSubTypeList, defaultFixtureSymbolFor, defaultOpeningHeight, defaultMaterialGlassFor, defaultNoteFor,
-  getFixtureSymbols, findFixtureSymbol, OpeningMechanism, DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM,
+  getFixtureSymbols, findFixtureSymbol, OpeningMechanism, SIDED_SLIDE_MECHANISMS, defaultFittingKeyFor, DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM,
 } from './openingCatalog.js';
 import { findHostWall, validateOpeningPlacement, maxOpeningWidthAt, findOpeningsOnWall, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
 import { renumberOpenings } from './openingNumbering.js';
@@ -30,16 +30,24 @@ import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 // 外壁の「常に室外側へ開く」既定より機構特性を優先するために参照する。
 const INWARD_OPEN_MECHANISMS = new Set([OpeningMechanism.SWING_IN, OpeningMechanism.DREH_KIPP]);
 
-/** mechanism が内開き系（SWING_IN/DREH_KIPP）なら開き方向(openDir)を反転する。それ以外はそのまま。 */
+// 外壁で屋内側を走る機構（引き戸。外壁の引き戸は壁の屋内側を走る）。内開き系とは意味が違うため別名。
+const INSIDE_RUNNING_MECHANISMS = SIDED_SLIDE_MECHANISMS;
+
+/**
+ * mechanism が内開き系（SWING_IN/DREH_KIPP）または屋内側を走る引き戸（SLIDE_SINGLE）なら
+ * 開き方向（引き戸は走る面）(openDir)を反転する。それ以外はそのまま。
+ * 外壁の文脈でのみ呼ぶ前提。内壁の引き戸は呼び出し側（defaultSwingSideFor）で faceDir をそのまま使う。
+ */
 export function openDirForMechanism(openDir, mechanism) {
-  return INWARD_OPEN_MECHANISMS.has(mechanism) ? -openDir : openDir;
+  return (INWARD_OPEN_MECHANISMS.has(mechanism) || INSIDE_RUNNING_MECHANISMS.has(mechanism)) ? -openDir : openDir;
 }
 
 /**
  * swingSide既定値の唯一の定義箇所（placeOpeningWithDefaults・OpeningEditor.jsx onSubTypeChange
  * の両方がこれを呼ぶ。二重定義しない）。壁が面する側（faceDir）へ開くのが既定だが、外壁境界
  * （wallまたは境界の反対側の壁がisExteriorWall）は常に外開き（exteriorSideDir）、さらに
- * mechanismが内開き系（SWING_IN/DREH_KIPP）ならopenDirForMechanismで室内側へ反転する。
+ * mechanismが内開き系（SWING_IN/DREH_KIPP）または引き戸（SLIDE_SINGLE＝屋内側を走る）なら
+ * openDirForMechanismで室内側へ反転する。
  * @param {object} wall ホスト壁
  * @param {object} graph
  * @param {number} centerCoord 実際に開口が置かれる位置（境界のsegmented判定に使う。.claude/opening-model.md参照）
@@ -48,7 +56,11 @@ export function openDirForMechanism(openDir, mechanism) {
  * @returns {number} swingSide ±1
  */
 export function defaultSwingSideFor(wall, graph, centerCoord, hingeSide, mechanism) {
-  const openDir = openDirForMechanism(exteriorSideDir(wall, graph, centerCoord) ?? wall.faceDir, mechanism);
+  const extDir = exteriorSideDir(wall, graph, centerCoord);
+  // 引き戸の「屋内側を走る」は外壁だけの規則。内壁（extDir null）は叩いた面（faceDir）のまま。
+  const openDir = (extDir == null && INSIDE_RUNNING_MECHANISMS.has(mechanism))
+    ? wall.faceDir
+    : openDirForMechanism(extDir ?? wall.faceDir, mechanism);
   return swingSideTowardPerp(wall.isVertical, hingeSide, openDir);
 }
 
@@ -181,14 +193,18 @@ export function endOpeningFieldUndo(graph, project, opening) {
  * だけを理由に配置失敗させない。それでも幅が0以下（スパン0の縮退壁等）・重なり等でNGなら
  * 配置せずエラーを返す。
  * @param {string|null} [subType] 明示的な種別キー（openingCatalog.js のキー）。指定時は該当カタログ
- *   エントリを使う（見つからなければ catalog[0] へフォールバック）。省略時は従来どおり catalog[0]
- *   （＝建具ラジアルの既定＝singleSwing、窓ラジアルの既定＝引き違い窓）。
+ *   エントリを使う（見つからなければ既定→catalog[0] へフォールバック）。省略時は建具は
+ *   defaultFittingKeyFor(壁種別)（屋内壁＝singleSwing・外壁＝door。無ければ catalog[0]）、
+ *   窓ラジアルの既定は従来どおり catalog[0]（＝引き違い窓）。
  * @returns {{ opening: object|null, error: string|null }}
  */
 export function placeOpeningWithDefaults(graph, project, wall, worldPos, category, subType = null) {
   const wallKind = wall.isExteriorWall ? 'exterior' : 'interior';
   const catalog = category === OpeningCategory.WINDOW ? openingSubTypeList('window') : getFittingOptions(wallKind);
-  const entry = (subType && catalog.find(e => e.key === subType)) ?? catalog[0];
+  const defaultKey = category === OpeningCategory.WINDOW ? null : defaultFittingKeyFor(wallKind);
+  const entry = (subType && catalog.find(e => e.key === subType))
+    ?? (defaultKey && catalog.find(e => e.key === defaultKey))
+    ?? catalog[0];
   if (!entry) return { opening: null, error: 'この壁に配置できる建具がありません' };
 
   const resolvedSubType = entry.key;

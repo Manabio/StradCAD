@@ -54,8 +54,7 @@ export const OpeningMechanism = Object.freeze({
 });
 
 // 吊元(hingeSide)・開き勝手(swingSide)を持つ機構の集合（唯一の定義箇所）。OpeningEditor.jsx の
-// 「吊元反転/開く方向反転」ボタン表示条件、openingEdit.js の openDirForMechanism 再計算対象判定
-// （種別変更時）が参照する。
+// 「吊元反転/開く方向反転」ボタン群の表示条件（SIDED_SLIDE_MECHANISMS と併用）が参照する。
 export const HINGED_MECHANISMS = new Set([
   OpeningMechanism.SWING,
   OpeningMechanism.SWING_DOUBLE,
@@ -80,6 +79,22 @@ export function hingeSideMatters(mechanism, entry) {
   if (mechanism === OpeningMechanism.FIRE_DOOR) return (entry?.fireLeaves ?? 1) !== 2;
   if (mechanism === OpeningMechanism.FIRE_FOLD) return (entry?.fireAngle ?? 90) !== 180;
   return true;
+}
+
+// 引き代の左右（hingeSide＝戸尻側の端）と扉が走る面（swingSide）を持つ引き戸の集合（唯一の定義箇所）。
+// HINGED_MECHANISMS には入れない（入れると欠き込み枠・回転中心・openingViewSide・planSymbolPlan が蝶番として動く）。
+export const SIDED_SLIDE_MECHANISMS = new Set([OpeningMechanism.SLIDE_SINGLE]);
+
+// 「吊元／引き代の反転ボタンを出すか」の唯一の定義箇所。
+export function hasHandedSides(mechanism, entry) {
+  return hingeSideMatters(mechanism, entry) || SIDED_SLIDE_MECHANISMS.has(mechanism);
+}
+
+// 反転ボタンの文言（hinge＝吊元／引き代の反転・swing＝開く方向／走る面の反転）。
+const SIDE_FLIP_LABELS_HINGED = Object.freeze({ hinge: '吊元反転', swing: '開く方向反転' });
+const SIDE_FLIP_LABELS_SLIDE = Object.freeze({ hinge: '引き代反転', swing: '走る面反転' });
+export function sideFlipLabels(mechanism) {
+  return SIDED_SLIDE_MECHANISMS.has(mechanism) ? SIDE_FLIP_LABELS_SLIDE : SIDE_FLIP_LABELS_HINGED;
 }
 
 // 非蝶番系のうち、一般記号自身が開口全幅の枠矩形（サッシ枠rect）を描く機構の集合（唯一の定義箇所）。
@@ -157,7 +172,7 @@ export function isDoorlessMechanism(mechanism) {
 
 export const FITTING_CATALOG = [
   { key: 'singleSwing',   label: '片開き戸',     mechanism: OpeningMechanism.SWING,        wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
-  { key: 'sliding',       label: '引き戸',       mechanism: OpeningMechanism.SLIDE_SINGLE, wallKinds: ['interior', 'exterior'], defaultWidth: 1550, defaultHeight: 2000 }, // W＝2×800−50（扉幅 DW 800。slideOutset.js）
+  { key: 'sliding',       label: '引き戸',       mechanism: OpeningMechanism.SLIDE_SINGLE, wallKinds: ['interior'],             defaultWidth: 1550, defaultHeight: 2000 }, // W＝2×800−50（扉幅 DW 800。slideOutset.js）。壁を枠厚分欠き込むので屋内壁に限る（ユーザー裁定 2026-11-10）
   { key: 'doubleSliding', label: '引き違い戸',   mechanism: OpeningMechanism.SLIDE_DOUBLE, wallKinds: ['interior', 'exterior'], defaultWidth: 1600, defaultHeight: 2000 },
   { key: 'folding',       label: '折れ戸',       mechanism: OpeningMechanism.FOLD,         wallKinds: ['interior'],            defaultWidth: 800,  defaultHeight: 2000 },
   { key: 'door',          label: 'ドア',         mechanism: OpeningMechanism.SWING,        wallKinds: ['exterior'],            defaultWidth: 900,  defaultHeight: 2000 },
@@ -175,8 +190,8 @@ export const FITTING_CATALOG = [
   { key: 'fireDoorSingle180',   label: '常時開放式防火戸(片開き180度)',  mechanism: OpeningMechanism.FIRE_DOOR, wallKinds: ['interior'], defaultWidth: 900,  defaultHeight: 2000, fireLeaves: 1, fireAngle: 180 },
   { key: 'fireFold90',          label: '常時開放式防火折戸(90度)',       mechanism: OpeningMechanism.FIRE_FOLD, wallKinds: ['interior'], defaultWidth: 1600, defaultHeight: 2000, fireAngle: 90  },
   { key: 'fireFold180',         label: '常時開放式防火折戸(180度)',      mechanism: OpeningMechanism.FIRE_FOLD, wallKinds: ['interior'], defaultWidth: 1600, defaultHeight: 2000, fireAngle: 180 },
-  // 三方枠（枠のみ・扉なし）。placeOpeningWithDefaults の catalog[0] フォールバックに使われないよう
-  // 必ず末尾に置く（「建具」ラジアルの既定は先頭の singleSwing のまま）。
+  // 三方枠（枠のみ・扉なし）。defaultFittingKeyFor の catalog[0] フォールバックに使われないよう
+  // 必ず末尾に置く（「建具」ラジアルの既定は DEFAULT_FITTING_KEY_BY_WALL_KIND。屋内壁は singleSwing）。
   { key: 'threeSidedFrame', label: '三方枠', mechanism: OpeningMechanism.FRAME_ONLY, wallKinds: ['interior', 'exterior'], defaultWidth: 800, defaultHeight: 2000 },
 ];
 
@@ -476,6 +491,25 @@ export function openingSubTypeList(category) {
  * builtinは全件wallKindsを持つため挙動は従来のまま。 */
 export function getFittingOptions(wallKind) {
   return openingSubTypeList('fitting').filter(o => !o.wallKinds || o.wallKinds.includes(wallKind));
+}
+
+// 壁の長押し→「建具」の既定の種別キー（壁種別ごと。唯一の定義箇所）。
+export const DEFAULT_FITTING_KEY_BY_WALL_KIND = Object.freeze({ interior: 'singleSwing', exterior: 'door' });
+
+/** wallKind の既定の建具キー。表に無い壁種別は undefined（呼び出し側は catalog[0] へ落とす）。 */
+export function defaultFittingKeyFor(wallKind) {
+  return DEFAULT_FITTING_KEY_BY_WALL_KIND[wallKind];
+}
+
+/** 建具の種別 select の選択肢（唯一の定義箇所）。getFittingOptions(wallKind) に、現在の種別が
+ * 壁種別の絞り込みで外れている場合（例: 外壁にある既存の引き戸）だけ末尾へ現在のエントリを足す
+ * （制御 select に現在値が無いと先頭が表示され、選び直しても change が起きない）。currentKey が
+ * null・未知なら一覧そのまま。 */
+export function fittingSubTypeOptions(wallKind, currentKey) {
+  const options = getFittingOptions(wallKind);
+  if (currentKey == null || options.some(o => o.key === currentKey)) return options;
+  const current = findCatalogEntry('fitting', currentKey);
+  return current ? [...options, current] : options;
 }
 
 // 廃止した種別キー → 現行キーの読み替え表（唯一の定義箇所）。旧データのデコード時に正規化する

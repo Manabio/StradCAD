@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   defaultOpeningHeight, defaultMaterialGlassFor, FIXTURE_SYMBOLS,
   findCatalogEntry, FITTING_CATALOG, WINDOW_CATALOG, IMPLEMENTED_MECHANISMS, OpeningMechanism,
-  normalizeSubType, hingeSideMatters, getFixtureSymbols, defaultFixtureSymbolFor, frameProfileFor,
+  normalizeSubType, defaultFittingKeyFor, fittingSubTypeOptions, getFittingOptions, hingeSideMatters, hasHandedSides, sideFlipLabels, getFixtureSymbols, defaultFixtureSymbolFor, frameProfileFor,
   DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, isDoorlessMechanism, DOORLESS_MECHANISMS,
 } from './openingCatalog.js';
 
@@ -208,4 +208,54 @@ test('hingeSideMatters: 非蝶番系（引き戸・FIX等）はfalse', () => {
   assert.equal(hingeSideMatters(OpeningMechanism.SLIDE_DOUBLE), false);
   assert.equal(hingeSideMatters(OpeningMechanism.FIXED), false);
   assert.equal(hingeSideMatters(undefined), false);
+});
+
+test('hasHandedSides: 引き戸（SLIDE_SINGLE）と片吊りの蝶番系はtrue、両開き・SLIDE_DOUBLE・FRAME_ONLY・未指定はfalse', () => {
+  assert.equal(hasHandedSides(OpeningMechanism.SLIDE_SINGLE), true);
+  assert.equal(hasHandedSides(OpeningMechanism.SWING), true);
+  assert.equal(hasHandedSides(OpeningMechanism.SWING_DOUBLE), false);
+  assert.equal(hasHandedSides(OpeningMechanism.SLIDE_DOUBLE), false);
+  assert.equal(hasHandedSides(OpeningMechanism.FRAME_ONLY), false);
+});
+
+test('【失敗系】hasHandedSides: 機構未指定・entry null でも例外なくfalse', () => {
+  assert.equal(hasHandedSides(undefined), false);
+  assert.equal(hasHandedSides(undefined, null), false);
+  assert.equal(hasHandedSides(OpeningMechanism.SWING, null), true);
+});
+
+test('defaultFittingKeyFor: 屋内壁＝singleSwing・外壁＝door・未知の壁種別は undefined（呼び出し側が catalog[0] へ落とす）', () => {
+  assert.equal(defaultFittingKeyFor('interior'), 'singleSwing');
+  assert.equal(defaultFittingKeyFor('exterior'), 'door');
+  assert.equal(defaultFittingKeyFor('nowhere'), undefined);
+  assert.equal(defaultFittingKeyFor(undefined), undefined);
+});
+
+test('fittingSubTypeOptions: 外壁の現在値 sliding（外壁一覧に無い）は末尾に残る', () => {
+  const base = getFittingOptions('exterior');
+  assert.ok(!base.some(o => o.key === 'sliding'));
+  const opts = fittingSubTypeOptions('exterior', 'sliding');
+  assert.deepEqual(opts.slice(0, -1).map(o => o.key), base.map(o => o.key));
+  assert.equal(opts.at(-1).key, 'sliding');
+});
+
+test('fittingSubTypeOptions: 現在値が一覧にあれば並びは不変', () => {
+  const base = getFittingOptions('exterior').map(o => o.key);
+  assert.deepEqual(fittingSubTypeOptions('exterior', 'door').map(o => o.key), base);
+});
+
+test('【失敗系】fittingSubTypeOptions: currentKey が null・undefined・未知キーなら一覧そのまま', () => {
+  const base = getFittingOptions('exterior').map(o => o.key);
+  for (const k of [null, undefined, 'noSuchKey']) {
+    assert.deepEqual(fittingSubTypeOptions('exterior', k).map(o => o.key), base, `currentKey=${k}`);
+  }
+});
+
+test('sideFlipLabels: 引き戸は引き代反転／走る面反転、片開き戸は吊元反転／開く方向反転', () => {
+  assert.deepEqual({ ...sideFlipLabels(OpeningMechanism.SLIDE_SINGLE) }, { hinge: '引き代反転', swing: '走る面反転' });
+  assert.deepEqual({ ...sideFlipLabels(OpeningMechanism.SWING) }, { hinge: '吊元反転', swing: '開く方向反転' });
+});
+
+test('【失敗系】sideFlipLabels: 機構未指定は既定（吊元反転／開く方向反転）', () => {
+  assert.deepEqual({ ...sideFlipLabels(undefined) }, { hinge: '吊元反転', swing: '開く方向反転' });
 });

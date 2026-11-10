@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { observable, runInAction, configure, autorun } from 'mobx';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '../core.js';
 import { undoManager } from '../undoManager.js';
-import { FITTING_CATALOG, WINDOW_CATALOG, findCatalogEntry, defaultMaterialGlassFor, getFixtureSymbols, OpeningMechanism } from './openingCatalog.js';
+import { FITTING_CATALOG, WINDOW_CATALOG, findCatalogEntry, defaultMaterialGlassFor, getFixtureSymbols, OpeningMechanism, getFittingOptions } from './openingCatalog.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 import { openingTagOf, renumberOpenings } from './openingNumbering.js';
 import { openingTagAnchor } from './openingTagPlacement.js';
@@ -19,6 +19,8 @@ import {
   beginOpeningFieldUndo, endOpeningFieldUndo,
 } from './openingEdit.js';
 import { closedAngleFor, leafOpenAngle, angleVectors } from './openingPlanSymbolGeometry.js';
+import { outsetSlideLayout } from './slideOutset.js';
+import { exteriorSideDir } from './openingGeometry.js';
 
 function makePlaneGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -286,10 +288,9 @@ test('placeOpeningWithDefaults: 外壁は触れた側(worldPos)によらず常�
 
   assert.equal(touchedInside.error, null);
   assert.equal(touchedOutside.error, null);
-  assert.equal(touchedInside.opening.subType, 'sliding', '外壁のFITTING既定は引き戸(sliding、非SWING)のはず');
+  assert.equal(touchedInside.opening.subType, 'door', '外壁のFITTING既定はドア(door、SWING機構)のはず');
 
-  // 既定(sliding)はSWINGでなくswingSideが記号丸の実位置(openingTagAnchor)に反映されないため、
-  // SWING機構(door)へ変えてから doorOpenSidePerp で測る（種別変更後も配置時のswingSideは保持される仕様）。
+  // doorOpenSidePerp は SWING機構(door)で測る（既定が door のため subType の再指定は恒等）。
   runInAction(() => { touchedInside.opening.subType = 'door'; touchedOutside.opening.subType = 'door'; });
 
   const exteriorDir = 1; // Wall.faceDir: axisValue(75) - axisCL.effectiveValue(0) = +75 → +1（室外側）
@@ -327,12 +328,43 @@ test('【回帰】placeOpeningWithDefaults: 室内向き壁(isExteriorWall:false
   );
 });
 
+test('placeOpeningWithDefaults: 外壁境界を室内側から叩いた（ホスト＝室内向きの壁）引き戸は叩いた面（屋内側）を走る', () => {
+  const { graph, innerWall } = makeExteriorBoundaryGraph(); // innerWall: faceDir=+1（屋内側）／外壁は −1 側（室外側）
+  assert.equal(exteriorSideDir(innerWall, graph, 1500), -1, '前提: 外壁境界（室外側は −1）');
+  const { opening, error } = placeOpeningWithDefaults(graph, makeProject(), innerWall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'sliding');
+  assert.equal(error, null);
+  assert.equal(opening.subType, 'sliding');
+  assert.equal(innerWall.isExteriorWall, false);
+  assert.equal(outsetSlideLayout(opening, OpeningMechanism.SLIDE_SINGLE, innerWall).runPerpDir, innerWall.faceDir, '屋内側（室外側−1の逆）を走る');
+});
+
+test('placeOpeningWithDefaults: 既定の建具は屋内壁＝singleSwing・外壁＝door、引き戸は外壁の選択肢に無い', () => {
+  const inner = makeWallGraph(3000, { isExteriorWall: false });
+  assert.equal(placeOpeningWithDefaults(inner.graph, makeProject(), inner.wall, { x: 1500, y: 200 }, OpeningCategory.FITTING).opening.subType, 'singleSwing');
+  const outer = makeWallGraph(3000, { isExteriorWall: true });
+  assert.equal(placeOpeningWithDefaults(outer.graph, makeProject(), outer.wall, { x: 1500, y: 200 }, OpeningCategory.FITTING).opening.subType, 'door');
+  assert.ok(!getFittingOptions('exterior').some(o => o.key === 'sliding'), '引き戸は外壁の選択肢から外れる');
+  assert.ok(getFittingOptions('interior').some(o => o.key === 'sliding'));
+});
+
+test('【失敗系】placeOpeningWithDefaults: 外壁に subType \'sliding\' を明示しても door に落ちる（R12）', () => {
+  const outer = makeWallGraph(3000, { isExteriorWall: true });
+  const { opening, error } = placeOpeningWithDefaults(outer.graph, makeProject(), outer.wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'sliding');
+  assert.equal(error, null);
+  assert.equal(opening.subType, 'door');
+});
+
+test('【失敗系】placeOpeningWithDefaults: 外壁で未知の subType 指定は既定の door へ落ちる', () => {
+  const outer = makeWallGraph(3000, { isExteriorWall: true });
+  assert.equal(placeOpeningWithDefaults(outer.graph, makeProject(), outer.wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'noSuchKey').opening.subType, 'door');
+});
+
 test('placeOpeningWithDefaults: 外壁本体(isExteriorWall:true)をホストにしても室外側へ開く（従来どおり）', () => {
   const { graph, outerWall } = makeExteriorBoundaryGraph();
   const project = makeProject();
   const { opening, error } = placeOpeningWithDefaults(graph, project, outerWall, { x: 1500, y: -200 }, OpeningCategory.FITTING);
   assert.equal(error, null);
-  runInAction(() => { opening.subType = 'door'; }); // 外壁既定(sliding)はSWINGでないため測定用にSWINGへ変える
+  runInAction(() => { opening.subType = 'door'; }); // 外壁既定はdoor（SWING機構）。測定用に subType を明示
 
   const exteriorDir = -1;
   assert.equal(doorOpenSidePerp(opening, outerWall, graph), exteriorDir, '外壁本体をホストにしても室外側へ開くはず');
@@ -710,6 +742,63 @@ test('swingSideAfterSubTypeChange: 手動で「開く方向反転」した値（
   assert.equal(result, manuallyFlipped, '手動編集済みの値は種別変更後も維持されるはず（新既定に上書きされない）');
 });
 
+// ---- 引き戸（SLIDE_SINGLE）: 外壁は屋内側を走る・内壁は叩いた面（faceDir） ----
+test('openDirForMechanism: SLIDE_SINGLEとSWING_INは反転・SLIDE_DOUBLEとSWINGは不変', () => {
+  assert.equal(openDirForMechanism(1, OpeningMechanism.SLIDE_SINGLE), -1);
+  assert.equal(openDirForMechanism(1, OpeningMechanism.SLIDE_DOUBLE), 1);
+  assert.equal(openDirForMechanism(1, OpeningMechanism.SWING_IN), -1);
+  assert.equal(openDirForMechanism(1, OpeningMechanism.SWING), 1);
+  assert.equal(openDirForMechanism(1, undefined), 1);
+});
+
+test('defaultSwingSideFor: 外壁の引き戸は屋内側（片開き戸と符号が逆）・内壁の引き戸は片開き戸と同じ（叩いた面）', () => {
+  const ext = makeWallGraph(3000, { isExteriorWall: true, axisOffset: 75 });
+  const swing = defaultSwingSideFor(ext.wall, ext.graph, 1500, -1, OpeningMechanism.SWING);
+  const slide = defaultSwingSideFor(ext.wall, ext.graph, 1500, -1, OpeningMechanism.SLIDE_SINGLE);
+  assert.equal(slide, -swing, '外壁の引き戸は屋内側＝片開き戸（屋外側）の逆');
+  assert.equal(slide, defaultSwingSideFor(ext.wall, ext.graph, 1500, -1, OpeningMechanism.SWING_IN), '屋内側＝内開きと同じ');
+  const inn = makeWallGraph(3000, { isExteriorWall: false, axisOffset: 75 });
+  assert.equal(
+    defaultSwingSideFor(inn.wall, inn.graph, 1500, -1, OpeningMechanism.SLIDE_SINGLE),
+    defaultSwingSideFor(inn.wall, inn.graph, 1500, -1, OpeningMechanism.SWING),
+    '内壁（exteriorSideDir が null）は叩いた面（faceDir）＝片開き戸と同じ',
+  );
+});
+
+test('swingSideAfterSubTypeChange: 片開き戸→引き戸（未編集）は屋内側へ差し替わり、手動反転済みなら維持', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: true, axisOffset: 75 });
+  const hingeSide = -1;
+  const swingDefault = defaultSwingSideFor(wall, graph, 1500, hingeSide, OpeningMechanism.SWING);
+  const slideDefault = defaultSwingSideFor(wall, graph, 1500, hingeSide, OpeningMechanism.SLIDE_SINGLE);
+  assert.notEqual(swingDefault, slideDefault);
+  assert.equal(swingSideAfterSubTypeChange(swingDefault, wall, graph, 1500, hingeSide, OpeningMechanism.SWING, OpeningMechanism.SLIDE_SINGLE), slideDefault);
+  assert.equal(swingSideAfterSubTypeChange(slideDefault, wall, graph, 1500, hingeSide, OpeningMechanism.SLIDE_SINGLE, OpeningMechanism.SWING), swingDefault);
+  // 手動反転済みの維持: 新既定と手動値が異なる組み合わせ（SWING→SWING_DOUBLE。新既定＝swingDefault）で isUnedited の分岐に直接当てる
+  // （SWING→SLIDE_SINGLE では −swingDefault が新既定と同値になり、維持でも差し替えでも同じ値で恒真になる）
+  const manual = -swingDefault;
+  const doubleDefault = defaultSwingSideFor(wall, graph, 1500, hingeSide, OpeningMechanism.SWING_DOUBLE);
+  assert.notEqual(manual, doubleDefault, '前提: 手動値と新既定が異なる');
+  assert.equal(swingSideAfterSubTypeChange(manual, wall, graph, 1500, hingeSide, OpeningMechanism.SWING, OpeningMechanism.SWING_DOUBLE), manual, '手動反転済みは維持');
+  // 引き戸側からの手動反転（旧既定＝slideDefault の逆）も維持
+  assert.equal(swingSideAfterSubTypeChange(-slideDefault, wall, graph, 1500, hingeSide, OpeningMechanism.SLIDE_SINGLE, OpeningMechanism.SWING_DOUBLE), -slideDefault, '引き戸で手動反転済みも維持');
+});
+
+test('defaultSwingSideFor: 引き戸の走る面（runPerpDir）は外壁＝−faceDir・内壁＝faceDir（isVertical×外壁/内壁×axisOffset±75×hingeSide±1 の16通り）', () => {
+  for (const isVertical of [false, true]) {
+    for (const isExteriorWall of [true, false]) {
+      for (const axisOffset of [75, -75]) {
+        for (const hingeSide of [-1, 1]) {
+          const { graph, wall } = (isVertical ? makeVerticalWallGraph : makeWallGraph)(3000, { isExteriorWall, axisOffset });
+          const swingSide = defaultSwingSideFor(wall, graph, 1500, hingeSide, OpeningMechanism.SLIDE_SINGLE);
+          const layout = outsetSlideLayout({ coord1: 500, coord2: 2050, isVertical, hingeSide, swingSide }, OpeningMechanism.SLIDE_SINGLE);
+          const expected = isExteriorWall ? -wall.faceDir : wall.faceDir;
+          assert.equal(layout.runPerpDir, expected, `isVertical=${isVertical} ext=${isExteriorWall} axisOffset=${axisOffset} hingeSide=${hingeSide}`);
+        }
+      }
+    }
+  }
+});
+
 // ---- placeOpeningWithDefaults: 配置entryの機構がSWING_IN/DREH_KIPPなら室内側(faceDirの逆)へ開く ----
 // placeOpeningWithDefaults は常に catalog[0]（各カテゴリ・壁種別の先頭エントリ）を配置するため、
 // 実際の初期配置でSWING_IN/DREH_KIPPが選ばれる経路は無い（配置後にonSubTypeChangeで選び直す）。
@@ -826,6 +915,35 @@ test('回帰: hingeSideだけを反転すると開く面が裏返る（修正前
     '前提: hingeSideのみの反転は開く面を裏返す（これが不具合）',
   );
   assert.notEqual(flippedHingeSides(before).swingSide, naive.swingSide, 'flippedHingeSidesはswingSideも反転して面を保つはず');
+});
+
+test('flippedHingeSides: 引き戸は走る面（runPerpDir）を保ち、引き代（pull）と穴（cut）が左右入れ替わる（isVertical×hingeSide×swingSide の8通り）', () => {
+  const slide = OpeningMechanism.SLIDE_SINGLE;
+  for (const isVertical of [false, true]) {
+    for (const hingeSide of [-1, 1]) {
+      for (const swingSide of [-1, 1]) {
+        const base = { coord1: 500, coord2: 2050, isVertical };
+        const before = { ...base, hingeSide, swingSide };
+        const after = { ...base, ...flippedHingeSides(before) };
+        const b = outsetSlideLayout(before, slide);
+        const a = outsetSlideLayout(after, slide);
+        const tag = `isVertical=${isVertical} hingeSide=${hingeSide} swingSide=${swingSide}`;
+        assert.equal(a.runPerpDir, b.runPerpDir, `走る面は維持 (${tag})`);
+        assert.equal(a.tailSide, -b.tailSide, `引き代側が入れ替わる (${tag})`);
+        const mirror = ([lo, hi]) => [500 + 2050 - hi, 500 + 2050 - lo];
+        assert.deepEqual(a.cut, mirror(b.cut), `穴は鏡像 (${tag})`);
+        assert.deepEqual(a.pull, mirror(b.pull), `引き代は鏡像 (${tag})`);
+        for (const [lo, hi] of [a.cut, a.pull]) assert.ok(lo >= 500 && hi <= 2050, `[lo,hi] 内 (${tag})`);
+      }
+    }
+  }
+});
+
+test('回帰: 引き戸で hingeSide だけを反転すると走る面（runPerpDir）が裏返る（flippedHingeSidesが防ぐ差分）', () => {
+  const before = { coord1: 500, coord2: 2050, isVertical: false, hingeSide: -1, swingSide: 1 };
+  const naive = { ...before, hingeSide: 1 };
+  const slide = OpeningMechanism.SLIDE_SINGLE;
+  assert.equal(outsetSlideLayout(naive, slide).runPerpDir, -outsetSlideLayout(before, slide).runPerpDir);
 });
 
 // ================================================================

@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
-import { getFittingOptions, openingSubTypeList, findCatalogEntry, defaultOpeningHeight, HINGED_MECHANISMS, hingeSideMatters, OpeningMechanism } from './openingCatalog.js';
+import { fittingSubTypeOptions, openingSubTypeList, findCatalogEntry, defaultOpeningHeight, HINGED_MECHANISMS, SIDED_SLIDE_MECHANISMS, hasHandedSides, sideFlipLabels, OpeningMechanism } from './openingCatalog.js';
 import { OpeningCategory } from '../core.js';
 import { findHostWall, maxOpeningWidthAt, findOpeningsOnWall, wallFaceRange } from './openingGeometry.js';
 import { frameOnlyPerpRange } from './openingPlanSymbolGeometry.js';
@@ -51,7 +51,7 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
   const wall = findHostWall(opening, graph);
   const wallKind = wall?.isExteriorWall ? 'exterior' : 'interior';
   const isWindow = opening.category === OpeningCategory.WINDOW;
-  const catalog  = isWindow ? openingSubTypeList('window') : getFittingOptions(wallKind);
+  const catalog  = isWindow ? openingSubTypeList('window') : fittingSubTypeOptions(wallKind, opening.subType);
   const entry    = findCatalogEntry(opening.category, opening.subType);
   const tag      = openingTagOf(opening, project);
   const mountLocation = openingMountLocation(opening, graph);
@@ -214,24 +214,24 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
     <div style={{ padding: 16, overflowY: 'auto' }}>
       <div style={{ marginBottom: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: 4, position: 'relative', display: 'flex', justifyContent: 'center', overflowX: 'auto' }}>
         <AutoScaledFigure primitives={figure} onEditDim={onEditDim} {...FIGURE_FRAME} />
-        {entry?.mechanism && HINGED_MECHANISMS.has(entry.mechanism) && (
+        {entry?.mechanism && (HINGED_MECHANISMS.has(entry.mechanism) || SIDED_SLIDE_MECHANISMS.has(entry.mechanism)) && (
           <div style={{ position: 'absolute', top: 4, right: 4, display: 'flex', gap: 4 }}>
-            {/* 吊元反転は「開く面を維持したまま吊元だけを反対の枠端へ移す」操作（hingeSideだけを
-                反転すると開く面まで裏返る。確定値は openingEdit.js flippedHingeSides に一本化）。
-                両開き系は吊元が意味を持たないためボタン自体を出さない（hingeSideMatters）。 */}
-            {hingeSideMatters(entry.mechanism, entry) && (
+            {/* 吊元反転（引き戸は引き代反転）は「開く面／走る面を維持したまま吊元／引き代だけを反対の枠端へ移す」
+                操作（hingeSideだけを反転すると面まで裏返る。確定値は openingEdit.js flippedHingeSides に一本化）。
+                両開き系は吊元が意味を持たないためボタン自体を出さない（hasHandedSides）。 */}
+            {hasHandedSides(entry.mechanism, entry) && (
               <button type="button" style={{ fontSize: 11, padding: '2px 6px' }}
                 onClick={() => commitEdit(() => runInAction(() => {
                   const next = flippedHingeSides(opening);
                   opening.hingeSide = next.hingeSide;
                   opening.swingSide = next.swingSide;
                 }))}>
-                吊元反転
+                {sideFlipLabels(entry.mechanism).hinge}
               </button>
             )}
             <button type="button" style={{ fontSize: 11, padding: '2px 6px' }}
               onClick={() => commitEdit(() => runInAction(() => { opening.swingSide = flippedSwingSide(opening); }))}>
-              開く方向反転
+              {sideFlipLabels(entry.mechanism).swing}
             </button>
           </div>
         )}

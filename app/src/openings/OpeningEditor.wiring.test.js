@@ -34,6 +34,28 @@ test('【不変条件】OpeningEditor.jsx の記号selectは getFixtureSymbols �
   assert.ok(!codeOnly.includes('getFixtureSymbols('), 'getFixtureSymbols( への直接呼び出しが残っている（未知記号の選択肢が黙って失われる旧経路へ退行）');
 });
 
+test('【不変条件】反転ボタン群の表示条件に SIDED_SLIDE_MECHANISMS が入り、吊元側は hasHandedSides で判定する', () => {
+  assert.ok(/entry\?\.mechanism\s*&&\s*\(HINGED_MECHANISMS\.has\(entry\.mechanism\)\s*\|\|\s*SIDED_SLIDE_MECHANISMS\.has\(entry\.mechanism\)\)\s*&&\s*\(/.test(codeOnly),
+    'ボタン群の条件に SIDED_SLIDE_MECHANISMS が無い');
+  assert.ok(/hasHandedSides\(entry\.mechanism,\s*entry\)\s*&&\s*\(/.test(codeOnly), '吊元反転ボタンの条件が hasHandedSides でない');
+});
+
+test('【不変条件】反転ボタンの文言は sideFlipLabels 経由で、吊元反転等の文字列がコード行に直書きされていない', () => {
+  assert.ok(/sideFlipLabels\(entry\.mechanism\)\.hinge/.test(codeOnly), 'hinge 文言が sideFlipLabels 経由でない');
+  assert.ok(/sideFlipLabels\(entry\.mechanism\)\.swing/.test(codeOnly), 'swing 文言が sideFlipLabels 経由でない');
+  // JSXコメント {/* ... */}（複数行）は行頭コメント除外で落ちないため、ここで塊ごと除く
+  const noJsxComments = codeOnly.replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
+  for (const s of ['吊元反転', '開く方向反転', '引き代反転', '走る面反転']) {
+    assert.ok(!noJsxComments.includes(s), `${s} がコード行に直書きされている`);
+  }
+});
+
+test('【不変条件】種別selectの選択肢は fittingSubTypeOptions 経由（現在値を必ず残す。getFittingOptions 直接呼びは不可）', () => {
+  assert.ok(/fittingSubTypeOptions\(wallKind,\s*opening\.subType\)/.test(codeOnly), 'fittingSubTypeOptions(wallKind, opening.subType) の呼び出しが無い');
+  assert.ok(!/\bgetFittingOptions\(/.test(codeOnly), 'getFittingOptions( の直接呼び出しが残っている');
+  assert.ok(/catalog\.map\(o => <option/.test(codeOnly), '種別 select が catalog を map していない');
+});
+
 test('【不変条件】記号selectのoptionsはfixtureSymbolOptionsの呼び出し結果をmapするだけ', () => {
   assert.ok(/fixtureSymbolOptions\([\s\S]*?\)\.map\(/.test(codeOnly), 'fixtureSymbolOptions(...).map( の形が見つからない');
 });

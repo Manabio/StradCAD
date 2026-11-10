@@ -36,9 +36,11 @@ export function slideTailSide(opening) {
  * runPerpDir＝扉が走る面の直交方向の符号＝(isVertical?1:−1)×swingSide×hingeSide（開き戸の開く側と同じ積。openingGeometry.js
  * swingSideTowardPerp に委ねる）。swingSide が ±1 でないときは 0（走る面が決まらない。swingSideTowardPerp の「0→1 の fallback」は
  * 開き戸の既定値決定のためのもので、ここで黙って片面に寄せると平面・展開の穴の側が一致しないので採らない）。
+ * host（任意・ホスト壁）が外壁（isExteriorWall===true）なら null（R12: 外壁の引き戸は外付けにしない＝従来描き）。
  */
-export function outsetSlideLayout(opening, mechanism) {
+export function outsetSlideLayout(opening, mechanism, host = null) {
   if (!isOutsetSlide(mechanism)) return null;
+  if (host?.isExteriorWall === true) return null; // R12: 外壁をホストにする引き戸は従来描き（外付けにしない）
   const { coord1, coord2 } = opening ?? {};
   if (!Number.isFinite(coord1) || !Number.isFinite(coord2)) return null;
   const lo = Math.min(coord1, coord2);
@@ -54,9 +56,9 @@ export function outsetSlideLayout(opening, mechanism) {
   return { doorWidth, cutLength, tailSide, cut, pull, runPerpDir };
 }
 
-/** 壁を全厚で欠く区間 [lo,hi]。外付け引き戸（配置が決まる）は穴 cut、それ以外・不正は開口全幅（恒等）。coord 非有限は null。 */
-export function openingCutSpan(opening, mechanism) {
+/** 壁を全厚で欠く区間 [lo,hi]。外付け引き戸（配置が決まる）は穴 cut、それ以外（引き戸でない・不正・host が外壁〔R12〕）は開口全幅（恒等）。coord 非有限は null。 */
+export function openingCutSpan(opening, mechanism, host = null) {
   const { coord1, coord2 } = opening ?? {};
   if (!Number.isFinite(coord1) || !Number.isFinite(coord2)) return null;
-  return outsetSlideLayout(opening, mechanism)?.cut ?? [Math.min(coord1, coord2), Math.max(coord1, coord2)];
+  return outsetSlideLayout(opening, mechanism, host)?.cut ?? [Math.min(coord1, coord2), Math.max(coord1, coord2)];
 }
