@@ -1,5 +1,5 @@
 // 読込み後の初期表示: 1階の通り芯の範囲を画面の中心に、全体が入るキリの良い倍率で描く。
-// App.jsx が bootReady 後に 1 回だけ呼ぶ。純モジュール（store.js・DOM を引かない。node:test から単体 import 可）。
+// App.jsx が restoreReady（階の復元完了。bootReady の壁 sweep より前）後に 1 回だけ呼び、呼び終わるまで図面を描かない。純モジュール（store.js・DOM を引かない。node:test から単体 import 可）。
 import { INITIAL_FIT_SCALE_DENOMS, INITIAL_FIT_MARGIN_PX } from './core/constants.js';
 import { drawingAreaRect } from './layout.js';
 

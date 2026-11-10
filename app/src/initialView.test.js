@@ -120,3 +120,60 @@ test('fitViewportToInitialView: 通り芯の無い文書・採用階の無い pr
   assert.equal(fitViewportToInitialView(vp, { planes: [], graphMap: new Map(), activeGraph: undefined }, { width: 1000, height: 800 }), false);
   assert.deepEqual({ scaleX: vp.scaleX, scaleY: vp.scaleY, offsetX: vp.offsetX, offsetY: vp.offsetY }, before);
 });
+
+// ---- 配線（2026-11-10 ユーザー指摘「読込み完了時、右端に描画されてから中央に再描画される」）:
+// 初期表示は bootReady（壁 sweep の後）でなく restoreReady（activate の直後）で合わせ、合わせ終わる
+// まで SceneLayers を描かない。ソーステキストを検査する（App.jsx・store.js は node:test から import できない）。
+import fs from 'node:fs';
+import path from 'node:path';
+import { readAppSrc, stripCommentLines } from './uiBusySourceScan.js';
+
+const storeCode = stripCommentLines(fs.readFileSync(path.resolve(import.meta.dirname, 'store.js'), 'utf8'));
+const appCode = stripCommentLines(readAppSrc());
+
+test('【配線】store.js: restoreReady は bootReady の中で activate の後・refreshWallsAllFloors の前に解決し、bootReady の完了（成否とも）でも解決する', () => {
+  assert.ok(/export const restoreReady = new Promise\(/.test(storeCode), 'restoreReady が export されていない');
+  const bootIdx = storeCode.indexOf('export const bootReady');
+  assert.ok(bootIdx >= 0);
+  const activateIdx = storeCode.indexOf('floorSwapManager.activate(', bootIdx);
+  const markIdx = storeCode.indexOf('markRestored();', bootIdx);
+  const sweepIdx = storeCode.indexOf('refreshWallsAllFloors(project', bootIdx);
+  assert.ok(activateIdx >= 0 && markIdx >= 0 && sweepIdx >= 0);
+  assert.ok(activateIdx < markIdx && markIdx < sweepIdx, 'markRestored() が activate の後・壁 sweep の前にない');
+  assert.ok(/bootReady\.then\(markRestored, markRestored\)/.test(storeCode), 'bootReady の完了で restoreReady を解決する保険がない');
+});
+
+test('【配線】App.jsx: restoreReady.then で activeFloorId 同期→fitViewportToInitialView→initialViewReady の順に行い、lockedOut は bootReady で判定する', () => {
+  const restoreIdx = appCode.indexOf('restoreReady.then(');
+  assert.ok(restoreIdx >= 0, 'restoreReady.then が無い');
+  const restoreBody = appCode.slice(restoreIdx, appCode.indexOf('.catch(console.error)', restoreIdx));
+  const a = restoreBody.indexOf('setActiveFloorId(project.activePlaneId)');
+  const f = restoreBody.indexOf('fitViewportToInitialView(viewport, project,');
+  const r = restoreBody.indexOf('setInitialViewReady(true)');
+  assert.ok(a >= 0 && f >= 0 && r >= 0, 'restoreReady.then の中に 同期・fit・関門 の3つが揃っていない');
+  assert.ok(a < f && f < r, '順序が 同期→fit→関門 でない');
+  // fit が投げても関門が開く: setInitialViewReady(true) は fit を囲む try の finally にある。
+  const tryIdx = restoreBody.lastIndexOf('try {', f);
+  const finallyIdx = restoreBody.indexOf('finally {', f);
+  assert.ok(tryIdx >= 0 && tryIdx < f && finallyIdx > f && finallyIdx < r, 'setInitialViewReady(true) が fit の try/finally の finally にない（fit が投げると図面が出ないまま残る）');
+  assert.ok(!restoreBody.includes('setLockedOut('), 'lockedOut の判定が restoreReady 側に移っている');
+  const bootIdx = appCode.indexOf('bootReady.then(');
+  assert.ok(bootIdx >= 0, 'bootReady.then が無い');
+  const bootBody = appCode.slice(bootIdx, appCode.indexOf('.catch(console.error)', bootIdx));
+  assert.ok(bootBody.includes('setLockedOut(!isSessionOwner())'));
+  assert.ok(!bootBody.includes('fitViewportToInitialView('), 'fit が bootReady 側に残っている（壁 sweep 後の二段階描画に退行）');
+  // 直下・直上階の peek は restoreReady（sweep 前）で読むため、sweep で他階が変わったら 1 回作り直す。
+  assert.ok(/changedPlaneIds/.test(bootBody) && /setFloorSyncTick\(t => t \+ 1\)/.test(bootBody), 'bootReady.then が changedPlaneIds を見て setFloorSyncTick していない（sweep 前の壁の peek が残る）');
+});
+
+test('【配線】store.js: bootReady は sweep の changedPlaneIds を解決値 { changedPlaneIds } で返す', () => {
+  const bootIdx = storeCode.indexOf('export const bootReady');
+  const body = storeCode.slice(bootIdx, storeCode.indexOf('bootReady.catch(console.error)', bootIdx));
+  assert.ok(/return \{ changedPlaneIds: sweptPlaneIds \};/.test(body), 'bootReady が { changedPlaneIds } を返していない');
+  assert.ok(/sweptPlaneIds = changedPlaneIds;/.test(body), 'sweep の changedPlaneIds を解決値へ写していない');
+});
+
+test('【配線】App.jsx: SceneLayers は initialViewReady が立つまでマウントしない', () => {
+  assert.ok(/\{initialViewReady && <SceneLayers\b/.test(appCode), 'SceneLayers が initialViewReady で関門されていない');
+  assert.ok(/useState\(false\)/.test(appCode.slice(appCode.indexOf('const [initialViewReady'), appCode.indexOf('const [initialViewReady') + 120)), 'initialViewReady の初期値が false でない');
+});

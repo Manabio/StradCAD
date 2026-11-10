@@ -5,7 +5,7 @@ import { undoManager } from './undoManager.js';
 import { serializeGraph, serializeGraphWithFreshLineIds, restoreGraph } from './graphSnapshot.js';
 import { Stage } from 'react-konva';
 import {
-  useStore, addFloor, switchFloor, addAlternativeFloor, removeFloor, resetAll, bootReady,
+  useStore, addFloor, switchFloor, addAlternativeFloor, removeFloor, resetAll, bootReady, restoreReady,
   exportDocument, importDocument, applyCatalogResolutions,
 } from './store.js';
 import { replaceRowsByScenario } from './catalog/resolveQueue.js';
@@ -192,6 +192,9 @@ const App = observer(() => {
   const [activeFloorId,   setActiveFloorId]   = useState(project.activePlaneId);
   // 排他セッションロック（storage/sessionLock.js）: 別タブが編集セッションを保持している場合 true。
   const [lockedOut,       setLockedOut]       = useState(false);
+  // 読込み後の初期表示を合わせ終わるまで true にならない描画の関門（restoreReady 後）。false の間は
+  // SceneLayers を描かない——復元直後の図面が Viewport の既定位置で一度描かれてから中央へ飛ぶのを防ぐ。
+  const [initialViewReady, setInitialViewReady] = useState(false);
   // 上階ビュー: 直下階の階段を peek して上階表現で描くための解決済みエントリ。
   // null=未解決（初回マウント・階/モード切替直後で peek 未完了）、配列=解決済み（空配列含む）。
   // 2a壁クリップ（stairUnderClips）の中間階ガードは null の間、安全側で判定不能扱いにする
@@ -663,13 +666,29 @@ const App = observer(() => {
   // 起動直後の1回限りの同期はその経路の外（switchFloor系のどの関数も未実行の時点）なので安全。
   useEffect(() => {
     let cancelled = false;
-    bootReady.then(() => {
+    // 階の復元完了（restoreReady。bootReady の壁 sweep より前）で activeFloorId を同期し、初期表示を
+    // 合わせてから描画の関門（initialViewReady）を開く。bootReady を待つと sweep の間に既定位置で
+    // 一度描かれてしまう（ユーザー指摘 2026-11-10。store.js の restoreReady の注記）。
+    restoreReady.then(() => {
       if (cancelled) return;
       setActiveFloorId(project.activePlaneId);
-      setLockedOut(!isSessionOwner());
       // 読込み後の初期表示（2026-11-06）: 1階の通り芯の範囲を描画エリアの中心に、全体が入るキリの良い
       // 倍率で描く。通り芯の無い空の文書は Viewport の既定（原点を左下・1/100）のまま。
-      fitViewportToInitialView(viewport, project, { width: window.innerWidth, height: window.innerHeight });
+      // fit が投げても関門は必ず開く（開かないと図面が出ないまま残る。QA 指摘 2026-11-10）。
+      try {
+        fitViewportToInitialView(viewport, project, { width: window.innerWidth, height: window.innerHeight });
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setInitialViewReady(true);
+      }
+    }).catch(console.error);
+    bootReady.then((boot) => {
+      if (cancelled) return;
+      setLockedOut(!isSessionOwner());
+      // 直下・直上階の peek（activeFloorId の effect）は restoreReady で走り、壁 sweep の前の壁を読む。
+      // sweep で他階の壁が変わっていたら 1 回だけ作り直す（変わっていなければ余計な IDB 読みをしない）。
+      if ((boot?.changedPlaneIds?.length ?? 0) > 0) setFloorSyncTick(t => t + 1);
     }).catch(console.error);
     // カタログ関連の通知（読込み時sweepのR17重複登録禁止例外・overlay読込み失敗・保存時の
     // 未解決材コード等）をトースト表示する（2026-09-22 QA指摘B残存→再QA指摘Major-D）。
@@ -3105,7 +3124,7 @@ const App = observer(() => {
           onTouchEnd={pointerHandlers.onTouchEnd}
           style={{ cursor }}
         >
-          <SceneLayers
+          {initialViewReady && <SceneLayers
             graph={graph}
             project={project}
             appMode={appMode}
@@ -3134,7 +3153,7 @@ const App = observer(() => {
             onMemberClick={openMemberCard}
             setStatusMenu={setStatusMenu}
             onToast={msg => setToast({ msg, key: Date.now() })}
-          />
+          />}
         </Stage>
       </div>
 

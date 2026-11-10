@@ -980,7 +980,7 @@ export const PdfReject = Object.freeze({
   UNEXPECTED:         'unexpected',        // 純関数内の想定外の例外（握って通知）
 });
 
-// ---- 読込み後の初期表示（initialView.js。App.jsx の bootReady 後に 1 回） ----
+// ---- 読込み後の初期表示（initialView.js。App.jsx の restoreReady 後に 1 回） ----
 /** 初期表示の縮尺分母の候補（キリの良い倍率）。1階の通り芯の範囲が描画エリアに収まる最小の分母を選ぶ。 */
 export const INITIAL_FIT_SCALE_DENOMS = Object.freeze([20, 30, 50, 100, 150, 200, 300, 500, 1000]);
 /** 初期表示で通り芯の範囲と描画エリア内端の間に空ける余白（px）。壁の張り出し・軒先線ぶんの逃げ。 */

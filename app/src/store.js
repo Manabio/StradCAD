@@ -471,10 +471,21 @@ export async function applyCatalogResolutions(decisions) {
   project.setCatalogResolveRows(rows.filter(r => deferredIds.has(r.id)));
 }
 
+// 階の復元完了（floorSwapManager.activate の直後＝描けるデータが揃った時点）を表すPromise。
+// bootReady より先に解決する——bootReady はこの後に全階の壁 sweep（refreshWallsAllFloors）を
+// await するため、bootReady を待ってから初期表示を合わせると、sweep の間に復元直後の図面が
+// Viewport の既定（原点を左下・1/100）のまま描かれてから中央へ飛ぶ二段階の見え方になる
+// （ユーザー指摘 2026-11-10）。App.jsx はこちらで初期表示を合わせ、合わせ終わるまで図面を描かない。
+// セッションロックが取れないタブや復元の失敗では activate まで届かないため、bootReady の
+// 完了（成否を問わず）でも解決させ、App.jsx 側の描画の関門が開かずに残らないようにする。
+let markRestored;
+export const restoreReady = new Promise(resolve => { markRestored = resolve; });
+
 /**
- * 起動時IDB初期化の完了を表すPromise。App.jsx がマウント時に一度だけ購読し、
- * 完了後の project.activePlaneId（restorePlanesFromIDB が差し替え得る）を
- * React state（activeFloorId）へ反映する（QA Finding 1）。
+ * 起動時IDB初期化の完了を表すPromise。App.jsx がマウント時に一度だけ購読し、セッションロックの
+ * 判定（lockedOut）と、壁 sweep で変わった階があれば直下・直上階の peek の作り直し（floorSyncTick）を行う
+ * （project.activePlaneId の React state（activeFloorId）への反映と初期表示は restoreReady 側。QA Finding 1）。
+ * 解決値は { changedPlaneIds }（sweep で壁を作り直した階の id。ロック未取得は undefined）。
  * ここでは意図的に .catch を付けず、rejection をそのまま呼び出し側（App.jsx）へ伝播させる
  * ——ただし何も購読しない場合でも黙って消えないよう、直後に単独の .catch(console.error) を
  * 同じ Promise へ別途チェーンしてログする（Promiseは複数箇所から独立して購読できるため、
@@ -507,6 +518,8 @@ export const bootReady = (async () => {
   await restoreProjectInfoFromIDB();
   await floorSwapManager.activate(project.activePlane, project.activeGraph);
   floorSwapManager.startSiteDirtyTracking(project.site);
+  // 描けるデータが揃った（restoreReady）。壁 sweep の前に解決する——restoreReady の注記のとおり。
+  markRestored();
   // 読込み時の全階壁sweep（壁の再生成をFinishModeStateから独立させる計画のステップ5。
   // 裁定2026-09-15）: 文書を開いた時点で主構造・階別構造・下地材コードの入力と壁の鍵が
   // 食い違っている階（他アプリ間での文書共有・旧バージョンの文書等）があれば、仕上げ脱出・
@@ -516,9 +529,13 @@ export const bootReady = (async () => {
   // 保存され次回は走らない。鍵一致で何も変わらなければ dirty にしない）。sweep が reject
   // しても bootReady 自体は失敗させない（壁は古いまま＝次の境界で再試行される自己修復性の
   // ため、try/catch で握って続行する）。
+  // sweep で壁を作り直した階の id を返す——App.jsx が restoreReady（sweep 前）で読んだ直下・直上階の
+  // peek を、変更があったときだけ作り直す（floorSyncTick）ため。失敗・変更なしは空配列。
+  let sweptPlaneIds = [];
   try {
     const { changedPlaneIds } = await refreshWallsAllFloors(project, { pushUndo: false, pushActiveStructuralUndo: false });
     if (changedPlaneIds.length > 0) markDirty();
+    sweptPlaneIds = changedPlaneIds;
   } catch (e) {
     // カタログ重複登録禁止の合成後例外は握りつぶさず利用者に伝える（2026-09-22 QA指摘B
     // 残存）——bootReady自体は失敗させない設計のまま、project.catalogError（観測可能な
@@ -530,8 +547,11 @@ export const bootReady = (async () => {
       console.error(e);
     }
   }
+  return { changedPlaneIds: sweptPlaneIds };
 })();
 bootReady.catch(console.error);
+// activate まで届かなかった起動（ロック未取得・復元失敗）でも restoreReady を解決する（二重解決は無害）。
+bootReady.then(markRestored, markRestored);
 
 // ----------------------------------------------------------------
 // フロア管理

@@ -33,6 +33,9 @@
 ## bootReadyは全階activate後に壁の鮮度sweepを1回通す（undo対象外・dirtyにする）
 `store.js`の`bootReady`は`floorSwapManager.activate`の直後に`refreshWallsAllFloors`（`wallRefresh.js`。壁の再生成をFinishModeStateから独立させる計画のステップ5）を`pushUndo:false`で呼び、鍵不一致の階だけ壁を作り直す。変更があれば`markDirty()`するが、鍵が全階一致していれば何もせず`dirty`にもしない（`markDirty`は`beforeunload`の警告用フラグだけで、undoスタック長には連動しない）。sweepが失敗しても`bootReady`自体は握って続行する。
 
+## restoreReadyは階の復元完了（activate直後・壁sweepの前）で解決し、初期表示はこちらで合わせる
+`store.js`の`restoreReady`は`floorSwapManager.activate`と`startSiteDirtyTracking`の直後（壁sweepの前）に解決する。`App.jsx`は`bootReady`でなく`restoreReady`で`activeFloorId`の同期と読込み後の初期表示（`initialView.js`）を行い、合わせ終わるまで`SceneLayers`を描かない（`initialViewReady`）。`bootReady`を待つと、sweepの間に復元直後の図面が`Viewport`の既定（原点を左下・1/100）で一度描かれてから中央へ飛ぶ（2026-11-10）。ロック未取得・復元失敗で`activate`まで届かない起動でも`bootReady`の完了で`restoreReady`を解決し、描画の関門が閉じたまま残らないようにする。`lockedOut`の判定は従来どおり`bootReady`で行う。`activeFloorId`の同期が早まったぶん、直下・直上階のpeek（`App.jsx`の`activeFloorId`に依存するeffect）はsweep前の壁を読むため、`bootReady`は解決値`{ changedPlaneIds }`（sweepで壁を作り直した階）を返し、`App.jsx`は1件以上あるときだけ`floorSyncTick`を進めてpeekを作り直す（QA指摘 2026-11-10）。
+
 ## セッションロック（storage/sessionLock.js）— 単一ライター、自動昇格なし
 `openDB()`は冒頭で`isSessionOwner()===false`ならthrowし、以降の全読み書き（全公開関数がopenDB経由）をこの1箇所で塞ぐ。read-only編集・別タブ間の同期・マージは提供しない——マージ機構を持たないこのアプリでは、2つ目以降のタブに「別文書として振る舞う余地」を与えるより「1タブだけで編集」を強制する方が競合破損を避けられるという判断。ロック保持タブが閉じてロックが空いても、既存の非オーナータブが自動でロックを奪いに行くことはない（自動昇格なし）——再取得はユーザーの明示的なリロードのみ。Web Locks API非対応環境はフォールバックし、排他されない（現行動作を維持）。
 
