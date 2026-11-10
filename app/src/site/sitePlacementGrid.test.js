@@ -428,123 +428,163 @@ test('【失敗系】computeSiteGapDimensions: 敷地が通り芯の外へ出な
   assert.deepEqual(computeSiteGapDimensions({ gridLines: [], siteSegments: RECT_SITE }), []);
 });
 
-test('composeSitePlacementGrid: 長方形敷地は上・左の最外に「はなれ」の段（tier＝既存の段数 2）。下・右は値が同じなので出さない', () => {
+test('composeSitePlacementGrid: 長方形敷地は上・左の間隔の段（tier 0）の同じ行の先頭・末尾にはなれが入る（S15）。全長の段は通り芯どうしのまま・はなれだけの行は無い', () => {
   const grid = realGrid(RECT_SITE);
-  assert.equal(grid.rows.length, 8, 'X: 間隔・全長＋はなれ 2 行（左・右）／Y: 間隔・全長＋はなれ 2 行（上・下）。はなれは測った側ごとに 1 行');
-  const top = gapRowsOn(grid, DimensionSide.TOP);
-  assert.deepEqual(top.map(r => [r.axis, r.tier]), [[V, 2], [V, 2]], '同じ段');
-  assert.deepEqual(top.map(r => r.segments), [[{ v1: -2000, v2: 0, length: 2000 }], [{ v1: 9100, v2: 11000, length: 1900 }]]);
-  assert.deepEqual(top.map(r => r.anchors), [[-2000, 0], [9100, 11000]]);
-  const left = gapRowsOn(grid, DimensionSide.LEFT);
-  assert.deepEqual(left.map(r => [r.axis, r.tier]), [[H, 2], [H, 2]]);
-  assert.deepEqual(left.map(r => r.segments), [[{ v1: -13500, v2: -12614, length: 886 }], [{ v1: 0, v2: 1500, length: 1500 }]]);
-  assert.equal(gapRowOf(grid, DimensionSide.BOTTOM), undefined);
-  assert.equal(gapRowOf(grid, DimensionSide.RIGHT), undefined);
-  assert.equal(new Set(grid.rows.map(r => r.key)).size, 8, 'key は重ならない');
+  assert.equal(grid.rows.length, 4, 'X: 間隔・全長／Y: 間隔・全長（はなれは行を増やさない）');
+  assert.equal(gapRowsOf(grid).length, 0, 'はなれだけの行は無い（下・右は値が同じ）');
+  const x0 = rowOf(grid, V, 0);
+  assert.equal(x0.key, `gr/${V}/0`, 'はなれを含んでも key は従来どおり');
+  assert.equal(x0.side, DimensionSide.TOP);
+  assert.deepEqual(x0.segments.map(s => s.length), [2000, 1820, 1820, 3640, 1820, 1900]);
+  assert.deepEqual(x0.segments[0], { v1: -2000, v2: 0, length: 2000 });
+  assert.deepEqual(x0.segments[5], { v1: 9100, v2: 11000, length: 1900 });
+  assert.deepEqual(x0.anchors, [-2000, 0, 1820, 3640, 7280, 9100, 11000]);
+  assert.deepEqual(x0.extensions, [{ at: -2000, from: -12614 }, { at: 11000, from: -12614 }], '足は境界線側の端だけ（at＝境界点の x・from＝上端の通り芯の y）');
+  const x1 = rowOf(grid, V, 1);
+  assert.deepEqual(x1.segments, [{ v1: 0, v2: 9100, length: 9100 }], '全長の段は不変');
+  assert.deepEqual(x1.anchors, [0, 9100]);
+  assert.deepEqual(x1.extensions, []);
+  const y0 = rowOf(grid, H, 0);
+  assert.equal(y0.key, `gr/${H}/0`);
+  assert.equal(y0.side, DimensionSide.LEFT);
+  assert.deepEqual(y0.segments.map(s => s.length), [886, 5614, 3360, 3640, 1500], '上から下の順');
+  assert.deepEqual(y0.anchors, [-13500, -12614, -7000, -3640, 0, 1500]);
+  assert.deepEqual(y0.extensions, [{ at: -13500, from: 0 }, { at: 1500, from: 0 }], '足は at＝境界点の y・from＝左端の通り芯の x');
+  assert.deepEqual(rowOf(grid, H, 1).segments, [{ v1: -12614, v2: 0, length: 12614 }]);
+  assert.equal(new Set(grid.rows.map(r => r.key)).size, 4, 'key は重ならない');
 });
 
-test('composeSitePlacementGrid: 通り芯が少なく既存の段が 1 段（Y 2 本＝間隔だけ）なら、はなれの tier は 1。既存の段が無ければ 0', () => {
-  const grid = realGrid(RECT_SITE, mkLines([0, 9100], [-12614, 0]));
-  assert.equal(gapRowOf(grid, DimensionSide.TOP).tier, 1);
-  assert.equal(gapRowOf(grid, DimensionSide.LEFT).tier, 1);
-  const none = realGrid(RECT_SITE, mkLines([0], [-5000]));
-  assert.equal(gapRowOf(none, DimensionSide.TOP).tier, 0);
-  assert.equal(gapRowOf(none, DimensionSide.LEFT).tier, 0);
+test('composeSitePlacementGrid: 通り芯が 2 本（間隔の段だけ・全長の段なし）でも、はなれは間隔の段の同じ行に入る。1 本で間隔の段が無い軸は、はなれだけの tier 0 の行（側ごとに 1 行）', () => {
+  const two = realGrid(RECT_SITE, mkLines([0, 9100], [-12614, 0]));
+  assert.equal(two.rows.length, 2);
+  assert.deepEqual(rowOf(two, V, 0).segments.map(s => s.length), [2000, 9100, 1900]);
+  assert.deepEqual(rowOf(two, H, 0).segments.map(s => s.length), [886, 12614, 1500]);
+  assert.equal(gapRowsOf(two).length, 0);
+  const one = realGrid(RECT_SITE, mkLines([0], [-5000]));
+  assert.equal(one.rows.length, 4, '間隔の段が無いので、はなれだけの行が側ごとに 1 行（X 軸の左右・Y 軸の上下）');
+  const top = gapRowsOn(one, DimensionSide.TOP);
+  assert.deepEqual(top.map(r => [r.key, r.axis, r.tier]), [[`gr/${V}/gap/top/left`, V, 0], [`gr/${V}/gap/top/right`, V, 0]]);
+  assert.deepEqual(top.map(r => r.segments), [[{ v1: -2000, v2: 0, length: 2000 }], [{ v1: 0, v2: 11000, length: 11000 }]]);
+  assert.deepEqual(top.map(r => r.extensions), [[{ at: -2000, from: -5000 }], [{ at: 11000, from: -5000 }]]);
+  const left = gapRowsOn(one, DimensionSide.LEFT);
+  assert.deepEqual(left.map(r => [r.axis, r.tier]), [[H, 0], [H, 0]]);
+  assert.deepEqual(left.map(r => r.segments), [[{ v1: -13500, v2: -5000, length: 8500 }], [{ v1: -5000, v2: 1500, length: 6500 }]]);
+  assert.deepEqual(left.map(r => r.extensions), [[{ at: -13500, from: 0 }], [{ at: 1500, from: 0 }]]);
 });
 
-test('【失敗系】composeSitePlacementGrid: X 最小の通り芯が境界線上（x＝−2000・はなれ 0）なら左向きの「はなれ」を出さない（t>0 の交点にならない）', () => {
-  const grid = realGrid(RECT_SITE, mkLines([-2000, 1820, 9100], [-12614, -7000, -3640, 0]));
-  const gaps = computeSiteGapDimensions({ gridLines: mkLines([-2000, 1820, 9100], [-12614, -7000, -3640, 0]), siteSegments: RECT_SITE });
+test('【失敗系】composeSitePlacementGrid: X 最小の通り芯が境界線上（x＝−2000・はなれ 0）なら左向きの「はなれ」を出さない（t>0 の交点にならない）。間隔の段には右だけが入り足も右だけ', () => {
+  const lines = mkLines([-2000, 1820, 9100], [-12614, -7000, -3640, 0]);
+  const grid = realGrid(RECT_SITE, lines);
+  const gaps = computeSiteGapDimensions({ gridLines: lines, siteSegments: RECT_SITE });
   assert.equal(gaps.filter(g => g.side === DimensionSide.LEFT).length, 0, '左向きのはなれは出ない');
   assert.equal(gaps.filter(g => g.side === DimensionSide.RIGHT).length, 2, '右向きは出る');
-  assert.deepEqual(gapLengths(grid, DimensionSide.TOP), [1900], '上の行は右のはなれだけ');
+  const x0 = rowOf(grid, V, 0);
+  assert.deepEqual(x0.segments.map(s => s.length), [3820, 7280, 1900], '先頭に左のはなれは無い');
+  assert.deepEqual(x0.anchors, [-2000, 1820, 9100, 11000]);
+  assert.deepEqual(x0.extensions, [{ at: 11000, from: -12614 }]);
 });
 
-test('composeSitePlacementGrid: 左辺が傾いて下端の値が違うと、下（BOTTOM・tier 0）に「はなれ」だけの行が出る。右は上下とも同じなので出ない', () => {
+test('composeSitePlacementGrid: 左辺が傾いて下端の値が違うと、下（BOTTOM・tier 0）に「はなれ」だけの行と足が出る。右は上下とも同じなので出ない。上の間隔の段は 2882・…・1900', () => {
   const trapezoid = polySegs([[-3000, -13500], [11000, -13500], [11000, 1500], [-1000, 1500]]);
   const grid = realGrid(trapezoid);
-  assert.deepEqual(gapLengths(grid, DimensionSide.TOP), [2882, 1900], '上端（Y 最小）の左右');
+  assert.deepEqual(rowOf(grid, V, 0).segments.map(s => s.length), [2882, 1820, 1820, 3640, 1820, 1900], '上端（Y 最小）の左右');
   const bottom = gapRowsOn(grid, DimensionSide.BOTTOM);
   assert.deepEqual(bottom.map(r => [r.axis, r.tier]), [[V, 0], [V, 0]]);
   assert.deepEqual(bottom.map(r => r.segments), [[{ v1: -1200, v2: 0, length: 1200 }], [{ v1: 9100, v2: 11000, length: 1900 }]], '下端（Y 最大）の左右。1 行 1 区間');
+  assert.deepEqual(bottom.map(r => r.extensions.map(e => e.from)), [[0], [0]], '足の from＝下端の通り芯の y');
+  closeTo(bottom[0].extensions[0].at, -1200);
+  assert.equal(bottom[1].extensions[0].at, 11000);
   assert.equal(gapRowOf(grid, DimensionSide.RIGHT), undefined);
-  assert.equal(gapRowsOf(grid).length, 6, '上 2・左 2・下 2');
+  assert.equal(gapRowsOf(grid).length, 2, '下の 2 行だけ');
+  assert.equal(grid.rows.length, 6);
 });
 
-test('composeSitePlacementGrid: 上辺が傾いて右端の値が違うと、右（RIGHT・tier 0）に行が出る。値が違うかは Math.round 後で比べる（左端 809 と右端 459）', () => {
+test('composeSitePlacementGrid: 上辺が傾いて右端の値が違うと、右（RIGHT・tier 0）にはなれだけの行と足が出る。値が違うかは Math.round 後で比べる（左端 809 と右端 459）', () => {
   const slantTop = polySegs([[-2000, -13500], [11000, -13000], [11000, 1500], [-2000, 1500]]);
   const grid = realGrid(slantTop);
   const right = gapRowsOn(grid, DimensionSide.RIGHT);
   assert.deepEqual(right.map(r => [r.axis, r.tier]), [[H, 0], [H, 0]]);
   assert.deepEqual(gapLengths(grid, DimensionSide.RIGHT), [459, 1500], '右端（X 最大 9100）の上下');
   closeTo(right[0].segments[0].v1, -13500 + 500 * 11100 / 13000);
-  assert.deepEqual(gapLengths(grid, DimensionSide.LEFT), [809, 1500], '左端（X 最小 0）の上下');
+  closeTo(right[0].extensions[0].at, -13500 + 500 * 11100 / 13000);
+  assert.equal(right[0].extensions[0].from, 9100, '足の from＝右端の通り芯の x');
+  assert.deepEqual(rowOf(grid, H, 0).segments.map(s => s.length), [809, 5614, 3360, 3640, 1500], '左端（X 最小 0）の上下');
   assert.equal(gapRowOf(grid, DimensionSide.BOTTOM), undefined);
 });
 
-test('【失敗系】composeSitePlacementGrid: 敷地なし（siteSegmentsPlaced 無し・空）は従来どおり（はなれの行なし・他の行も変わらない）。通り芯が片軸だけでも例外なし', () => {
+test('【失敗系】composeSitePlacementGrid: 敷地なし（siteSegmentsPlaced 無し・空）は従来どおり（はなれの区間・足なし・行も不変）。通り芯が片軸だけでも例外なし', () => {
   const base = composeSitePlacementGrid({ gridLines: REAL_GRID, roofBounds: REAL_ROOF });
   const empty = composeSitePlacementGrid({ gridLines: REAL_GRID, roofBounds: REAL_ROOF, siteSegmentsPlaced: [] });
   assert.equal(gapRowsOf(base).length, 0);
   assert.deepEqual(empty, base);
   assert.equal(base.rows.length, 4);
+  assert.deepEqual(rowOf(base, V, 0).segments.map(s => s.length), [1820, 1820, 3640, 1820], 'はなれの区間なし');
+  assert.ok(base.rows.every(r => r.extensions.length === 0), '足なし');
   const xOnly = realGrid(RECT_SITE, mkLines([0, 3640, 9100], []));
   assert.equal(gapRowsOf(xOnly).length, 0);
 });
 
-test('layoutSitePlacementGrid: はなれの段は既存の段の外側（上・左の最外 tier 2）。線は枠の縁から 32＋2×24＝80px、数値は線の手前（−11−2px）', () => {
+test('layoutSitePlacementGrid: はなれは間隔の段（枠の縁から 32px）の同じ行で、線は境界点から境界点まで通る。足は測点から寸法線まで（上は [at, from, at, lineCoord]・左は [from, at, lineCoord, at]）', () => {
   const l = layoutSitePlacementGrid(realGrid(RECT_SITE), 1);
-  const tops = l.rows.filter(r => r.key.includes('/gap/top/'));
-  assert.equal(tops.length, 2, '左のはなれ・右のはなれの 2 行');
-  for (const top of tops) {
-    near(top.lineCoord, -13500 - 80);
-    near(top.normalNumCoord, -13500 - 80 - 13);
-    assert.ok(top.lineCoord < l.rows.find(r => r.axis === V && r.key.endsWith('/1')).lineCoord, '全長の段より外');
-  }
-  assert.deepEqual(tops.map(t => t.dots.map(d => [d.x, d.y])), [[[-2000, -13580], [0, -13580]], [[9100, -13580], [11000, -13580]]], '線は区間だけ（間の通り芯の範囲には引かない）');
-  const lefts = l.rows.filter(r => r.key.includes('/gap/left/'));
-  assert.deepEqual(lefts.map(t => t.dots.map(d => [d.x, d.y])), [[[-2080, -13500], [-2080, -12614]], [[-2080, 0], [-2080, 1500]]]);
-  lefts.forEach(t => near(t.lineCoord, -2000 - 80));
+  const top = l.rows.find(r => r.key === `gr/${V}/0`);
+  near(top.lineCoord, -13500 - 32);
+  near(top.normalNumCoord, -13500 - 32 - 13);
+  assert.deepEqual(top.dots.map(d => [d.x, d.y]), [-2000, 0, 1820, 3640, 7280, 9100, 11000].map(x => [x, -13532]), '点は境界点から境界点まで（寸法線は端から端の 1 本）');
+  assert.deepEqual(top.extensions, [
+    { key: `gr/${V}/0/ext/0`, points: [-2000, -12614, -2000, -13532] },
+    { key: `gr/${V}/0/ext/1`, points: [11000, -12614, 11000, -13532] },
+  ], '測点（境界線上・上端の通り芯の y）から寸法線まで');
+  const total = l.rows.find(r => r.key === `gr/${V}/1`);
+  assert.ok(total.lineCoord < top.lineCoord, '全長の段は間隔の段より外（上は座標が小さい側）');
+  const left = l.rows.find(r => r.key === `gr/${H}/0`);
+  near(left.lineCoord, -2000 - 32);
+  assert.deepEqual(left.dots.map(d => [d.x, d.y]), [-13500, -12614, -7000, -3640, 0, 1500].map(y => [-2032, y]));
+  assert.deepEqual(left.extensions.map(e => e.points), [[0, -13500, -2032, -13500], [0, 1500, -2032, 1500]]);
+  assert.deepEqual(total.extensions, [], '通り芯どうしの段に足は無い');
 });
 
-test('layoutSitePlacementGrid: 丸ラベルは段が 1 つ増えた分（24px）だけ外へ。上下左右ともはなれなしの配置より外（下・右に行が無ければ上・左と同じ距離）', () => {
+test('layoutSitePlacementGrid: 丸ラベルの離れは S13 の値（2 段＝32＋24＋19＋12＝87）。はなれの有無・上下左右で同じ（下・右に行が無ければ上・左と同じ距離）', () => {
   const withGap = layoutSitePlacementGrid(realGrid(RECT_SITE), 1);
   // 同じ枠（敷地の外接矩形）で、はなれだけ測らない（siteSegmentsPlaced を渡さない）
   const without = layoutSitePlacementGrid(composeSitePlacementGrid({
     gridLines: REAL_GRID, roofBounds: REAL_ROOF, siteBounds: boundsOfPointLists(RECT_SITE.map(s => s.points)),
   }), 1);
-  // はなれなし（X・Y とも 2 段）: 32＋24＋19＋12＝87。はなれあり（3 段）: 111
   const sx = (l, id) => l.labels.filter(t => t.id === id);
-  const x = sx(withGap, 'x1'), x0 = sx(without, 'x1');
-  near(x0[0].y, -13500 - 87);
-  near(x[0].y, -13500 - 111);
-  near(x[1].y, 1500 + 111);
-  const y = sx(withGap, 'y1'), y0 = sx(without, 'y1');
-  near(y0[0].x, -2000 - 87);
-  near(y[0].x, -2000 - 111);
-  near(y[1].x, 11000 + 111);
+  for (const l of [withGap, without]) {
+    const x = sx(l, 'x1'), y = sx(l, 'y1');
+    near(x[0].y, -13500 - 87);
+    near(x[1].y, 1500 + 87);
+    near(y[0].x, -2000 - 87);
+    near(y[1].x, 11000 + 87);
+  }
 });
 
-test('layoutSitePlacementGrid: 下（BOTTOM）の行は枠の下端から外（＋）へ 32px、数値は線の外側（＋2px）。下の丸ラベルはその側の行数（1 段）で離す', () => {
+test('layoutSitePlacementGrid: 下（BOTTOM）の行は枠の下端から外（＋）へ 32px、数値は線の外側（＋2px）。足は測点から寸法線まで。下の丸ラベルはその側の行数（1 段）で離す', () => {
   const trapezoid = polySegs([[-3000, -13500], [11000, -13500], [11000, 1500], [-1000, 1500]]);
   const l = layoutSitePlacementGrid(realGrid(trapezoid), 1);
   const bottoms = l.rows.filter(r => r.key.includes('/gap/bottom/'));
+  assert.equal(bottoms.length, 2);
   for (const b of bottoms) {
     near(b.lineCoord, 1500 + 32);
     near(b.normalNumCoord, 1500 + 32 + 2);
   }
   assert.deepEqual(bottoms.map(b => b.dots.map(d => [d.x, d.y])), [[[-1200, 1532], [0, 1532]], [[9100, 1532], [11000, 1532]]]);
+  const [bx1, by1, bx2, by2] = bottoms[0].extensions[0].points;
+  near(bx1, -1200);
+  near(bx2, -1200);
+  assert.deepEqual([by1, by2], [0, 1532], '下端の通り芯（y＝0）から寸法線へ');
+  assert.deepEqual(bottoms[1].extensions.map(e => e.points), [[11000, 0, 11000, 1532]], '下端の通り芯（y＝0）から寸法線へ');
   const x = l.labels.filter(t => t.id === 'x1');
-  near(x[0].y, -13500 - 111, '上は 3 段');
+  near(x[0].y, -13500 - 87, '上は 2 段');
   near(x[1].y, 1500 + 63, '下は行 1 段: 32＋19＋12');
-  // 右には行が無い（上下とも同じ値）→ 左と同じ 3 段の距離。左の行は frame の左縁（−3000）基準
+  // 右には行が無い（上下とも同じ値）→ 左と同じ 2 段の距離。左の行は frame の左縁（−3000）基準
   const y = l.labels.filter(t => t.id === 'y1');
-  near(y[0].x, -3000 - 111);
-  near(y[1].x, 11000 + 111);
-  l.rows.filter(r => r.key.includes('/gap/left/')).forEach(r => near(r.lineCoord, -3000 - 80));
+  near(y[0].x, -3000 - 87);
+  near(y[1].x, 11000 + 87);
+  near(l.rows.find(r => r.key === `gr/${H}/0`).lineCoord, -3000 - 32);
 });
 
-test('layoutSitePlacementGrid: 右（RIGHT）の行は枠の右端から外へ 32px。右の丸ラベルは 1 段（32＋19＋12＝63）', () => {
+test('layoutSitePlacementGrid: 右（RIGHT）の行は枠の右端から外へ 32px。足は [from, at, lineCoord, at]。右の丸ラベルは 1 段（32＋19＋12＝63）', () => {
   const slantTop = polySegs([[-2000, -13500], [11000, -13000], [11000, 1500], [-2000, 1500]]);
   const l = layoutSitePlacementGrid(realGrid(slantTop), 1);
   const rights = l.rows.filter(r => r.key.includes('/gap/right/'));
@@ -555,10 +595,12 @@ test('layoutSitePlacementGrid: 右（RIGHT）の行は枠の右端から外へ 3
     assert.equal(right.dots.length, 2);
     right.dots.forEach(d => near(d.x, 11032));
   }
+  assert.equal(rights[1].extensions[0].points.join(','), [9100, 1500, 11032, 1500].join(','), '下のはなれ: 右端の通り芯（x＝9100）の測点から寸法線へ');
+  near(rights[0].extensions[0].points[1], -13500 + 500 * 11100 / 13000);
   const y = l.labels.filter(t => t.id === 'y1');
-  near(y[0].x, -2000 - 111);
+  near(y[0].x, -2000 - 87);
   near(y[1].x, 11000 + 63);
-  // 下の行は無い → 下の丸（X 通り芯）は上と同じ 3 段
+  // 下の行は無い → 下の丸（X 通り芯）は上と同じ 2 段
   const x = l.labels.filter(t => t.id === 'x1');
-  near(x[1].y, 1500 + 111);
+  near(x[1].y, 1500 + 87);
 });

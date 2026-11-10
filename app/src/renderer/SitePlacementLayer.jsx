@@ -154,6 +154,10 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd, o
         });
         return [
           line,
+          ...row.extensions.map((e, i) => (
+            <Line key={`${row.key}/ext/${i}`} points={e.points} stroke={GRID_DIM_COLOR}
+              strokeWidth={viewport.lineWeightsPx[DIMENSION_LINE_WEIGHT]} strokeScaleEnabled={false} listening={false} />
+          )),
           ...row.dots.map(d => (
             <Circle key={d.key} x={d.x} y={d.y} radius={dimDotR} fill={GRID_DIM_COLOR} listening={false} />
           )),

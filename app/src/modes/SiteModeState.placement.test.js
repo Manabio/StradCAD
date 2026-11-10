@@ -2,7 +2,7 @@
 // 他階の解決は IDB（floorSwapManager.peek）経由のため、その1点だけ差し替える（FacadeModeState.test.js と同じ作法）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Project, CenterLineType, Discipline } from '@core';
+import { Project, CenterLineType, Discipline, DimensionSide } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
@@ -293,8 +293,13 @@ test('通り芯の写し: placementRoof.gridLines は本数・昇順・ラベル
     const view = sm.placementView;
     assert.equal(view.grid.lines.length, 5);
     const gapRows = view.grid.rows.filter(r => r.key.includes('/gap/'));
-    assert.equal(view.grid.rows.length - gapRows.length, 3, 'X=間隔＋全長・Y=間隔');
-    assert.ok(gapRows.length >= 2, '敷地があるので、はなれ寸法（上・左）が足される（S14）');
+    assert.equal(view.grid.rows.length - gapRows.length, 3, 'X=間隔＋全長・Y=間隔（はなれは間隔の段に入るので行は増えない。増えるのははなれだけの下・右の行）');
+    // 敷地（配置後）は Y 通り芯（−2000・1000）の下側と X 通り芯の左側へだけ測れる
+    const spacingY = view.grid.rows.find(r => r.axis === CenterLineType.HORIZONTAL && r.tier === 0 && r.side === DimensionSide.LEFT);
+    assert.equal(spacingY.segments.length, 2, 'Y の間隔 1 区間（−2000〜1000）＋はなれ 1 区間（1000〜3000。S15。はなれは間隔の段の同じ行）');
+    assert.equal(spacingY.extensions.length, 1, '境界線側の端に足が 1 本');
+    assert.equal(gapRows.length, 1, 'はなれだけの行は下（BOTTOM）の 1 行');
+    assert.equal(gapRows[0].extensions.length, 1);
     assert.equal(view.centerSource, SitePlacementCenterSource.ROOF);
     sm.dispose();
   });

@@ -38,8 +38,22 @@ test('SitePlacementLayer: 屋根線は PLAN_SOLIDS_COLOR・細線、敷地は SI
   assert.match(layer, /radius=\{markR\}/);
   assert.match(layer, /const markR = SITE_CORNER_MARK_RADIUS_PX \/ viewport\.scaleX;/);
   const shapes = count(layer, /<(Line|Circle|Group|Text)\b/g);
-  assert.equal(shapes, 10, '通り芯の Line・屋根の Line・敷地の Line・寸法線上の点の Circle・角の見える Circle・角の当たり Circle・通り芯ラベルの当たり Circle・番号の Text・境界線ラベルの Text・Group');
+  assert.equal(shapes, 11, '通り芯の Line・屋根の Line・敷地の Line・寸法線の足の Line・寸法線上の点の Circle・角の見える Circle・角の当たり Circle・通り芯ラベルの当たり Circle・番号の Text・境界線ラベルの Text・Group');
   assert.equal(count(layer, /listening=\{false\}/g), shapes - 3, '当たり用の丸（角・通り芯ラベル）と Group 以外は listening={false}');
+});
+
+test('SitePlacementLayer: はなれ寸法の足（row.extensions）は GRID_DIM_COLOR・寸法線と同じ線幅・画面 px 幅（strokeScaleEnabled false）・listening しない Line。点より前に描く', () => {
+  const at = layer.indexOf('...row.extensions.map((e, i) => (');
+  const dotsAt = layer.indexOf('...row.dots.map(');
+  assert.ok(at > 0 && dotsAt > at, '足は row.dots より前に描く');
+  const block = layer.slice(at, dotsAt);
+  assert.equal(count(block, /<Line\b/g), 1);
+  assert.match(block, /key=\{`\$\{row\.key\}\/ext\/\$\{i\}`\}/);
+  assert.match(block, /points=\{e\.points\}/);
+  assert.match(block, /stroke=\{GRID_DIM_COLOR\}/);
+  assert.match(block, /strokeWidth=\{viewport\.lineWeightsPx\[DIMENSION_LINE_WEIGHT\]\}/);
+  assert.match(block, /strokeScaleEnabled=\{false\}/);
+  assert.match(block, /listening=\{false\}/);
 });
 
 test('SitePlacementLayer: 角の当たり丸は SITE_HIT_NODE_NAME・透明ストローク（HIT_PX_MAX / scale）で、onClick/onTap が mode.pickPlacementVertex（敷地座標）を呼ぶ', () => {

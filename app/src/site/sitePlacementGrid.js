@@ -7,8 +7,8 @@
  *   gridLineSnapshot       … 配置図を開いた時点の通り芯の写し（SiteModeState._loadPlacement が呼ぶ。以降 graph を読まない）
  *   composeSitePlacementGrid … ズーム非依存の判断（枠・描く線・寸法の行と区間）
  *   layoutSitePlacementGrid  … 画面 px の離れを世界座標へ直した配置（ガターと同じ画面注記。ズームで離れが一定 px）
- * 寸法は上（X 行）・左（Y 行）。その外の段に「はなれ寸法」（最外周の通り芯と敷地の境界線の距離）を足す（S14。
- * 下・右は上・左と値が違うときだけ、はなれだけの行）。枠 frame＝屋根の外接矩形 ∪ 通り芯の範囲 ∪ 敷地の外周の外接矩形（siteBounds）。
+ * 寸法は上（X 行）・左（Y 行）。「はなれ寸法」（最外周の通り芯と敷地の境界線の距離）は間隔の段（tier 0）の同じ行の両端に
+ * 区間として足し、境界線側の端に寸法線の足を引く（S14・S15。下・右は上・左と値が違うときだけ、はなれだけの行）。枠 frame＝屋根の外接矩形 ∪ 通り芯の範囲 ∪ 敷地の外周の外接矩形（siteBounds）。
  * 寸法行も線も丸ラベルも frame の外へ出す（敷地の外。2026-11-10）。屋根∪通り芯が無い軸は敷地があっても描かない。
  * 丸の中心＝枠の縁から（寸法行の外＋OUTWARD＋半径）。線の端は丸の縁で止める。
  * 図芯の基準（sitePlacementView の buildingCenter）には触れない（ここで作る枠は図芯に使わない）。
@@ -22,7 +22,7 @@ import { NUM_FONT_PX, TEXT_GAP_PX } from '../renderer/dimensionStyle.js';
 const GRID_KEY_PREFIX = Object.freeze({ LINE: 'gl', LABEL: 'gb', ROW: 'gr', GAP: 'gap', DOT: 'gd', END_LO: 'a', END_HI: 'b' });
 
 /** 寸法の段（0＝隣接する通り芯の間隔、1＝最外どうしの全長）。
- *  はなれの行の tier＝既存の段数（上・左）／0（下・右）。GAP は key の部品（行の種別）。 */
+ *  はなれは間隔の段（0）の同じ行に入る（はなれだけの行も tier 0）。GAP は key の部品（行の種別）。 */
 const GridDimTier = Object.freeze({ SPACING: 0, TOTAL: 1 });
 
 const { LEFT, RIGHT, TOP, BOTTOM } = DimensionSide;
@@ -117,40 +117,56 @@ export function computeSiteGapDimensions({ gridLines, siteSegments }) {
   return out;
 }
 
-/** 位置 pos のはなれを、loSide（−方向）は [to, from]・hiSide（＋方向）は [from, to] の区間（v1 昇順）にしたもの。 */
+/**
+ * 位置 pos のはなれを、loSide（−方向）は [to, from]・hiSide（＋方向）は [from, to] の区間（v1 昇順）にしたもの。
+ * at＝境界線側の端（to）・pos＝測点の直交座標（寸法線の足の元）。
+ */
 function gapSegmentsAt(gaps, loSide, hiSide, pos) {
   return gaps.filter(g => g.pos === pos && (g.side === loSide || g.side === hiSide))
     .map(g => (g.side === loSide
-      ? { measured: g.side, v1: g.to, v2: g.from, length: g.length }
-      : { measured: g.side, v1: g.from, v2: g.to, length: g.length }))
+      ? { measured: g.side, v1: g.to, v2: g.from, length: g.length, at: g.to, pos }
+      : { measured: g.side, v1: g.from, v2: g.to, length: g.length, at: g.to, pos }))
     .sort((a, b) => a.v1 - b.v1);
 }
 
 /**
- * はなれ寸法の行。上（x 方向）は上端（HORIZONTAL 最小）で測った左右のはなれ、左（y 方向）は左端（VERTICAL 最小）で測った上下のはなれ。
- * 下・右の行は、反対の端（最大）で測った値が 1 つでも違うときだけ出す（等しければ重複なので出さない）。
- * @param {Array<object>} rows 既存の行（上・左の段数を数える）
+ * はなれ寸法を行へ足した新しい行の列（rows は変えない）。上（x 方向）は上端（HORIZONTAL 最小）で測った左右のはなれ、
+ * 左（y 方向）は左端（VERTICAL 最小）で測った上下のはなれ。
+ * 上・左は通り芯の間隔の段（tier 0）の同じ行の先頭（左・上のはなれ）と末尾（右・下のはなれ）に区間を足す（線は境界点から境界点まで 1 本）。
+ * 通り芯が 1 本で間隔の段が無い軸は、はなれだけの tier 0 の行（測った側ごとに 1 行）。
+ * 下・右の行は、反対の端（最大）で測った値が 1 つでも違うときだけ、tier 0 のはなれだけの行（測った側ごとに 1 行）。
+ * 境界線側の端には寸法線の足（extensions。at＝行に沿う座標・from＝測点の直交座標）を持たせる。
  */
-function gapRows(gaps, axisOf, rows) {
-  const out = [];
+function withGapRows(rows, gaps, axisOf) {
+  let out = rows;
   for (const [axis, loSide, hiSide, crossLo, crossHi, perpLo, perpHi] of [
     [CenterLineType.VERTICAL, TOP, BOTTOM, axisOf.minH, axisOf.maxH, LEFT, RIGHT],
     [CenterLineType.HORIZONTAL, LEFT, RIGHT, axisOf.minV, axisOf.maxV, TOP, BOTTOM],
   ]) {
     const lenAt = (side, pos) => gaps.find(g => g.side === side && g.pos === pos)?.length;
-    // はなれの行は測った側ごとに 1 行（区間だけに線を引く。左右の区間の間＝通り芯の範囲に数値なしの線を通さない）。同じ段（tier）に並ぶ
-    const add = (side, tier, found) => {
-      for (const { measured, v1, v2, length } of found) {
-        out.push({
-          key: `${GRID_KEY_PREFIX.ROW}/${axis}/${GRID_KEY_PREFIX.GAP}/${side}/${measured}`, axis, side, tier,
-          segments: [{ v1, v2, length }], anchors: [v1, v2],
-        });
-      }
-    };
-    const loTier = new Set(rows.filter(r => r.side === loSide).map(r => r.tier)).size;
-    add(loSide, loTier, gapSegmentsAt(gaps, perpLo, perpHi, crossLo));
+    const segOf = ({ v1, v2, length }) => ({ v1, v2, length });
+    const extOf = ({ at, pos }) => ({ at, from: pos });
+    // はなれだけの行は測った側ごとに 1 行（区間だけに線を引く。左右の区間の間＝通り芯の範囲に数値なしの線を通さない）
+    const gapOnly = (side, found) => found.map(f => ({
+      key: `${GRID_KEY_PREFIX.ROW}/${axis}/${GRID_KEY_PREFIX.GAP}/${side}/${f.measured}`, axis, side, tier: GridDimTier.SPACING,
+      segments: [segOf(f)], anchors: [f.v1, f.v2], extensions: [extOf(f)],
+    }));
+    const foundLo = gapSegmentsAt(gaps, perpLo, perpHi, crossLo);
+    const spacing = out.find(r => r.axis === axis && r.side === loSide && r.tier === GridDimTier.SPACING);
+    if (spacing) {
+      const before = foundLo.filter(f => f.measured === perpLo), after = foundLo.filter(f => f.measured === perpHi);
+      const merged = {
+        ...spacing,
+        segments: [...before.map(segOf), ...spacing.segments, ...after.map(segOf)],
+        anchors: [...before.map(f => f.v1), ...spacing.anchors, ...after.map(f => f.v2)],
+        extensions: [...before.map(extOf), ...after.map(extOf)],
+      };
+      out = out.map(r => (r === spacing ? merged : r));
+    } else {
+      out = [...out, ...gapOnly(loSide, foundLo)];
+    }
     if ([perpLo, perpHi].some(side => lenAt(side, crossLo) !== lenAt(side, crossHi))) {
-      add(hiSide, 0, gapSegmentsAt(gaps, perpLo, perpHi, crossHi));
+      out = [...out, ...gapOnly(hiSide, gapSegmentsAt(gaps, perpLo, perpHi, crossHi))];
     }
   }
   return out;
@@ -167,7 +183,8 @@ function gapRows(gaps, axisOf, rows) {
  *   frame: {x:[number,number]|null, y:[number,number]|null},
  *   lines: Array<{key:string, id:string, centerLineType:string, value:number, label:string, exterior:boolean}>,
  *   rows: Array<{key:string, axis:string, side:string, tier:number,
- *                segments:Array<{v1:number, v2:number, length:number}>, anchors:number[]}>,
+ *                segments:Array<{v1:number, v2:number, length:number}>, anchors:number[],
+ *                extensions:Array<{at:number, from:number}>}>,
  * }}
  */
 export function composeSitePlacementGrid({ gridLines, roofBounds, siteBounds = null, siteSegmentsPlaced = [] }) {
@@ -189,7 +206,7 @@ export function composeSitePlacementGrid({ gridLines, roofBounds, siteBounds = n
     exterior: !!g.exterior,
   }));
 
-  const rows = [];
+  let rows = [];
   for (const [axis, values, side] of [
     [CenterLineType.VERTICAL, xs, DimensionSide.TOP],
     [CenterLineType.HORIZONTAL, ys, DimensionSide.LEFT],
@@ -200,14 +217,14 @@ export function composeSitePlacementGrid({ gridLines, roofBounds, siteBounds = n
     if (values.length >= 2) {
       rows.push({
         key: `${GRID_KEY_PREFIX.ROW}/${axis}/${GridDimTier.SPACING}`, axis, side, tier: GridDimTier.SPACING,
-        segments: values.slice(1).map((v, i) => segOf(values[i], v)), anchors: values,
+        segments: values.slice(1).map((v, i) => segOf(values[i], v)), anchors: values, extensions: [],
       });
     }
     if (values.length >= SITE_PLACEMENT_GRID_TOTAL_MIN_LINES) {
       const first = values[0], last = values[values.length - 1];
       rows.push({
         key: `${GRID_KEY_PREFIX.ROW}/${axis}/${GridDimTier.TOTAL}`, axis, side, tier: GridDimTier.TOTAL,
-        segments: [segOf(first, last)], anchors: [first, last],
+        segments: [segOf(first, last)], anchors: [first, last], extensions: [],
       });
     }
   }
@@ -215,7 +232,7 @@ export function composeSitePlacementGrid({ gridLines, roofBounds, siteBounds = n
   if (frame.x != null && frame.y != null) {
     const gaps = computeSiteGapDimensions({ gridLines, siteSegments: siteSegmentsPlaced });
     if (gaps.length > 0) {
-      rows.push(...gapRows(gaps, { minH: Math.min(...ys), maxH: Math.max(...ys), minV: Math.min(...xs), maxV: Math.max(...xs) }, rows));
+      rows = withGapRows(rows, gaps, { minH: Math.min(...ys), maxH: Math.max(...ys), minV: Math.min(...xs), maxV: Math.max(...xs) });
     }
   }
   return { frame, lines, rows };
@@ -229,7 +246,8 @@ export function composeSitePlacementGrid({ gridLines, roofBounds, siteBounds = n
  *   lines: Array<{key:string, points:number[]}>,
  *   labels: Array<{key:string, id:string, exterior:boolean, x:number, y:number, label:string}>,
  *   rows: Array<{key:string, axis:string, side:string, lineCoord:number, normalNumCoord:number,
- *                segments:object[], dots:Array<{key:string, x:number, y:number}>}>,
+ *                segments:object[], extensions:Array<{key:string, points:number[]}>,
+ *                dots:Array<{key:string, x:number, y:number}>}>,
  * }}
  */
 export function layoutSitePlacementGrid(grid, scale) {
@@ -237,7 +255,7 @@ export function layoutSitePlacementGrid(grid, scale) {
   const r = labelCircleRadius({ scaleX: scale });
   const { frame } = grid;
   const isX = axis => axis === CenterLineType.VERTICAL;
-  // 段数＝tier の種類数（はなれの行が側ごとに分かれても同じ段なので増えない）
+  // 段数＝tier の種類数（はなれの行は間隔の段 tier 0 に入るので増えない）
   const sideCount = side => new Set(grid.rows.filter(row => row.side === side).map(row => row.tier)).size;
   // 丸の中心の、枠（敷地込み）の縁からの離れ（その側の最も外の寸法行の数値帯の外＋OUTWARD＋半径）。
   // 上・左は上・左の行数。下・右は、その側に行があればその行数、無ければ上・左と同じ（従来どおり両端で同じ距離）
@@ -273,6 +291,11 @@ export function layoutSitePlacementGrid(grid, scale) {
       key: row.key, axis: row.axis, side: row.side, lineCoord,
       normalNumCoord: lo ? lineCoord - px(NUM_FONT_PX) - px(TEXT_GAP_PX) : lineCoord + px(TEXT_GAP_PX),
       segments: row.segments,
+      // 寸法線の足: 境界線上の測点（行に沿う座標 at・直交座標 from）から寸法線まで
+      extensions: row.extensions.map((e, i) => ({
+        key: `${row.key}/ext/${i}`,
+        points: isX(row.axis) ? [e.at, e.from, e.at, lineCoord] : [e.from, e.at, lineCoord, e.at],
+      })),
       dots: row.anchors.map((v, i) => ({
         key: `${GRID_KEY_PREFIX.DOT}/${row.key}/${i}`,
         x: isX(row.axis) ? v : lineCoord, y: isX(row.axis) ? lineCoord : v,

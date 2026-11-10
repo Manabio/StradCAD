@@ -408,10 +408,11 @@ test('composeSitePlacementView: 実機相当（敷地 13000×15000・配置 tx=�
     readFailed: false,
   };
   const rows = composeSitePlacementView({ site, roof }).grid.rows;
-  const lens = side => rows.filter(r => r.side === side && r.key.includes('/gap/')).flatMap(r => r.segments.map(s => s.length));
-  assert.deepEqual(lens('top'), [2000, 1900]);
-  assert.deepEqual(lens('left'), [886, 1500]);
-  assert.equal(rows.filter(r => r.key.includes('/gap/')).length, 4, '上 2 行・左 2 行。下・右は上・左と同じ値なので出さない');
+  const lens = side => rows.find(r => r.side === side && r.tier === 0).segments.map(s => s.length);
+  assert.deepEqual(lens('top'), [2000, 1820, 1820, 3640, 1820, 1900], '間隔の段の先頭・末尾にはなれ（S15）');
+  assert.deepEqual(lens('left'), [886, 5614, 3360, 3640, 1500]);
+  assert.equal(rows.length, 4, '間隔・全長の 4 行（はなれだけの行なし）。下・右は上・左と同じ値なので出さない');
+  assert.ok(rows.every(r => !r.key.includes('/gap/')));
 });
 
 test('【失敗系】composeSitePlacementView: 敷地が空なら、はなれ寸法は出ない（通り芯の寸法だけ）', () => {
