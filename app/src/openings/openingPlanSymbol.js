@@ -449,7 +449,7 @@ function outsetSlidePrimitives(opening, layout, band, { detail, faceRange, jambW
   const doorCenter = runFace - runPerpDir * (SLIDE_OUTSET_DOOR_FACE_INSET_MM + DOOR_LEAF_THICKNESS_MM / 2);
   const doorLo = doorCenter - DOOR_LEAF_THICKNESS_MM / 2;
   const doorHi = doorCenter + DOOR_LEAF_THICKNESS_MM / 2;
-  const tip = tailSide < 0 ? cutHi : cutLo; // 戸先端（閉じ側の端）
+  const tip = layout.latchAlong; // 戸先端（閉じ側の端。cut は枠の外面まで J 広がっているので cut の端からは求めない）
   const closed = [tip, tip + (tailSide < 0 ? -doorWidth : doorWidth)];
   const closedLo = Math.min(...closed), closedHi = Math.max(...closed);
   if (detail) {

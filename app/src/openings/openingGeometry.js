@@ -133,12 +133,22 @@ export function nearestWallHit(walls, wx, wy, thresholdPx, scaleX, scaleY, inwar
   return nearest;
 }
 
+/**
+ * 建具の占有区間の既定（開口幅 [coord1, coord2]）。validateOpeningPlacement / maxOpeningWidthAt / openingMoveRange の
+ * footprintOf 引数の既定値。外付け引き戸は枠の外面まで広がる（slideOutset.js footprintResolver）ため、そちらを渡す。
+ * （循環 import を避けるため、このファイルは slideOutset.js を引かず、範囲を返す関数を引数で受ける）
+ */
+export const defaultSpanOf = o => [o.coord1, o.coord2];
+
 /** 配置検証: 壁範囲内か／既存開口と重なっていないか。OK なら null、NGならエラーメッセージ。 */
-export function validateOpeningPlacement(wall, coord1, coord2, graph, excludeId = null) {
+export function validateOpeningPlacement(wall, coord1, coord2, graph, excludeId = null, footprintOf = defaultSpanOf) {
   const lo = Math.min(wall.coord1, wall.coord2), hi = Math.max(wall.coord1, wall.coord2);
   if (coord1 < lo || coord2 > hi) return ERR_OPENING_OUT_OF_WALL;
-  const overlap = findOpeningsOnWall(wall, graph).some(o =>
-    o.id !== excludeId && coord1 < o.coord2 && coord2 > o.coord1);
+  const overlap = findOpeningsOnWall(wall, graph).some(o => {
+    if (o.id === excludeId) return false;
+    const [f1, f2] = footprintOf(o);
+    return coord1 < f2 && coord2 > f1;
+  });
   if (overlap) return ERR_OPENING_OVERLAP;
   return null;
 }
@@ -149,25 +159,29 @@ export function validateOpeningPlacement(wall, coord1, coord2, graph, excludeId 
  * placeOpeningWithDefaults（壁長不足時の既定間口クランプ）・OpeningEditor onEditDim（図上の
  * 間口編集の上限クランプ）の両方から使う——「エラーで弾く」代わりに「収まる寸法へ丸める」ため、
  * 呼び出し側は常にこの値を上限として Math.min するだけでよい。
+ * footprintOf＝隣接開口の占有区間の取り方（既定は開口幅。外付け引き戸は枠の外面まで）、extraHalf＝新建具の占有が
+ * 幅の両側へ広がる量（既定 0）。
  * Math.floor で整数化してから返す——CL偏芯ドラッグ中（centerCoordが実効値ベースで小数になり得る）
  * でも呼び出し側（配置時のクランプ・onEditDimのクランプ表示）に半端な小数mmが漏れないようにする
  * ため。floorは常に壁範囲・隣接開口の内側に丸まる（外側には出ない）ので安全側。
  * centerCoord が壁範囲外など収まる幅が無い場合は 0（負値にはしない）。呼び出し側は「0=そもそも
  * 置けない（弾く）」「0<戻り値<希望幅=丸める」を区別する。
  */
-export function maxOpeningWidthAt(wall, centerCoord, graph, excludeId = null) {
+export function maxOpeningWidthAt(wall, centerCoord, graph, excludeId = null, footprintOf = defaultSpanOf, extraHalf = 0) {
   const lo = Math.min(wall.coord1, wall.coord2), hi = Math.max(wall.coord1, wall.coord2);
   let loBound = lo, hiBound = hi;
   for (const o of findOpeningsOnWall(wall, graph)) {
     if (o.id === excludeId) continue;
+    const [f1, f2] = footprintOf(o);
     // centerCoord自身が既存開口の内部にある（開口が中心をまたぐ）場合、その開口は「中心以下」
     // でも「中心以上」でもないため下2行のどちらの条件にも掛からず取りこぼす——中心を含む
     // 開口があれば対称に広げられる余地は無いので0を即返す。
-    if (o.coord1 < centerCoord && o.coord2 > centerCoord) return 0;
-    if (o.coord2 <= centerCoord) loBound = Math.max(loBound, o.coord2);
-    if (o.coord1 >= centerCoord) hiBound = Math.min(hiBound, o.coord1);
+    if (f1 < centerCoord && f2 > centerCoord) return 0;
+    if (f2 <= centerCoord) loBound = Math.max(loBound, f2);
+    if (f1 >= centerCoord) hiBound = Math.min(hiBound, f1);
   }
-  return Math.max(0, Math.floor(2 * Math.min(centerCoord - loBound, hiBound - centerCoord)));
+  // 戻り値は建具幅 W。extraHalf＝新建具の占有が W の両側へ広がる量（外付け引き戸の見付 J）。
+  return Math.max(0, Math.floor(2 * (Math.min(centerCoord - loBound, hiBound - centerCoord) - extraHalf)));
 }
 
 /**

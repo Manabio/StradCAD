@@ -3,9 +3,8 @@ import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
 import { fittingSubTypeOptions, openingSubTypeList, findCatalogEntry, defaultOpeningHeight, HINGED_MECHANISMS, SIDED_SLIDE_MECHANISMS, hasHandedSides, sideFlipLabels, OpeningMechanism } from './openingCatalog.js';
 import { OpeningCategory } from '../core.js';
-import { findHostWall, maxOpeningWidthAt, findOpeningsOnWall, wallFaceRange } from './openingGeometry.js';
+import { findHostWall, wallFaceRange } from './openingGeometry.js';
 import { frameOnlyPerpRange } from './openingPlanSymbolGeometry.js';
-import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
 import { buildOpeningElevation } from './openingElevationFigure.js';
 import { openingMountLocation } from './openingRoomLabel.js';
 import { openingRefOffsetRange } from './openingMove.js';
@@ -13,7 +12,7 @@ import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.j
 import {
   beginOpeningFieldUndo, endOpeningFieldUndo, withOpeningUndo, resolveRefOffsetEdit, removeOpeningWithUndo,
   materialGlassAfterFixtureChange, noteAfterSubTypeChange, swingSideAfterSubTypeChange,
-  flippedHingeSides, flippedSwingSide, fixtureTypeAfterSubTypeChange, fixtureSymbolOptions,
+  flippedHingeSides, flippedSwingSide, fixtureTypeAfterSubTypeChange, fixtureSymbolOptions, resolveWidthEdit,
 } from './openingEdit.js';
 import { openingTagOf, fixtureSymbolOf, effectiveFrameProjection } from './openingNumbering.js';
 import { openingDetailRefSelects, detailRefsAfterSelect, detailDimensionsToCopy, frameDetailSlotsFor } from './openingDetailRefsEdit.js';
@@ -85,22 +84,13 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
       ? sanitizeHeightInput(value) : (Math.abs(value) || 0);
     // 幅編集は「丸められるときは丸める／そもそも置けないときは弾く」の二段構え（壁が引けない
     // とき=findHostWallがnullのときは従来どおり幾何検証をスキップしてそのまま確定）。
-    // maxOpeningWidthAt自体が既にMath.floorで整数化して返すため、ここで重ねて丸めない
+    // maxOpeningWidthAt（resolveWidthEdit 内）自体が既にMath.floorで整数化して返すため、ここで重ねて丸めない
     // （CL偏芯ドラッグ中でもクランプ後の値・トースト文言に半端な小数mmが出ない）。
     if (dim.target === 'width' && wall) {
-      const centerCoord = opening.refCL.effectiveValue + opening.refOffset;
-      const maxWidth = maxOpeningWidthAt(wall, centerCoord, graph, opening.id);
-      if (maxWidth <= 0) {
-        // 上限0の真因が「壁自体に収まらない」か「隣接開口(自分以外)で埋まっている」かで
-        // トースト文言を分ける（openingEdit.js placeOpeningWithDefaults と同じ判定規約）。
-        const hasOtherOpenings = findOpeningsOnWall(wall, graph).some(o => o.id !== opening.id);
-        onToast?.(hasOtherOpenings ? ERR_OPENING_OVERLAP : ERR_OPENING_OUT_OF_WALL);
-        return; // 代入しない＝undoエントリも積まない
-      }
-      if (v > maxWidth) {
-        v = maxWidth;
-        onToast?.(`間口の上限 ${maxWidth}mm に丸めました`);
-      }
+      const r = resolveWidthEdit(opening, graph, wall, v); // 確定規則は openingEdit.js（上限・外付け引き戸の下限）
+      if (r.message) onToast?.(r.message);
+      if (r.value === null) return; // 代入しない＝undoエントリも積まない
+      v = r.value;
     }
     commitEdit(() => { runInAction(() => { opening[dim.target] = v; }); });
   };

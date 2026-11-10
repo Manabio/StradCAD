@@ -8,7 +8,7 @@ import { observable, runInAction, configure, autorun } from 'mobx';
 import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { FITTING_CATALOG, WINDOW_CATALOG, findCatalogEntry, defaultMaterialGlassFor, getFixtureSymbols, OpeningMechanism, getFittingOptions } from './openingCatalog.js';
-import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
+import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP, ERR_SLIDE_WIDTH_TOO_SMALL } from '../error.js';
 import { openingTagOf, renumberOpenings } from './openingNumbering.js';
 import { openingTagAnchor } from './openingTagPlacement.js';
 import {
@@ -16,7 +16,7 @@ import {
   materialGlassAfterFixtureChange, validateOpeningEdit, noteAfterSubTypeChange, openDirForMechanism,
   defaultSwingSideFor, swingSideAfterSubTypeChange, flippedHingeSides, flippedSwingSide,
   fixtureTypeAfterSubTypeChange, fixtureSymbolOptions, resolveRefOffsetEdit, setOpeningGeometryListener,
-  beginOpeningFieldUndo, endOpeningFieldUndo,
+  beginOpeningFieldUndo, endOpeningFieldUndo, resolveWidthEdit,
 } from './openingEdit.js';
 import { closedAngleFor, leafOpenAngle, angleVectors } from './openingPlanSymbolGeometry.js';
 import { outsetSlideLayout } from './slideOutset.js';
@@ -352,6 +352,107 @@ test('【失敗系】placeOpeningWithDefaults: 外壁に subType \'sliding\' を
   const { opening, error } = placeOpeningWithDefaults(outer.graph, makeProject(), outer.wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'sliding');
   assert.equal(error, null);
   assert.equal(opening.subType, 'door');
+});
+
+// ---- S3c: 外付け引き戸は枠の外面（W+2J。J=30）で配置・編集を判定する ----
+
+test('S3c: 引き戸の配置は壁に収まれば W 既定（1550）のまま。壁長 3000 の中央付近', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+  const { opening, error } = placeOpeningWithDefaults(graph, makeProject(), wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'sliding');
+  assert.equal(error, null);
+  assert.equal(opening.width, 1550);
+});
+
+test('S3c: 引き戸の W+2J が壁に収まらなければ extra 分だけ縮めて置く（壁長 1600 → W 1540＝1600−2×30）', () => {
+  const { graph, wall } = makeWallGraph(1600, { isExteriorWall: false });
+  const { opening, error } = placeOpeningWithDefaults(graph, makeProject(), wall, { x: 800, y: 200 }, OpeningCategory.FITTING, 'sliding');
+  assert.equal(error, null);
+  assert.equal(opening.width, 1540);
+  assert.deepEqual([opening.coord1 - 30, opening.coord2 + 30], [0, 1600], '枠の外面がちょうど壁端');
+});
+
+test('S3c: 隣の建具との間が狭く、縮めた W が 50 以下なら配置しない（Q-S3c-1。重なりの真因は ERR_OPENING_OVERLAP）', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 725, 1450, OpeningCategory.FITTING, 'singleSwing', {}); // 0..1450
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 2275, 1450, OpeningCategory.FITTING, 'singleSwing', {}); // 1550..3000
+  const before = graph.openings?.length ?? graph.shapeMap.size;
+  const { opening, error } = placeOpeningWithDefaults(graph, makeProject(), wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'sliding');
+  assert.equal(opening, null);
+  assert.equal(error, ERR_OPENING_OVERLAP);
+  assert.equal(graph.openings?.length ?? graph.shapeMap.size, before, '何も追加されない');
+});
+
+test('S3c: 隣との間（gap 100）に extra なしの普通の建具なら置ける（Q-S3c-1 が引き戸だけの拒否である確認）', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 725, 1450, OpeningCategory.FITTING, 'singleSwing', {});
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 2275, 1450, OpeningCategory.FITTING, 'singleSwing', {});
+  const { opening, error } = placeOpeningWithDefaults(graph, makeProject(), wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'singleSwing');
+  assert.equal(error, null);
+  assert.equal(opening.width, 100);
+});
+
+test('S3c 境界: 隣同士の間 110 → W 50 で拒否（ERR_OPENING_OVERLAP）、112 → W 52 で置ける（W≤50 の `<=` 境界）', () => {
+  for (const [gap, ok] of [[110, false], [111, true], [112, true]]) {
+    const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+    const left = 1500 - gap / 2;
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, left / 2, left, OpeningCategory.FITTING, 'singleSwing', {});
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, (1500 + gap / 2 + 3000) / 2, 1500 - gap / 2, OpeningCategory.FITTING, 'singleSwing', {});
+    const { opening, error } = placeOpeningWithDefaults(graph, makeProject(), wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'sliding');
+    if (ok) {
+      assert.equal(error, null, `gap=${gap}`);
+      assert.equal(opening.width, Math.floor(gap - 60));
+    } else {
+      assert.equal(opening, null, `gap=${gap}`);
+      assert.equal(error, ERR_OPENING_OVERLAP);
+    }
+  }
+});
+
+test('S3c: resolveWidthEdit は上限へ丸め、外付け引き戸の W が 50 以下になる値は確定しない（トースト文言つき）', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+  const { opening } = placeOpeningWithDefaults(graph, makeProject(), wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'sliding');
+  assert.deepEqual(resolveWidthEdit(opening, graph, wall, 1000), { value: 1000, message: null });
+  assert.deepEqual(resolveWidthEdit(opening, graph, wall, 5000), { value: 2940, message: '間口の上限 2940mm に丸めました' });
+  assert.deepEqual(resolveWidthEdit(opening, graph, wall, 51), { value: 51, message: null });
+  assert.deepEqual(resolveWidthEdit(opening, graph, wall, 50), { value: null, message: ERR_SLIDE_WIDTH_TOO_SMALL });
+  assert.deepEqual(resolveWidthEdit(opening, graph, wall, 0), { value: null, message: ERR_SLIDE_WIDTH_TOO_SMALL });
+  assert.equal(validateOpeningEdit(opening, graph, { width: 50, refOffset: opening.refOffset }), ERR_SLIDE_WIDTH_TOO_SMALL);
+  assert.equal(validateOpeningEdit(opening, graph, { width: 51, refOffset: opening.refOffset }), null);
+  runInAction(() => { opening.subType = 'singleSwing'; });
+  assert.deepEqual(resolveWidthEdit(opening, graph, wall, 30), { value: 30, message: null }, '普通の建具に下限はない');
+});
+
+test('【失敗系】S3c: 間口編集の上限が 50 以下（隣との間が狭い）なら丸めず確定しない', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 722.5, 1445, OpeningCategory.FITTING, 'singleSwing', {});
+  graph.addOpening(wall.axisCL, 1, false, wall.clStart, 2277.5, 1445, OpeningCategory.FITTING, 'singleSwing', {});
+  const slide = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1500, 40, OpeningCategory.FITTING, 'sliding', { hingeSide: -1, swingSide: 1 });
+  assert.deepEqual(resolveWidthEdit(slide, graph, wall, 500), { value: null, message: ERR_SLIDE_WIDTH_TOO_SMALL }, '上限 50 は「上限 50mm に丸めました」で確定しない');
+  assert.deepEqual(resolveWidthEdit(slide, graph, wall, 45), { value: null, message: ERR_SLIDE_WIDTH_TOO_SMALL });
+});
+
+test('【失敗系】S3c: 壁が短く（70）縮めた引き戸の W が 50 以下なら配置しない（既存の建具が無いので ERR_OPENING_OUT_OF_WALL）', () => {
+  const { graph, wall } = makeWallGraph(70, { isExteriorWall: false });
+  const { opening, error } = placeOpeningWithDefaults(graph, makeProject(), wall, { x: 35, y: 200 }, OpeningCategory.FITTING, 'sliding');
+  assert.equal(opening, null);
+  assert.equal(error, ERR_OPENING_OUT_OF_WALL);
+});
+
+test('S3c: validateOpeningEdit は引き戸の幅編集を W+2J で判定する（壁 3000 に W 2940 は OK・2950 は壁外）', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+  const { opening } = placeOpeningWithDefaults(graph, makeProject(), wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'sliding');
+  const refOffset = opening.refOffset;
+  assert.equal(validateOpeningEdit(opening, graph, { width: 2940, refOffset }), null);
+  assert.equal(validateOpeningEdit(opening, graph, { width: 2950, refOffset }), ERR_OPENING_OUT_OF_WALL);
+  runInAction(() => { opening.subType = 'singleSwing'; });
+  assert.equal(validateOpeningEdit(opening, graph, { width: 3000, refOffset }), null, '普通の建具は W のまま');
+});
+
+test('S3c: 「位置」欄の確定は引き戸の枠の外面が壁端に当たる範囲（805〜2195）へクランプする', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+  const { opening } = placeOpeningWithDefaults(graph, makeProject(), wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'sliding');
+  assert.deepEqual(resolveRefOffsetEdit(opening, graph, 790), { value: 805, message: '位置を可動範囲 805〜2195mm に丸めました' });
+  assert.deepEqual(resolveRefOffsetEdit(opening, graph, 805), { value: 805, message: null });
 });
 
 test('【失敗系】placeOpeningWithDefaults: 外壁で未知の subType 指定は既定の door へ落ちる', () => {
@@ -933,7 +1034,8 @@ test('flippedHingeSides: 引き戸は走る面（runPerpDir）を保ち、引き
         const mirror = ([lo, hi]) => [500 + 2050 - hi, 500 + 2050 - lo];
         assert.deepEqual(a.cut, mirror(b.cut), `穴は鏡像 (${tag})`);
         assert.deepEqual(a.pull, mirror(b.pull), `引き代は鏡像 (${tag})`);
-        for (const [lo, hi] of [a.cut, a.pull]) assert.ok(lo >= 500 && hi <= 2050, `[lo,hi] 内 (${tag})`);
+        assert.ok(a.pull[0] >= 500 && a.pull[1] <= 2050, `引き代は [lo,hi] 内 (${tag})`);
+        for (const [lo, hi] of [a.cut, a.recess.span]) assert.ok(lo >= 500 - 30 && hi <= 2050 + 30, `穴・欠き込みは [lo−J,hi+J] 内 (${tag})`);
       }
     }
   }

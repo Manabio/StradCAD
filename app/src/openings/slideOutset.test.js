@@ -5,6 +5,7 @@ import { OpeningMechanism, findCatalogEntry } from './openingCatalog.js';
 import { swingOpenPerpDir } from './openingPlanSymbolGeometry.js';
 import {
   isOutsetSlide, slideDoorWidth, slideTailSide, outsetSlideLayout, openingCutSpan, slideRecessBand,
+  openingFootprint, openingFootprintExtraHalf, openingFootprintExtraHalfOf, openingEditExtraHalfOf, openingMinWidthOf, footprintResolver,
 } from './slideOutset.js';
 import { SLIDE_OUTSET_RECESS_DEPTH_MM } from '../core/constants.js';
 
@@ -24,19 +25,80 @@ test('カタログの引き戸の既定幅は W＝2×800−50＝1550（扉幅 80
   assert.equal(slideDoorWidth(e.defaultWidth), 800);
 });
 
-test('layout: W1550・hingeSide −1 → doorWidth 800・cutLength 750・cut=[hi−750,hi]・pull=[lo,hi−750]', () => {
+test('layout: W1550・hingeSide −1 → doorWidth 800・cutLength 750・戸先端 A=hi・cut=[A−780,A+30]・pull=[lo,hi−750]（pull は J ずれない）', () => {
   const l = outsetSlideLayout(op(), SLIDE);
   assert.equal(l.doorWidth, 800);
   assert.equal(l.cutLength, 750);
   assert.equal(l.tailSide, -1);
-  assert.deepEqual(l.cut, [1800, 2550]);
+  assert.equal(l.latchAlong, 2550);
+  assert.equal(l.jambWidth, 30);
+  assert.deepEqual(l.cut, [1770, 2580]);
   assert.deepEqual(l.pull, [1000, 1800]);
+  assert.deepEqual(l.footprint, [970, 2580]);
 });
 
-test('layout: hingeSide +1 で左右が入れ替わる', () => {
+test('layout: hingeSide +1 で左右が入れ替わる（戸先端 A=lo・cut=[A−30,A+780]）', () => {
   const l = outsetSlideLayout(op({ hingeSide: 1 }), SLIDE);
-  assert.deepEqual(l.cut, [1000, 1750]);
+  assert.equal(l.latchAlong, 1000);
+  assert.deepEqual(l.cut, [970, 1780]);
   assert.deepEqual(l.pull, [1750, 2550]);
+  assert.deepEqual(l.footprint, [970, 2580]);
+});
+
+test('S3c: 穴・欠き込みは縦枠の外面まで J 広がる。cut∪recess は [lo−J,hi+J] を隙間なく覆い、cut の長さ＝DW−50+2J・recess＝DW（左右とも）', () => {
+  for (const hingeSide of [-1, 1]) {
+    const l = outsetSlideLayout(op({ hingeSide }), SLIDE);
+    const [rLo, rHi] = l.recess.span;
+    assert.ok(l.cut[0] === rHi || l.cut[1] === rLo, `hingeSide=${hingeSide}: 接している`);
+    assert.equal(Math.min(l.cut[0], rLo), 970);
+    assert.equal(Math.max(l.cut[1], rHi), 2580);
+    assert.equal(l.cut[1] - l.cut[0], 750 + 60);
+    assert.equal(rHi - rLo, 800);
+  }
+  assert.deepEqual(outsetSlideLayout(op(), SLIDE).recess.span, [970, 1770]);
+  assert.deepEqual(outsetSlideLayout(op({ hingeSide: 1 }), SLIDE).recess.span, [1780, 2580]);
+});
+
+test('S3c: openingFootprint は引き戸（W+2J）だけ広がり、引き戸でない・外壁ホスト・W≤50 は開口全幅（恒等）・coord 非有限は null', () => {
+  assert.deepEqual(openingFootprint(op(), SLIDE), [970, 2580]);
+  assert.deepEqual(openingFootprint(op({ coord1: 2550, coord2: 1000 }), SLIDE), [970, 2580]);
+  assert.deepEqual(openingFootprint(op(), OpeningMechanism.SWING), [1000, 2550]);
+  assert.deepEqual(openingFootprint(op(), SLIDE, { isExteriorWall: true }), [1000, 2550]);
+  assert.deepEqual(openingFootprint(op({ coord2: 1050 }), SLIDE), [1000, 1050]);
+  assert.equal(openingFootprint(op({ coord2: NaN }), SLIDE), null);
+  assert.equal(openingFootprint(null, SLIDE), null);
+});
+
+test('S3c: openingFootprintExtraHalfOf は footprint 幅から導く（layout が引けない引き戸＝W≤50・外壁ホストは 0）。編集用 extra は機構から・下限は引き戸だけ 50', () => {
+  const wide = { ...op(), category: 'fitting', subType: 'sliding' };
+  const tiny = { ...op({ coord2: 1040 }), category: 'fitting', subType: 'sliding' };
+  const door = { ...op(), category: 'fitting', subType: 'singleSwing' };
+  assert.equal(openingFootprintExtraHalfOf(wide, { isExteriorWall: false }), 30);
+  assert.equal(openingFootprintExtraHalfOf(tiny, { isExteriorWall: false }), 0, 'W 40: footprint は恒等');
+  assert.equal(openingFootprintExtraHalfOf(wide, { isExteriorWall: true }), 0);
+  assert.equal(openingFootprintExtraHalfOf(door, null), 0);
+  assert.equal(openingEditExtraHalfOf(tiny, { isExteriorWall: false }), 30, '編集後の占有は機構から（今 W が小さくても J）');
+  assert.equal(openingMinWidthOf(tiny, { isExteriorWall: false }), 50);
+  assert.equal(openingMinWidthOf(wide, { isExteriorWall: true }), 0);
+  assert.equal(openingMinWidthOf(door, null), 0);
+});
+
+test('【失敗系】S3c: footprintResolver は coord 非有限の建具で null を返さず、比較が常に false になる区間を返す', () => {
+  const resolver = footprintResolver({ walls: [] });
+  const o = { category: 'fitting', subType: 'sliding', coord1: NaN, coord2: NaN, isVertical: false, axisCL: { id: 'x' }, wallSide: 1 };
+  const span = resolver(o);
+  assert.ok(Array.isArray(span) && span.length === 2);
+  const [f1, f2] = span;
+  assert.equal(1000 < f2 && 2000 > f1, false);
+  assert.deepEqual(resolver({ ...o, coord1: 100, coord2: 1650 }), [70, 1680], '有限なら通常どおり（host が引けなければ外壁扱いにならず外付け＝J 広がり）');
+});
+
+test('S3c: openingFootprintExtraHalf は引き戸かつ host 非外壁のときだけ J（30）・他は 0', () => {
+  assert.equal(openingFootprintExtraHalf(SLIDE), 30);
+  assert.equal(openingFootprintExtraHalf(SLIDE, { isExteriorWall: false }), 30);
+  assert.equal(openingFootprintExtraHalf(SLIDE, { isExteriorWall: true }), 0);
+  assert.equal(openingFootprintExtraHalf(OpeningMechanism.SWING), 0);
+  assert.equal(openingFootprintExtraHalf(undefined), 0);
 });
 
 test('layout: coord1 > coord2 の順でも同じ', () => {
@@ -49,14 +111,15 @@ test('layout: 奇数 W 1551 → doorWidth 800.5（裁定 R5 で 0.5 mm 許容）
   assert.equal(l.cutLength, 750.5);
 });
 
-test('不変条件: cut と pull は [lo,hi] を隙間なく覆う', () => {
+test('不変条件: pull は [lo,hi] 内の引き代（長さ DW）・cut∪recess が [lo−J,hi+J] を覆う（W 全域は cut の J 内側＋pull で覆う）', () => {
   for (const hingeSide of [-1, 1]) {
     for (const w of [100, 1550, 1551, 2000]) {
       const l = outsetSlideLayout(op({ hingeSide, coord2: 1000 + w }), SLIDE);
-      assert.ok(l.cut[0] === l.pull[1] || l.cut[1] === l.pull[0]);
-      assert.equal(Math.min(l.cut[0], l.pull[0]), 1000);
-      assert.equal(Math.max(l.cut[1], l.pull[1]), 1000 + w);
-      assert.equal((l.cut[1] - l.cut[0]) + (l.pull[1] - l.pull[0]), w);
+      assert.equal(l.pull[1] - l.pull[0], l.doorWidth);
+      assert.ok(l.pull[0] >= 1000 && l.pull[1] <= 1000 + w);
+      assert.equal(l.cut[1] - l.cut[0], l.cutLength + 60);
+      assert.equal(Math.min(l.cut[0], l.recess.span[0]), 970);
+      assert.equal(Math.max(l.cut[1], l.recess.span[1]), 1000 + w + 30);
     }
   }
 });
@@ -106,9 +169,9 @@ test('失敗側: W ≤ 50・W 非有限は layout null・cutSpan 恒等（coord 
   assert.equal(openingCutSpan(op({ coord1: undefined }), OpeningMechanism.SWING), null);
 });
 
-test('cutSpan: 引き戸は穴 cut を返す', () => {
-  assert.deepEqual(openingCutSpan(op(), SLIDE), [1800, 2550]);
-  assert.deepEqual(openingCutSpan(op({ coord1: 2550, coord2: 1000, hingeSide: 1 }), SLIDE), [1000, 1750]);
+test('cutSpan: 引き戸は穴 cut（枠の外面まで J 広がる）を返す', () => {
+  assert.deepEqual(openingCutSpan(op(), SLIDE), [1770, 2580]);
+  assert.deepEqual(openingCutSpan(op({ coord1: 2550, coord2: 1000, hingeSide: 1 }), SLIDE), [970, 1780]);
 });
 
 test('tailSide: hingeSide 0・undefined・null は −1、±1 はそのまま', () => {
@@ -117,7 +180,7 @@ test('tailSide: hingeSide 0・undefined・null は −1、±1 はそのまま', 
   assert.equal(slideTailSide({ hingeSide: null }), -1);
   assert.equal(slideTailSide({ hingeSide: 1 }), 1);
   assert.equal(slideTailSide({ hingeSide: -1 }), -1);
-  assert.deepEqual(outsetSlideLayout(op({ hingeSide: undefined }), SLIDE).cut, [1800, 2550]);
+  assert.deepEqual(outsetSlideLayout(op({ hingeSide: undefined }), SLIDE).cut, [1770, 2580]);
 });
 
 test('runPerpDir: swingSide 0・undefined・null は 0（走る面が決まらない）', () => {
@@ -147,18 +210,17 @@ test('R12: host が内壁・null・undefined・省略なら従来どおり（穴
   const o = op();
   for (const host of [{ isExteriorWall: false }, {}, null, undefined]) {
     assert.ok(outsetSlideLayout(o, SLIDE, host), `host=${JSON.stringify(host)}`);
-    assert.deepEqual(openingCutSpan(o, SLIDE, host), [1800, 2550]);
+    assert.deepEqual(openingCutSpan(o, SLIDE, host), [1770, 2580]);
   }
   assert.ok(outsetSlideLayout(o, SLIDE));
 });
 
-test('layout.recess: span は pull と同じ・perpSide は runPerpDir・depth は 50（SLIDE_OUTSET_RECESS_DEPTH_MM）', () => {
+test('layout.recess: span は cut の隣から W+J まで（pull より J 外側へずれる）・perpSide は runPerpDir・depth は 50（SLIDE_OUTSET_RECESS_DEPTH_MM）', () => {
   const l = outsetSlideLayout(op(), SLIDE);
-  assert.deepEqual(l.recess, { span: l.pull, perpSide: l.runPerpDir, depth: SLIDE_OUTSET_RECESS_DEPTH_MM });
+  assert.deepEqual(l.recess, { span: [970, 1770], perpSide: l.runPerpDir, depth: SLIDE_OUTSET_RECESS_DEPTH_MM });
   assert.equal(l.recess.depth, 50);
-  assert.deepEqual(l.recess.span, [1000, 1800]);
   const r = outsetSlideLayout(op({ hingeSide: 1 }), SLIDE);
-  assert.deepEqual(r.recess.span, [1750, 2550], 'hingeSide +1 は引き代が hi 側');
+  assert.deepEqual(r.recess.span, [1780, 2580], 'hingeSide +1 は引き代が hi 側');
   assert.equal(r.recess.perpSide, -l.recess.perpSide, '引き代の左右を替えると走る面（積）も替わる');
 });
 
@@ -173,7 +235,7 @@ test('slideRecessBand: perpSide +1 は大きい側の面から d 内側・−1 �
   const span = [1000, 1800];
   assert.deepEqual(slideRecessBand({ span, perpSide: 1, depth: 50 }, [1000, 1150]), { along: [1000, 1800], across: [1100, 1150] });
   assert.deepEqual(slideRecessBand({ span, perpSide: -1, depth: 50 }, [1000, 1150]), { along: [1000, 1800], across: [1000, 1050] });
-  assert.deepEqual(slideRecessBand(outsetSlideLayout(op(), SLIDE).recess, [-75, 75]), { along: [1000, 1800], across: [25, 75] }, 'layout 経由（swingSide 1・hingeSide −1・水平＝+側）');
+  assert.deepEqual(slideRecessBand(outsetSlideLayout(op(), SLIDE).recess, [-75, 75]), { along: [970, 1770], across: [25, 75] }, 'layout 経由（swingSide 1・hingeSide −1・水平＝+側）');
 });
 
 test('【失敗系】slideRecessBand: 壁厚が d 以下（T3）・recess null・perpSide 0・faceRange 非有限は null', () => {

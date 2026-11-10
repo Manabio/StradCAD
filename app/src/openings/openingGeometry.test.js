@@ -1,3 +1,59 @@
+// ---- S3c: 占有区間（footprintOf／extraHalf）。外付け引き戸は枠の外面（W+2J）で判定する ----
+
+// 内壁（x 0〜3000）に引き戸 W1550 を coord 100〜1650 に置く（footprint 70〜1680）。
+function slideOnWall() {
+  const graph = makeGraph();
+  const { wall } = makeSingleHorizontalWall(graph);
+  const slide = graph.addOpening(wall.axisCL, 1, false, wall.clStart, 875, 1550, OpeningCategory.FITTING, 'sliding', { hingeSide: -1, swingSide: 1 });
+  assert.deepEqual([slide.coord1, slide.coord2], [100, 1650], '前提: 引き戸の範囲');
+  return { graph, wall, slide };
+}
+
+test('S3c: validateOpeningPlacement の footprintOf 既定（引数なし）は従来どおり開口幅で判定する', () => {
+  const { graph, wall } = slideOnWall();
+  assert.equal(validateOpeningPlacement(wall, 1660, 1900, graph, null), null, '隣の W（〜1650）の外');
+  assert.equal(validateOpeningPlacement(wall, 1660, 1900, graph, null, defaultSpanOf), null, '明示の既定も同じ');
+  assert.equal(validateOpeningPlacement(wall, 1600, 1900, graph, null), ERR_OPENING_OVERLAP, '従来の重なり');
+});
+
+test('S3c: 隣が引き戸なら footprintResolver（W+2J）で判定し、W の外でも枠に掛かれば重なり NG', () => {
+  const { graph, wall } = slideOnWall();
+  const resolver = footprintResolver(graph);
+  assert.equal(validateOpeningPlacement(wall, 1660, 1900, graph, null, resolver), ERR_OPENING_OVERLAP, '隣の枠の外面は 1680');
+  assert.equal(validateOpeningPlacement(wall, 1680, 1900, graph, null, resolver), null, '枠の外面ちょうどは接するだけ');
+  assert.equal(validateOpeningPlacement(wall, 1660, 1900, graph, 'dummy', resolver), ERR_OPENING_OVERLAP, '別 id の除外は効かない');
+});
+
+test('S3c: validateOpeningPlacement は自分（excludeId）の footprint を無視する', () => {
+  const { graph, wall, slide } = slideOnWall();
+  assert.equal(validateOpeningPlacement(wall, 60, 1700, graph, slide.id, footprintResolver(graph)), null);
+});
+
+test('S3c: maxOpeningWidthAt は extraHalf 30 で上限が −60（壁端）。引数なしは従来', () => {
+  const graph = makeGraph();
+  const { wall } = makeSingleHorizontalWall(graph); // x 0〜3000
+  assert.equal(maxOpeningWidthAt(wall, 1500, graph), 3000);
+  assert.equal(maxOpeningWidthAt(wall, 1500, graph, null, defaultSpanOf, 0), 3000);
+  assert.equal(maxOpeningWidthAt(wall, 1500, graph, null, defaultSpanOf, 30), 2940);
+  assert.equal(maxOpeningWidthAt(wall, 1000, graph, null, defaultSpanOf, 30), 1940, '狭い側（左 1000）−30 の 2 倍');
+});
+
+test('S3c: maxOpeningWidthAt は隣が引き戸なら footprint の端までで止まる（従来 700 → 640 → extra 30 で 580）', () => {
+  const { graph, wall } = slideOnWall();
+  assert.equal(maxOpeningWidthAt(wall, 2000, graph), 700, '従来: 隣の W の端 1650 まで 350×2');
+  assert.equal(maxOpeningWidthAt(wall, 2000, graph, null, footprintResolver(graph)), 640, '枠の外面 1680 まで 320×2');
+  assert.equal(maxOpeningWidthAt(wall, 2000, graph, null, footprintResolver(graph), 30), 580);
+});
+
+test('【失敗系】S3c: maxOpeningWidthAt は extra が上限を食い潰すと 0（負値にしない）・隣の footprint が中心をまたぐと 0', () => {
+  const graph = makeGraph();
+  const { wall } = makeSingleHorizontalWall(graph);
+  assert.equal(maxOpeningWidthAt(wall, 20, graph, null, defaultSpanOf, 30), 0);
+  const s = slideOnWall();
+  assert.equal(maxOpeningWidthAt(s.wall, 1660, s.graph, null, footprintResolver(s.graph)), 0, '中心 1660 は隣の枠（〜1680）の内側');
+  assert.equal(maxOpeningWidthAt(s.wall, 1660, s.graph), 20, '従来は W の外なので広げられる');
+});
+
 // swingSideTowardPerp の符号は openings/openingPlanSymbol.js swingLeafPrimitives の開き角度式
 // （closedAngle = isVertical? (towardFar>0?90:-90) : (towardFar>0?0:180) /
 //   openAngle = closedAngle + swingSide*90）を三角関数でそのまま再現し、
@@ -10,8 +66,10 @@ import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
 import { OpeningCategory } from '../core.js';
 import {
   swingSideTowardPerp, isWallRadialHit, wallRadialHitDist, nearestWallHit, findCounterpartWall, exteriorSideDir,
-  maxOpeningWidthAt,
+  maxOpeningWidthAt, validateOpeningPlacement, defaultSpanOf,
 } from './openingGeometry.js';
+import { footprintResolver } from './slideOutset.js';
+import { ERR_OPENING_OVERLAP } from '../error.js';
 
 function makeGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);

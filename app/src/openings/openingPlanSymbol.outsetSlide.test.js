@@ -1,5 +1,5 @@
 // 外付け引き戸（SLIDE_SINGLE）の平面記号（S4。openingPlanSymbol.js outsetSlidePrimitives）。
-// fixture は原点からずらす（符号の変異を検出するため）: 横壁・軸 y=3000（面 2940〜3060）・建具 x 1000〜2550（W=1550・DW=800・穴 750）。
+// fixture は原点からずらす（符号の変異を検出するため）: 横壁・軸 y=3000（面 2940〜3060）・建具 x 1000〜2550（W=1550・DW=800・穴 750・枠の外面まで J=30 広げた cut は 750+60）。
 // 向きの期待値は slideOutset.js の layout の読みを手で解いた表（hingeSide -1＝戸尻が x 小の側＝cut が大きい側）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -34,10 +34,11 @@ const spanX = p => [Math.min(p.x1, p.x2), Math.max(p.x1, p.x2)];
 
 // [hingeSide, swingSide, cut, pull, 扉の y（面−20＝走る面が faceHi なら 3040・faceLo なら 2960）, 閉じた扉の x 区間]
 const GENERAL_CASES = [
-  [-1, 1, [1800, 2550], [1000, 1800], 3040, [1750, 2550]],
-  [-1, -1, [1800, 2550], [1000, 1800], 2960, [1750, 2550]],
-  [1, -1, [1000, 1750], [1750, 2550], 3040, [1000, 1800]],
-  [1, 1, [1000, 1750], [1750, 2550], 2960, [1000, 1800]],
+  // 枠＝穴 cut は縦枠の外面まで J(30) 広がる（S3c）。閉じた扉・破線は W 内（戸先端 latchAlong 起点）で不変。
+  [-1, 1, [1770, 2580], [1000, 1800], 3040, [1750, 2550]],
+  [-1, -1, [1770, 2580], [1000, 1800], 2960, [1750, 2550]],
+  [1, -1, [970, 1780], [1750, 2550], 3040, [1000, 1800]],
+  [1, 1, [970, 1780], [1750, 2550], 2960, [1000, 1800]],
 ];
 
 for (const [hingeSide, swingSide, cut, pull, doorY, closed] of GENERAL_CASES) {
@@ -67,14 +68,15 @@ for (const [hingeSide, swingSide, cut, pull, doorY, closed] of GENERAL_CASES) {
   });
 }
 
-test('一般 LOD: 戸先端は穴の閉じ側の端（tailSide 反対）＝閉じた扉の端が cut の端と一致する', () => {
+test('一般 LOD: 戸先端 latchAlong（tailSide 反対の W の端）＝閉じた扉の端。枠 cut の端は戸先枠の見付 J だけ外側', () => {
   for (const hingeSide of [-1, 1]) {
     const prims = buildOpeningPlanSymbol(makeOpening({ hingeSide }), makeCtx());
     const [frame, door] = prims;
     const cut = [frame.x, frame.x + frame.w];
     const closed = spanX(door);
-    // hingeSide -1: 戸先端＝cut の大きい側 / 1: 小さい側
-    assert.equal(hingeSide < 0 ? closed[1] : closed[0], hingeSide < 0 ? cut[1] : cut[0]);
+    // hingeSide -1: 戸先端＝W の大きい側（2550）/ 1: 小さい側（1000）。cut の端は 30 外側。
+    assert.equal(hingeSide < 0 ? closed[1] : closed[0], hingeSide < 0 ? 2550 : 1000);
+    assert.equal(hingeSide < 0 ? cut[1] - closed[1] : closed[0] - cut[0], 30);
   }
 });
 
@@ -82,8 +84,8 @@ test('一般 LOD: hingeSide だけ反転（flippedHingeSides の両方反転と�
   const a = buildOpeningPlanSymbol(makeOpening({ hingeSide: -1, swingSide: 1 }), makeCtx());
   const b = buildOpeningPlanSymbol(makeOpening({ hingeSide: 1, swingSide: -1 }), makeCtx());
   assert.equal(a[1].y1, b[1].y1); // 走る面は不変
-  assert.deepEqual([a[0].x, a[0].x + a[0].w], [1800, 2550]);
-  assert.deepEqual([b[0].x, b[0].x + b[0].w], [1000, 1750]);
+  assert.deepEqual([a[0].x, a[0].x + a[0].w], [1770, 2580]);
+  assert.deepEqual([b[0].x, b[0].x + b[0].w], [970, 1780]);
   assert.deepEqual(spanX(a[2]), [1000, 1800]);
   assert.deepEqual(spanX(b[2]), [1750, 2550]);
 });
@@ -102,7 +104,7 @@ test('一般 LOD: 縦壁（isVertical）も along／perp が入れ替わるだ�
   const opening = makeOpening({ isVertical: true, hingeSide: -1, swingSide: -1 });
   const prims = buildOpeningPlanSymbol(opening, makeCtx());
   const [frame, door, open] = prims;
-  assert.deepEqual([frame.y, frame.y + frame.h], [1800, 2550]);
+  assert.deepEqual([frame.y, frame.y + frame.h], [1770, 2580]);
   assert.deepEqual([frame.x, frame.x + frame.w], [2980, 3020]);
   assert.equal(door.x1, 3040);
   assert.equal(door.x2, 3040);
@@ -117,13 +119,13 @@ test('詳細 LOD: 方立のコの字が cut の両端・内法の枠矩形・扉
   const prims = buildOpeningPlanSymbol(makeOpening(), makeCtx({ lodLevel: LodLevel.DETAIL }));
   assert.equal(prims.length, 5);
   const [jambA, jambB, inner, door, open] = prims;
-  // 方立: cut [1800,2550] の両端（見付 30）・帯 面±12
-  assert.deepEqual(jambA.points, [1830, 2928, 1800, 2928, 1800, 3072, 1830, 3072]);
-  assert.deepEqual(jambB.points, [2520, 2928, 2550, 2928, 2550, 3072, 2520, 3072]);
+  // 方立: cut [1770,2580] の両端（見付 30）＝[A+750, A+780] と [A, A+30]（A=2550。S3c）・帯 面±12
+  assert.deepEqual(jambA.points, [1800, 2928, 1770, 2928, 1770, 3072, 1800, 3072]);
+  assert.deepEqual(jambB.points, [2550, 2928, 2580, 2928, 2580, 3072, 2550, 3072]);
   assert.equal(jambA.role, 'frame');
   assert.equal(jambA.closed, undefined);
-  // 枠の矩形は内法（方立と二重に描かない）
-  assert.deepEqual([inner.x, inner.x + inner.w], [1830, 2520]);
+  // 枠の矩形は内法＝穴の長さ DW−50（方立と二重に描かない）
+  assert.deepEqual([inner.x, inner.x + inner.w], [1800, 2550]);
   assert.deepEqual([inner.y, inner.y + inner.h], [2928, 3072]);
   // 扉: 走る面 faceHi=3060 の内側 [3025, 3055]（面−35〜面−5）
   assert.equal(door.role, 'symbol');
@@ -143,21 +145,23 @@ test('詳細 LOD: swingSide 反転で扉の矩形が faceLo 側 [面+5, 面+35] 
   assert.deepEqual([b[4].y, b[4].y + b[4].h], [2945, 2975]);
 });
 
-test('詳細 LOD: 穴が方立 2 本分以下（W=140 → 穴 45 ≤ 60）は内法の枠矩形を描かない（二重・反転を避ける）', () => {
+test('詳細 LOD: W が小さい（W=140 → 穴の長さ 45）でも S3c の cut は方立 2 本分を含むので内法の枠矩形は穴の長さ 45 で描かれ、座標は有限', () => {
   const opening = makeOpening({ coord1: 1000, coord2: 1140, width: 140 });
   const prims = buildOpeningPlanSymbol(opening, makeCtx({ lodLevel: LodLevel.DETAIL }));
-  assert.equal(prims.filter(p => p.role === 'frame' && p.type === 'rect').length, 0);
+  const inner = prims.filter(p => p.role === 'frame' && p.type === 'rect');
+  assert.equal(inner.length, 1);
+  assert.equal(inner[0].w, 45);
   for (const p of prims) {
     for (const k of ['x', 'y', 'w', 'h']) if (k in p) assert.ok(Number.isFinite(p[k]), `${k}: ${p[k]}`);
   }
 });
 
-test('詳細 LOD: hingeSide 1・swingSide -1 → 方立 1000〜1030／1720〜1750・内法枠 1030〜1720・扉 x 1000〜1800 y 3025〜3055・破線 x 1750〜2550', () => {
+test('詳細 LOD: hingeSide 1・swingSide -1 → 方立 970〜1000／1750〜1780・内法枠 1000〜1750・扉 x 1000〜1800 y 3025〜3055・破線 x 1750〜2550', () => {
   const prims = buildOpeningPlanSymbol(makeOpening({ hingeSide: 1, swingSide: -1 }), makeCtx({ lodLevel: LodLevel.DETAIL }));
   const [jambA, jambB, inner, door, open] = prims;
-  assert.deepEqual(jambA.points, [1030, 2928, 1000, 2928, 1000, 3072, 1030, 3072]);
-  assert.deepEqual(jambB.points, [1720, 2928, 1750, 2928, 1750, 3072, 1720, 3072]);
-  assert.deepEqual([inner.x, inner.x + inner.w], [1030, 1720]);
+  assert.deepEqual(jambA.points, [1000, 2928, 970, 2928, 970, 3072, 1000, 3072]);
+  assert.deepEqual(jambB.points, [1750, 2928, 1780, 2928, 1780, 3072, 1750, 3072]);
+  assert.deepEqual([inner.x, inner.x + inner.w], [1000, 1750]);
   assert.deepEqual([door.x, door.x + door.w], [1000, 1800]);
   assert.deepEqual([door.y, door.y + door.h], [3025, 3055]);
   assert.equal(door.dash, undefined);
@@ -180,7 +184,7 @@ test('縮退: 壁厚 ≤ 50（faceLo 2987.5・faceHi 3012.5＝25）は欠き込�
   const g = buildOpeningPlanSymbol(makeOpening(), makeCtx(faces));
   assert.equal(g.length, 2);
   assert.equal(g[1].y1, 3000);
-  assert.deepEqual(spanX(g[1]), [1800, 2550]);
+  assert.deepEqual(spanX(g[1]), [1770, 2580]);
   assert.equal(g.some(p => p.dash), false);
   const d = buildOpeningPlanSymbol(makeOpening(), makeCtx({ ...faces, lodLevel: LodLevel.DETAIL }));
   assert.deepEqual(d.map(p => p.type), ['polyline', 'polyline', 'rect', 'line']);
@@ -220,9 +224,9 @@ test('縮退: 外壁でない host（isExteriorWall false）・host 無しは外
 test('縮退: swingSide 0（走る面が決まらない）→ 穴の枠＋帯中央の扉線（cut 長）・破線なし', () => {
   const prims = buildOpeningPlanSymbol(makeOpening({ swingSide: 0 }), makeCtx());
   assert.equal(prims.length, 2);
-  assert.deepEqual([prims[0].x, prims[0].x + prims[0].w], [1800, 2550]);
+  assert.deepEqual([prims[0].x, prims[0].x + prims[0].w], [1770, 2580]);
   assert.equal(prims[1].y1, 3000);
-  assert.deepEqual(spanX(prims[1]), [1800, 2550]);
+  assert.deepEqual(spanX(prims[1]), [1770, 2580]);
   assert.equal(prims.some(p => p.dash), false);
 });
 

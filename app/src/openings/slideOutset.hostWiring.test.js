@@ -91,6 +91,31 @@ test('【配線】slideRecessBand の消費側の全呼び出しが、実ホス�
   assert.ok(/import \{[^}]*wallFaceRange[^}]*\} from '\.\.\/openings\/openingGeometry\.js'/.test(code), 'wallFaceRange は openingGeometry.js のものを使う');
 });
 
+// S3c: 判定関数の footprintOf／extraHalf は既定値（開口幅）を持つので、渡し忘れると黙って外付け引き戸が W で判定される。
+// 消費側（テスト以外のソース）の全呼び出しが、引数を全部渡していることをソース走査で固定する。
+const FOOTPRINT_AWARE = { validateOpeningPlacement: 6, maxOpeningWidthAt: 6, openingMoveRange: 5, openingSnapCandidates: 5 };
+
+test('【配線】S3c: validateOpeningPlacement・maxOpeningWidthAt・openingMoveRange・openingSnapCandidates の全呼び出しが footprintOf／extra を渡している', () => {
+  const found = Object.fromEntries(Object.keys(FOOTPRINT_AWARE).map(k => [k, 0]));
+  for (const file of sourceFiles(SRC)) {
+    const code = stripComments(fs.readFileSync(file, 'utf8'));
+    for (const [name, expected] of Object.entries(FOOTPRINT_AWARE)) {
+      for (const n of callArities(code, name)) {
+        found[name] += 1;
+        assert.equal(n, expected, `${path.relative(SRC, file)} の ${name}( が ${n} 引数（footprintOf／extra の渡し忘れ。期待 ${expected}）`);
+      }
+    }
+  }
+  for (const name of Object.keys(FOOTPRINT_AWARE)) assert.ok(found[name] >= 1, `前提: ${name} の消費側が見つかるはず`);
+  assert.equal(found.validateOpeningPlacement, 3, '前提: openingEdit.js の 3 か所（配置・クランプ後の再検証・編集検証）');
+});
+
+test('【配線】S3c: ドラッグ中のスナップ表示の半幅は extraHalf を含む（usePointerInteraction.js・コメント除外）', () => {
+  const code = stripComments(fs.readFileSync(path.join(SRC, 'interaction', 'usePointerInteraction.js'), 'utf8'));
+  assert.ok(/snapIndicatorAlong\(r\.candidate,\s*st\.opening\.width \/ 2 \+ st\.extraHalf\)/.test(code), 'snapIndicatorAlong の半幅に extraHalf が無い');
+  assert.ok(/openingSnapCandidates\(wall, opening, graph, range, extraHalf\)/.test(code));
+});
+
 test('callArities（走査器の自己検証）: 引数の数・入れ子・複数行・定義の除外・コメント外の取りこぼし', () => {
   assert.deepEqual(callArities('openingCutSpan(o, m, w)', 'openingCutSpan'), [3]);
   assert.deepEqual(callArities('openingCutSpan(o, m)', 'openingCutSpan'), [2], '失敗側: host 無しは 2');

@@ -24,7 +24,9 @@ import {
 import { findHostWall, validateOpeningPlacement, maxOpeningWidthAt, findOpeningsOnWall, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
 import { renumberOpenings } from './openingNumbering.js';
 import { openingRefOffsetRange, clampRefOffset } from './openingMove.js';
-import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP } from '../error.js';
+import { footprintResolver, openingFootprintExtraHalf, openingEditExtraHalfOf, openingMinWidthOf } from './slideOutset.js';
+import { SLIDE_OUTSET_WIDTH_DEDUCT_MM } from '../core/constants.js';
+import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP, ERR_SLIDE_WIDTH_TOO_SMALL } from '../error.js';
 
 // 内開き系機構（室内側へ開く特性を持つ）。placeOpeningWithDefaults の swingSide 既定計算で、
 // 外壁の「常に室外側へ開く」既定より機構特性を優先するために参照する。
@@ -221,7 +223,10 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
   const along = wall.isVertical ? worldPos.y : worldPos.x;
   let refOffset = Math.round(along - refCL.effectiveValue);
   let centerCoord = refCL.effectiveValue + refOffset;
-  let err = validateOpeningPlacement(wall, centerCoord - width / 2, centerCoord + width / 2, graph, null);
+  // 外付け引き戸は占有が枠の外面（W+2J）。可動範囲・重なりは W の両側へ extra 広げて判定する（S3c）。
+  const extra = openingFootprintExtraHalf(entry.mechanism, wall);
+  const footprintOf = footprintResolver(graph);
+  let err = validateOpeningPlacement(wall, centerCoord - width / 2 - extra, centerCoord + width / 2 + extra, graph, null, footprintOf);
 
   if (err) {
     // 壁中央へフォールバックしても既定幅(width)がそのまま収まるとは限らない（壁長不足・
@@ -231,8 +236,8 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
     const wallLo = Math.min(wall.coord1, wall.coord2), wallHi = Math.max(wall.coord1, wall.coord2);
     refOffset = Math.round((wallLo + wallHi) / 2 - refCL.effectiveValue);
     centerCoord = refCL.effectiveValue + refOffset;
-    width = Math.min(width, maxOpeningWidthAt(wall, centerCoord, graph, null));
-    err = validateOpeningPlacement(wall, centerCoord - width / 2, centerCoord + width / 2, graph, null);
+    width = Math.min(width, maxOpeningWidthAt(wall, centerCoord, graph, null, footprintOf, extra));
+    err = validateOpeningPlacement(wall, centerCoord - width / 2 - extra, centerCoord + width / 2 + extra, graph, null, footprintOf);
   }
   if (err) return { opening: null, error: err };
   // 0幅は coord1===coord2 のため validateOpeningPlacement の範囲外／重なり判定を素通りしてしまう
@@ -240,7 +245,10 @@ export function placeOpeningWithDefaults(graph, project, wall, worldPos, categor
   // どちらの開口とも厳密比較で重ならず判定を通過する）——クランプ後も幅が残らない場合は別途弾く。
   // 壁上に既存開口が1つでもあれば「開口で埋まっている」のが真因なのでERR_OPENING_OVERLAPを返し、
   // 既存開口が無ければ壁自体の範囲不足（スパン0の縮退壁等）なのでERR_OPENING_OUT_OF_WALLを返す。
-  if (width <= 0) {
+  // 外付け引き戸（extra>0）は縮めた W が SLIDE_OUTSET_WIDTH_DEDUCT_MM 以下だと穴が 0 以下＝外付けにならない
+  // 「静かな別物」になるため置かない（リード裁定 Q-S3c-1。使い分けは幅 0 と同じ）。
+  const minWidth = extra > 0 ? SLIDE_OUTSET_WIDTH_DEDUCT_MM : 0;
+  if (width <= minWidth) {
     const error = findOpeningsOnWall(wall, graph).length > 0 ? ERR_OPENING_OVERLAP : ERR_OPENING_OUT_OF_WALL;
     return { opening: null, error };
   }
@@ -311,7 +319,28 @@ export function validateOpeningEdit(o, graph, { width, refOffset }) {
   const wall = findHostWall(o, graph);
   if (!wall) return null;
   const centerCoord = o.refCL.effectiveValue + refOffset;
-  return validateOpeningPlacement(wall, centerCoord - width / 2, centerCoord + width / 2, graph, o.id);
+  const extra = openingEditExtraHalfOf(o, wall);
+  if (width <= openingMinWidthOf(o, wall) && extra > 0) return ERR_SLIDE_WIDTH_TOO_SMALL; // 外付け引き戸の下限（配置・間口編集と同じ）
+  return validateOpeningPlacement(wall, centerCoord - width / 2 - extra, centerCoord + width / 2 + extra, graph, o.id, footprintResolver(graph));
+}
+
+/**
+ * 図上の間口編集（OpeningEditor onEditDim）の確定規則。「丸められるときは丸める／置けないときは弾く」。
+ * 上限 maxOpeningWidthAt（隣・壁端・外付け引き戸は枠の外面）を超える値は上限へ丸め、上限 0 は壁外／重なりで弾く。
+ * 外付け引き戸は W が下限（SLIDE_OUTSET_WIDTH_DEDUCT_MM）以下になる値も弾く（配置時の Q-S3c-1 と同じ）。
+ * @returns {{ value:number|null, message:string|null }} value null＝確定しない（message をトースト）
+ */
+export function resolveWidthEdit(opening, graph, wall, v) {
+  const centerCoord = opening.refCL.effectiveValue + opening.refOffset;
+  const maxWidth = maxOpeningWidthAt(wall, centerCoord, graph, opening.id, footprintResolver(graph), openingEditExtraHalfOf(opening, wall));
+  if (maxWidth <= 0) {
+    // 上限0の真因が「壁自体に収まらない」か「隣接開口(自分以外)で埋まっている」かで文言を分ける（placeOpeningWithDefaults と同じ判定規約）。
+    const hasOtherOpenings = findOpeningsOnWall(wall, graph).some(o => o.id !== opening.id);
+    return { value: null, message: hasOtherOpenings ? ERR_OPENING_OVERLAP : ERR_OPENING_OUT_OF_WALL };
+  }
+  if (Math.min(v, maxWidth) <= openingMinWidthOf(opening, wall)) return { value: null, message: ERR_SLIDE_WIDTH_TOO_SMALL };
+  if (v > maxWidth) return { value: maxWidth, message: `間口の上限 ${maxWidth}mm に丸めました` };
+  return { value: v, message: null };
 }
 
 /**

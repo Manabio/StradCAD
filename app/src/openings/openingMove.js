@@ -31,7 +31,8 @@
 // ================================================================
 
 import { CenterLineType, centerLineKind } from '../core.js';
-import { findHostWall, findOpeningsOnWall } from './openingGeometry.js';
+import { findHostWall, findOpeningsOnWall, defaultSpanOf } from './openingGeometry.js';
+import { footprintResolver, openingFootprintExtraHalfOf } from './slideOutset.js';
 // isOpeningBoundaryKind／kindsVisibleIn: core/centerLineKindPolicy.js は ./centerLine.js・
 // ./constants.js のみに依存する純モジュール（import ゼロに近い規約）のため、ここから引いても
 // react-konva/store.js/snap.js/.jsx を静的に引かない、という本ファイル冒頭の規約は壊れない。
@@ -123,20 +124,22 @@ export function perpendicularWallMaterial(cl, host, boundary, graph) {
  * 収まる余地が無い（min>max。壁長不足・隣接開口に挟まれ過ぎ）場合は null。
  * @returns {{min:number, max:number}|null}
  */
-export function openingMoveRange(wall, opening, graph) {
+export function openingMoveRange(wall, opening, graph, footprintOf = defaultSpanOf, extraHalf = 0) {
   const wallLo = Math.min(wall.coord1, wall.coord2), wallHi = Math.max(wall.coord1, wall.coord2);
   const center = opening.centerCoord;
+  const [ownLo, ownHi] = footprintOf(opening);
   let loBound = wallLo, hiBound = wallHi;
   for (const o of findOpeningsOnWall(wall, graph)) {
     if (o.id === opening.id) continue;
-    if (o.centerCoord <= center) loBound = Math.max(loBound, o.coord2);
-    else                         hiBound = Math.min(hiBound, o.coord1);
+    const [f1, f2] = footprintOf(o);
+    if (o.centerCoord <= center) loBound = Math.max(loBound, f2);
+    else                         hiBound = Math.min(hiBound, f1);
   }
   const boundary = boundaryMaterialRange(wall, opening, graph);
   const crossType = wall.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
   const applyBound = (lo, hi) => {
-    if (hi <= opening.coord1)      loBound = Math.max(loBound, hi);
-    else if (lo >= opening.coord2) hiBound = Math.min(hiBound, lo);
+    if (hi <= ownLo)      loBound = Math.max(loBound, hi);
+    else if (lo >= ownHi) hiBound = Math.min(hiBound, lo);
   };
   // ここは走査API（candidatesVisibleIn等）に畳めない: 種別を問わずCL上の直交壁材を先に確認する必要が
   // あり（perpendicularWallMaterial は種別を見ない）、種別で絞り込んでからループするとその判定を
@@ -149,7 +152,8 @@ export function openingMoveRange(wall, opening, graph) {
     if (!isBlockingKind(cl) || !clCrossesWall(cl, wall)) continue;
     applyBound(cl.value, cl.value);
   }
-  const half = opening.width / 2;
+  // footprintOf＝隣・自分の占有区間（外付け引き戸は枠の外面〜外面）、extraHalf＝占有が W の両側へ広がる量（見付 J）。
+  const half = opening.width / 2 + extraHalf;
   const min = loBound + half, max = hiBound - half;
   if (!(min <= max)) return null;
   return { min, max };
@@ -164,7 +168,7 @@ export function openingMoveRange(wall, opening, graph) {
 export function openingRefOffsetRange(opening, graph) {
   const wall = findHostWall(opening, graph);
   if (!wall) return null;
-  const range = openingMoveRange(wall, opening, graph);
+  const range = openingMoveRange(wall, opening, graph, footprintResolver(graph), openingFootprintExtraHalfOf(opening, wall));
   if (!range) return null;
   return refOffsetRangeOf(range, opening.refCL.effectiveValue);
 }
@@ -192,14 +196,15 @@ export function clampRefOffset(refOffset, range) {
  * @param {object} opening
  * @param {object} graph
  * @param {{min:number,max:number}} range - openingMoveRange の結果
+ * @param {number} [extraHalf] 占有が W の両側へ広がる量（外付け引き戸の見付 J。openingMoveRange と同じ値）
  * @returns {{value:number, kind:'cl-center'|'cl-edge'|'range-end', cl?:object, edge?:-1|1}[]}
  */
-export function openingSnapCandidates(wall, opening, graph, range) {
+export function openingSnapCandidates(wall, opening, graph, range, extraHalf = 0) {
   const out = [];
   const inRange = v => v >= range.min - 1e-6 && v <= range.max + 1e-6;
   const push = (value, kind, extra) => { if (inRange(value)) out.push({ value, kind, ...extra }); };
   const crossType = wall.isVertical ? CenterLineType.HORIZONTAL : CenterLineType.VERTICAL;
-  const half = opening.width / 2;
+  const half = opening.width / 2 + extraHalf; // 占有（枠の外面）の半幅
   for (const cl of candidatesVisibleIn(graph, { appMode: OPENING_SNAP_APP_MODE, centerLineType: crossType })) {
     const v = cl.value;
     push(v,        'cl-center', { cl });

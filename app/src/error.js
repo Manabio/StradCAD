@@ -382,6 +382,7 @@ export const detailSlotLabel = (slot) => (Object.hasOwn(DETAIL_SLOT_LABELS, slot
 export const ERR_DETAIL_FIT_FAILED = (label, symbolKey, reason, slot) =>
   `詳細図 ${label} を ${symbolKey} の${detailSlotLabel(slot)}に合わせられません: ${reason}`;
 // 外壁をホストにする引き戸（SLIDE_SINGLE）は外付けにできない（R12。壁を枠厚分欠き込むので屋内壁に限る）。建具モード突入時の通知の文言。
+export const ERR_SLIDE_WIDTH_TOO_SMALL = '引き戸の間口はこれ以上縮められません。';
 export const ERR_SLIDE_ON_EXTERIOR_WALL = '外壁にある引き戸は外付けにできません（従来の描き方のままです）';
 // 参照先の詳細図がカタログ（ライブラリ・同梱）に無い場合。owner は参照の持ち主——記号キー、建具個別の指定なら
 // DETAIL_OWNER_OPENING、fit のメモ口では図のキー。

@@ -31,6 +31,7 @@ import {
   elevationDragAlong, previewDxLocalMm,
 } from '../openings/openingMove.js';
 import { snapshotOpening, pushOpeningUndo } from '../openings/openingEdit.js';
+import { footprintResolver, openingFootprintExtraHalfOf } from '../openings/slideOutset.js';
 import { inGutter as isInGutter } from '../layout.js';
 import { commitCLMoveOp } from '../transform/centerLineOps.js';
 import { commitSiteTapLine } from '../transform/siteEdit.js';
@@ -395,11 +396,12 @@ export function usePointerInteraction({
   function startOpeningDrag(opening, alongAtDownFn, extra = {}) {
     const wall = findHostWall(opening, graph);
     if (!wall) return false;
-    const range = openingMoveRange(wall, opening, graph);
+    const extraHalf = openingFootprintExtraHalfOf(opening, wall); // 外付け引き戸は枠の外面（W+2J）で判定
+    const range = openingMoveRange(wall, opening, graph, footprintResolver(graph), extraHalf);
     if (!range) return false;
     openingDragRef.current = {
-      opening, wall, range,
-      candidates: openingSnapCandidates(wall, opening, graph, range),
+      opening, wall, range, extraHalf,
+      candidates: openingSnapCandidates(wall, opening, graph, range, extraHalf),
       grabDelta: opening.centerCoord - alongAtDownFn(wall), // つまんだ点と開口中心のずれ（中心がカーソルへ飛ばないように）
       before: snapshotOpening(opening),
       ...extra,
@@ -422,7 +424,7 @@ export function usePointerInteraction({
     setCursorWorld(viewport.screenToWorld(clientX, clientY));
     setCursorScreen({ x: clientX, y: clientY });
     if (r?.snapped) {
-      const a = snapIndicatorAlong(r.candidate, st.opening.width / 2);
+      const a = snapIndicatorAlong(r.candidate, st.opening.width / 2 + st.extraHalf);
       setSnapPoint(st.wall.isVertical ? { x: st.wall.axisValue, y: a } : { x: a, y: st.wall.axisValue });
     } else {
       setSnapPoint(null);

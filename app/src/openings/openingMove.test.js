@@ -8,6 +8,7 @@ import {
   resolveOpeningRefOffset, snapIndicatorAlong, clCrossesWall, perpendicularWallMaterial,
   elevationDragAlong, previewDxLocalMm,
 } from './openingMove.js';
+import { footprintResolver, openingFootprintExtraHalfOf } from './slideOutset.js';
 
 function makeGraph(planeId = 'p1') {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
@@ -432,4 +433,95 @@ test('openingMoveRange: 補助線（破線）CL上に実在する直交壁は種
   assert.deepEqual(openingMoveRange(wall, o, graph), { min: 400, max: 2600 }, '壁の無い補助線はまたげる');
   addPerpWall(graph, wall, 2000, { axisOffset: -75 }); // 材 1925..2000
   assert.deepEqual(openingMoveRange(wall, o, graph), { min: 400, max: 1525 }, '補助線上でも壁があれば材の面で止まる');
+});
+
+// ================================================================
+// S3c: 外付け引き戸は枠の外面（W+2J。J=30）で可動範囲・スナップを判定する
+// ================================================================
+function addSlide(graph, wall, refOffset, width = 1550) {
+  return graph.addOpening(wall.axisCL, 1, wall.isVertical, wall.clStart, refOffset, width, OpeningCategory.FITTING, 'sliding', { hingeSide: -1, swingSide: 1 });
+}
+const slideRange = (graph, wall, o) => openingMoveRange(wall, o, graph, footprintResolver(graph), openingFootprintExtraHalfOf(o, wall));
+
+test('S3c: 引き戸の可動範囲は壁端から枠の外面（半幅 775+30）。openingRefOffsetRange（位置欄・ドラッグ共通の範囲）も同じ', () => {
+  const graph = makeGraph();
+  const { wall } = makeHorizontalWall(graph);
+  const o = addSlide(graph, wall, 1500);
+  assert.deepEqual(slideRange(graph, wall, o), { min: 805, max: 2195 });
+  assert.deepEqual(openingRefOffsetRange(o, graph), { min: 805, max: 2195 });
+  assert.deepEqual(openingMoveRange(wall, o, graph), { min: 775, max: 2225 }, '前提: 引数なし（従来）は W の半幅');
+});
+
+test('S3c: 引き戸の可動範囲は直交壁の材の面まで枠の外面が届く位置で止まる（面 1925 − 805）', () => {
+  const graph = makeGraph();
+  const { wall } = makeHorizontalWall(graph);
+  const o = addSlide(graph, wall, 1000); // coord 225..1775・footprint 195..1805
+  addPerpWall(graph, wall, 2000, { axisOffset: -75 }); // 材 1925..2000
+  assert.deepEqual(slideRange(graph, wall, o), { min: 805, max: 1120 });
+});
+
+test('S3c: 引き戸の隣の建具は footprint で止まる（引き戸が隣・引き戸が自分の両方向。普通の建具の端は従来どおり）', () => {
+  const graph = makeGraph();
+  const { wall } = makeHorizontalWall(graph);
+  const slide = addSlide(graph, wall, 900); // coord 125..1675・footprint 95..1705
+  const door = addOpening(graph, wall, 2300, 400); // coord 2100..2500
+  // 普通の建具（半幅 200）の lo 側は隣の引き戸の枠の外面 1705 で止まる（従来なら 1675）
+  assert.equal(slideRange(graph, wall, door).min, 1705 + 200);
+  assert.equal(openingMoveRange(wall, door, graph).min, 1675 + 200, '前提: 引数なし（従来）');
+  // 引き戸の hi 側は隣の普通の建具の端 2100 − 805
+  assert.equal(slideRange(graph, wall, slide).max, 2100 - 805);
+});
+
+test('S3c: 普通の建具は footprintResolver・extra 0 を渡しても従来の範囲・候補と deepEqual', () => {
+  const graph = makeGraph();
+  const { wall } = makeHorizontalWall(graph);
+  graph.addCenterLine(CenterLineType.VERTICAL, 1500, { labeled: false, discipline: Discipline.ARCH, lineType: 'dashed' });
+  const o = addOpening(graph, wall, 1000, 800);
+  const plain = openingMoveRange(wall, o, graph);
+  const viaResolver = slideRange(graph, wall, o);
+  assert.deepEqual(viaResolver, plain);
+  assert.deepEqual(openingSnapCandidates(wall, o, graph, viaResolver, openingFootprintExtraHalfOf(o, wall)), openingSnapCandidates(wall, o, graph, plain));
+});
+
+test('S3c: スナップ候補の端一致は枠の外面（半幅 805）。範囲端は枠の外面が壁端に当たる位置', () => {
+  const graph = makeGraph();
+  const { wall } = makeHorizontalWall(graph);
+  graph.addCenterLine(CenterLineType.VERTICAL, 1200, { labeled: false, discipline: Discipline.ARCH, lineType: 'dashed' });
+  const o = addSlide(graph, wall, 1000);
+  const extra = openingFootprintExtraHalfOf(o, wall);
+  assert.equal(extra, 30);
+  const range = slideRange(graph, wall, o);
+  const cands = openingSnapCandidates(wall, o, graph, range, extra);
+  const byKind = kind => cands.filter(c => c.kind === kind).map(c => c.value).sort((a, b) => a - b);
+  assert.ok(byKind('cl-center').includes(1200));
+  assert.ok(byKind('cl-edge').includes(1200 + 805), '端一致は 2005（W の半幅だけなら 1975）');
+  assert.ok(!byKind('cl-edge').includes(1200 + 775));
+  assert.deepEqual(byKind('range-end'), [805, 2195]);
+});
+
+test('S3c 旧データ: 引き戸の W の端から 10 外（J の内側）に直交壁の材の面があれば「今またいでいる」扱いで制約にならない。普通の建具では同じ配置で面が効く', () => {
+  // 同じ coord（225..1775）に引き戸／普通の建具を別々のグラフで置く（互いが隣にならないように）
+  const withPerp = (add) => {
+    const graph = makeGraph();
+    const { wall } = makeHorizontalWall(graph);
+    const o = add(graph, wall);
+    addPerpWall(graph, wall, 1860, { axisOffset: -75 }); // 材 1785..1860（W の端 1775 から 10 外・footprint 1805 の内側）
+    return { graph, wall, o };
+  };
+  const s = withPerp((g, w) => addSlide(g, w, 1000));
+  assert.deepEqual(slideRange(s.graph, s.wall, s.o), { min: 805, max: 2195 }, '壁端までのまま（面 1785 は効かない）');
+  const d = withPerp((g, w) => addOpening(g, w, 1000, 1550));
+  assert.deepEqual(openingMoveRange(d.wall, d.o, d.graph), { min: 775, max: 1010 }, '普通の建具は面 1785 − 775');
+});
+
+test('【失敗系】S3c: 壁が枠の外面（W+2J）に足りない引き戸は範囲なし（null）。W だけなら収まる壁長', () => {
+  const graph = makeGraph();
+  const axisCL  = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });
+  const clStart = graph.addCenterLine(CenterLineType.VERTICAL,   0,    { labeled: false, discipline: Discipline.ARCH });
+  const clEnd   = graph.addCenterLine(CenterLineType.VERTICAL,   1600, { labeled: false, discipline: Discipline.ARCH });
+  const wall = graph.addWall(axisCL, 75, false, clStart, 0, clEnd, 0, { isExteriorWall: false });
+  const o = addSlide(graph, wall, 800);
+  assert.deepEqual(openingMoveRange(wall, o, graph), { min: 775, max: 825 }, '前提: 従来は動ける');
+  assert.equal(slideRange(graph, wall, o), null);
+  assert.equal(openingRefOffsetRange(o, graph), null);
 });

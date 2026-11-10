@@ -8,9 +8,9 @@
 //   戸先＝扉の閉じ側の端、戸尻＝引き代側の端（hingeSide で持つ。−1＝coord1〔lo〕側）。
 // ================================================================
 
-import { OpeningMechanism } from './openingCatalog.js';
-import { swingSideTowardPerp } from './openingGeometry.js';
-import { SLIDE_OUTSET_WIDTH_DEDUCT_MM, SLIDE_OUTSET_RECESS_DEPTH_MM } from '../core/constants.js';
+import { OpeningMechanism, findCatalogEntry } from './openingCatalog.js';
+import { swingSideTowardPerp, findHostWall } from './openingGeometry.js';
+import { SLIDE_OUTSET_WIDTH_DEDUCT_MM, SLIDE_OUTSET_RECESS_DEPTH_MM, FRAME_JAMB_WIDTH_MM } from '../core/constants.js';
 
 /** 外付け引き戸か（唯一の定義）。 */
 export function isOutsetSlide(mechanism) {
@@ -32,7 +32,10 @@ export function slideTailSide(opening) {
 /**
  * 外付け引き戸の配置。引き戸でない・W 不正・coord 非有限は null。
  * W＝|coord2−coord1|、doorWidth＝DW、cutLength＝DW−50（穴の長さ）。戸先端＝tailSide の反対の端。
- * cut＝穴の区間 [lo,hi]、pull＝引き代の区間 [lo,hi]（cut と pull で [lo,hi] を隙間なく覆う）。
+ * latchAlong＝戸先端 A、jambWidth＝縦枠の見付 J。cut＝穴の区間 [A−sx·J, A+sx·(cutLength+J)]（枠の外面〜外面。sx＝戸尻へ向かう符号）、
+ * recess.span＝欠き込みの区間 [A+sx·(cutLength+J), A+sx·(W+J)]、footprint＝占有区間 [lo−J, hi+J]（可動範囲・重なり判定用）。
+ * pull＝W 内の引き代の区間 [lo,hi]（開けた扉の位置。cut とは J ずれる）。壁端・直交壁でのクリップは持たない
+ * （壁の穴は wallSpanIntervals が壁の外を捨て、欠き込みは壁ごとの矩形からだけ引く）。
  * runPerpDir＝扉が走る面の直交方向の符号＝(isVertical?1:−1)×swingSide×hingeSide（開き戸の開く側と同じ積。openingGeometry.js
  * swingSideTowardPerp に委ねる）。swingSide が ±1 でないときは 0（走る面が決まらない。swingSideTowardPerp の「0→1 の fallback」は
  * 開き戸の既定値決定のためのもので、ここで黙って片面に寄せると平面・展開の穴の側が一致しないので採らない）。
@@ -50,12 +53,61 @@ export function outsetSlideLayout(opening, mechanism, host = null) {
   if (doorWidth === null) return null;
   const cutLength = doorWidth - SLIDE_OUTSET_WIDTH_DEDUCT_MM;
   const tailSide = slideTailSide(opening);
-  const cut = tailSide < 0 ? [hi - cutLength, hi] : [lo, lo + cutLength];
   const pull = tailSide < 0 ? [lo, hi - cutLength] : [lo + cutLength, hi];
+  // 戸先端 A と戸尻へ向かう符号 sx。穴・欠き込みは縦枠の見付 J だけ W の外へ広がる（枠の外面〜外面。S3c）。
+  const jambWidth = FRAME_JAMB_WIDTH_MM;
+  const latchAlong = tailSide < 0 ? hi : lo;
+  const sx = tailSide < 0 ? -1 : 1;
+  const sorted = (a, b) => (a <= b ? [a, b] : [b, a]);
+  const cut = sorted(latchAlong - sx * jambWidth, latchAlong + sx * (cutLength + jambWidth));
+  const recessSpan = sorted(latchAlong + sx * (cutLength + jambWidth), latchAlong + sx * (hi - lo + jambWidth));
+  const footprint = [lo - jambWidth, hi + jambWidth];
   const swingSide = opening.swingSide;
   const runPerpDir = swingSide === 1 || swingSide === -1 ? swingSideTowardPerp(opening.isVertical, tailSide, swingSide) : 0;
-  const recess = runPerpDir === 0 ? null : { span: pull, perpSide: runPerpDir, depth: SLIDE_OUTSET_RECESS_DEPTH_MM };
-  return { doorWidth, cutLength, tailSide, cut, pull, runPerpDir, recess };
+  const recess = runPerpDir === 0 ? null : { span: recessSpan, perpSide: runPerpDir, depth: SLIDE_OUTSET_RECESS_DEPTH_MM };
+  return { doorWidth, cutLength, tailSide, latchAlong, jambWidth, cut, pull, footprint, runPerpDir, recess };
+}
+
+/** 建具の占有区間 [lo,hi]（可動範囲・重なり判定用）。外付け引き戸は枠の外面〜外面（W+2J）、それ以外（引き戸でない・不正・外壁ホスト）は開口全幅（恒等）。coord 非有限は null。 */
+export function openingFootprint(opening, mechanism, host = null) {
+  const { coord1, coord2 } = opening ?? {};
+  if (!Number.isFinite(coord1) || !Number.isFinite(coord2)) return null;
+  return outsetSlideLayout(opening, mechanism, host)?.footprint ?? [Math.min(coord1, coord2), Math.max(coord1, coord2)];
+}
+
+/** 配置前（建具がまだ無い）に使う、占有区間が W の両側へ広がる量 J。引き戸かつ host が外壁でなければ J、他は 0。 */
+export function openingFootprintExtraHalf(mechanism, host = null) {
+  if (!isOutsetSlide(mechanism) || host?.isExteriorWall === true) return 0;
+  return FRAME_JAMB_WIDTH_MM;
+}
+
+const mechanismOf = opening => findCatalogEntry(opening?.category, opening?.subType)?.mechanism;
+
+/**
+ * 既存の建具の「いまの」占有区間が W の両側へ広がる量＝(footprint 幅 − W)/2（openingMoveRange の extraHalf 用）。
+ * layout が引けない引き戸（W≤50・外壁ホスト・coord 非有限）は footprint が恒等なので 0（half と footprint 幅を合わせる）。
+ */
+export function openingFootprintExtraHalfOf(opening, wall) {
+  const layout = outsetSlideLayout(opening, mechanismOf(opening), wall);
+  if (!layout) return 0;
+  const width = Math.abs(opening.coord2 - opening.coord1);
+  return ((layout.footprint[1] - layout.footprint[0]) - width) / 2;
+}
+
+/** 幅を編集した「後」の占有が W の両側へ広がる量（機構と host から。W が小さくて今は layout が引けない建具の編集にも使う）。 */
+export function openingEditExtraHalfOf(opening, wall) {
+  return openingFootprintExtraHalf(mechanismOf(opening), wall);
+}
+
+/** 建具幅の下限（これ以下は外付け引き戸にならない）。外付け引き戸なら SLIDE_OUTSET_WIDTH_DEDUCT_MM、他は 0。 */
+export function openingMinWidthOf(opening, wall) {
+  return openingEditExtraHalfOf(opening, wall) > 0 ? SLIDE_OUTSET_WIDTH_DEDUCT_MM : 0;
+}
+
+/** graph 上の建具 → 占有区間の解決関数（openingGeometry.js / openingMove.js の footprintOf 引数へ渡す。編集時だけ使う）。 */
+export function footprintResolver(graph) {
+  // coord 非有限は openingFootprint が null。defaultSpanOf と同じ区間（NaN の比較は常に false）へ揃え、呼び出し側を TypeError にしない。
+  return o => openingFootprint(o, mechanismOf(o), findHostWall(o, graph)) ?? [o.coord1, o.coord2];
 }
 
 /** 壁を全厚で欠く区間 [lo,hi]。外付け引き戸（配置が決まる）は穴 cut、それ以外（引き戸でない・不正・host が外壁〔R12〕）は開口全幅（恒等）。coord 非有限は null。 */
