@@ -1,7 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { Layer, Group } from 'react-konva';
 import { LodLevel } from '../viewport.js';
-import { makeFloorLevelPrefix } from '../floorNumber.js';
+import { makeFloorLevelPrefix, isGroundFloorEquivalent } from '../floorNumber.js';
 import { INSET, elevationViewRect } from '../layout.js';
 import { OpeningsLayer } from './OpeningsLayer.jsx';
 import { ShapesLayer } from './ShapesLayer.jsx';
@@ -27,12 +27,13 @@ import { WallRefIndicator } from './WallRefIndicator.jsx';
 import { SiteLinesLayer, SiteDrawPreview } from './SiteLinesLayer.jsx';
 import { SiteRectsLayer } from './SiteRectsLayer.jsx';
 import { SitePlacementLayer } from './SitePlacementLayer.jsx';
+import { SiteBoundaryOverlayLayer } from './SiteBoundaryOverlayLayer.jsx';
 import { isEdgeAttachable } from '../site/siteRectGeometry.js';
 import { TOAST_RECT_EDGE_INNER } from '../transform/siteRectEdit.js';
 import {
   shouldShowPlanFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers,
   shouldShowColumnOriginMarks, shouldShowEquipmentSymbols, planSectionDirection,
-  shouldShowPlacedFigures,
+  shouldShowPlacedFigures, shouldShowSiteBoundaryOverlay,
 } from './planFigureVisibility.js';
 import { ElevationLayer } from './ElevationLayer.jsx';
 import { FacadeLayer } from './FacadeLayer.jsx';
@@ -80,6 +81,9 @@ export const SceneLayers = observer(({
   // 敷地モードの配置図の表示中は、敷地の入力レイヤと自階の平面図一式を隠し、屋根伏せ図＋図芯合わせした敷地の外周だけを描く（SitePlacementLayer）
   const sitePlacementShown = appMode === 'site' && !!mode?.showPlacement;
   const showPlanFigure = shouldShowPlanFigure(appMode);
+  // 他モードの 1 階（相当）には、配置の指定があれば敷地の境界線・角の丸・境界線ラベルを重ねる
+  const siteBoundaryOverlayShown = shouldShowSiteBoundaryOverlay(appMode) && project.site.placement != null
+    && isGroundFloorEquivalent(project.activePlane, project.planes);
   return (
     <>
       <Layer name="world">
@@ -162,6 +166,7 @@ export const SceneLayers = observer(({
             )}
             {appMode === 'site' && !sitePlacementShown && <SiteDrawPreview mode={mode} />}
             {sitePlacementShown && mode.placementView && <SitePlacementLayer view={mode.placementView} viewport={viewport} mode={mode} didPanEnd={didPanEnd} onToast={onToast} />}
+            {siteBoundaryOverlayShown && <SiteBoundaryOverlayLayer site={project.site} viewport={viewport} />}
             {/* 平面図一式（壁・建具・柱）は同じ述語で出し入れする——壁は柱の位置で欠き取られるため、
                 壁だけ描いて柱を描かないモードがあると柱まわりの壁が穴になる（planFigureVisibility.js）。
                 柱は自階graphのもの（構造モードの伏図と違い1つ下の階ではない。その階の平面に立つ柱は

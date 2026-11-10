@@ -18,7 +18,8 @@ import { clipRoofLinesByCovers } from '../finish/roof/roofPlanClip.js';
 import { computeOuterLineIds, computeOuterCornerPoints } from './lineClassification.js';
 import { computeOutlinePieces, computeOutlineCorners } from './siteRectGeometry.js';
 import { composeSitePlacementGrid } from './sitePlacementGrid.js';
-import { boundaryPieces, mergeCollinearPieces } from './siteBoundaryLabels.js';
+import { boundaryPieces, mergeCollinearPieces, layoutBoundaryLabels } from './siteBoundaryLabels.js';
+import { composeBoundaryChains } from './siteBoundaryChain.js';
 import { applySiteTransform } from './siteTransform.js';
 
 // Konva の key の組み立て部品。種別ごとの id 空間の衝突を避けるためだけに付け、比較には使わない。
@@ -181,6 +182,32 @@ export function composeSitePlacementView({ site, roof }) {
     boundaryPieces: mergeCollinearPieces(boundaryPieces(site)),
     siteTransform,
     placed: placement !== null,
+  };
+}
+
+/**
+ * 他モードの 1 階（相当）へ重ねる敷地の境界線（境界線の runs・角の丸・境界線ラベル）。屋根・通り芯・寸法・頂点番号は含めない。
+ * 配置の指定（site.placement）が無ければ null（重ねない）。変換は指定どおり（図芯合わせはしない）。
+ * @param {{site: object, scale: number}} p scale＝viewport.scaleX
+ * @returns {{
+ *   transform: {rotationDeg:number, tx:number, ty:number},
+ *   chains: ReturnType<typeof composeBoundaryChains>,
+ *   corners: Array<{key:string, x:number, y:number}>,
+ *   labels: ReturnType<typeof layoutBoundaryLabels>,
+ * }|null} chains・corners は敷地座標（transform の Group の中）、labels は配置図座標
+ */
+export function composeSiteBoundaryOverlay({ site, scale }) {
+  const placement = site.placement ?? null;
+  if (!placement) return null;
+  const transform = { rotationDeg: placement.rotationDeg, tx: placement.tx, ty: placement.ty };
+  const pieces = mergeCollinearPieces(boundaryPieces(site));
+  const siteCenter = centerOf(boundsOfPointLists(siteOutlineSegments(site).map(s => s.points)));
+  const fallbackCenter = siteCenter ? applySiteTransform(siteCenter, transform) : null;
+  return {
+    transform,
+    chains: composeBoundaryChains(pieces, scale),
+    corners: siteOutlineCorners(site),
+    labels: layoutBoundaryLabels(pieces, transform, scale, fallbackCenter),
   };
 }
 

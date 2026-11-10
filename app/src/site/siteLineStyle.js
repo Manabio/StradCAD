@@ -7,7 +7,16 @@ import { SiteLineKind } from '../core/constants.js';
 export const SITE_LINE_COLOR = '#000000';
 
 // 境界線（外周）の一点鎖線パターン（スクリーンpx。実線部・間・点・間）
+// S16 以降は Konva の dash として使わない（外周の印と、間・点の取り出し元）。
 export const SITE_BOUNDARY_DASH = Object.freeze([40, 4, 2, 4]);
+
+// 一点鎖線の「間」「点」の長さ（スクリーンpx。SITE_BOUNDARY_DASH の成分）。
+// 境界線は Konva の dash ではなく、区間ごとに破線部の位置を決めて実線の小区間で描く（site/siteBoundaryChain.js）。
+// 配列の位置の意味（実線部・間・点・間）に依る取り出し口はここ1か所。
+export const SITE_BOUNDARY_CHAIN = Object.freeze({ gapPx: SITE_BOUNDARY_DASH[1], dotPx: SITE_BOUNDARY_DASH[2] });
+
+// 境界線ラベルの Text の箱幅（画面 px）。実幅に依らず中心を合わせるための箱で、描画都合の値（配置図と他モードの重ねで共通）
+export const SITE_BOUNDARY_LABEL_BOX_PX = 200;
 
 // 境界線の交点・角の丸（スクリーンpx）
 export const SITE_CORNER_MARK_RADIUS_PX = 6;

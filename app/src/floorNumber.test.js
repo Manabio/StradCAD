@@ -1,6 +1,38 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor, makeFloorLevelPrefix } from './floorNumber.js';
+import { addSkipZero, subtractSkipZero, makeFloorName, renameFloor, makeFloorLevelPrefix, isGroundFloorEquivalent } from './floorNumber.js';
+
+// ---- isGroundFloorEquivalent ----
+const fl = (id, startFloor, elevation, extra = {}) => ({ id, startFloor, elevation, ...extra });
+
+test('isGroundFloorEquivalent: 階番号 1 の階があればそれだけが真（地下・2階は偽）', () => {
+  const planes = [fl('b1', -1, -2700), fl('f1', 1, 0), fl('f2', 2, 2700)];
+  assert.equal(isGroundFloorEquivalent(planes[1], planes), true);
+  assert.equal(isGroundFloorEquivalent(planes[0], planes), false);
+  assert.equal(isGroundFloorEquivalent(planes[2], planes), false);
+});
+
+test('isGroundFloorEquivalent: 階番号 1 が無ければ GL 以上（elevation ≥ 0）で最も低い階。地下は対象外', () => {
+  const planes = [fl('b2', -2, -5400), fl('b1', -1, -2700), fl('f2', 2, 0), fl('f3', 3, 2700)];
+  assert.equal(isGroundFloorEquivalent(planes[2], planes), true, 'elevation 0 の 2 階');
+  assert.equal(isGroundFloorEquivalent(planes[3], planes), false);
+  assert.equal(isGroundFloorEquivalent(planes[1], planes), false);
+  const raised = [fl('b1', -1, -2700), fl('f2', 2, 1200), fl('f3', 3, 3900)];
+  assert.equal(isGroundFloorEquivalent(raised[1], raised), true, 'GL 以上で最下＝elevation 1200 の階');
+});
+
+test('【失敗系】isGroundFloorEquivalent: 地下だけ・屋根専用平面・plane/planes なしは偽。検討案は参照元の採用階で判定', () => {
+  const basementOnly = [fl('b2', -2, -5400), fl('b1', -1, -2700)];
+  assert.equal(isGroundFloorEquivalent(basementOnly[1], basementOnly), false);
+  const planes = [fl('f1', 1, 0), fl('f2', 2, 2700)];
+  assert.equal(isGroundFloorEquivalent(fl('roof', 1, 0, { isRoofPlane: true }), planes), false);
+  assert.equal(isGroundFloorEquivalent(null, planes), false);
+  assert.equal(isGroundFloorEquivalent(planes[0], []), false);
+  assert.equal(isGroundFloorEquivalent(planes[0], undefined), false);
+  assert.equal(isGroundFloorEquivalent(fl('alt1', 1, 0, { isAlternative: true, referenceId: 'f1' }), planes), true);
+  assert.equal(isGroundFloorEquivalent(fl('alt2', 2, 2700, { isAlternative: true, referenceId: 'f2' }), planes), false);
+  assert.equal(isGroundFloorEquivalent(fl('alt3', 1, 0, { isAlternative: true, referenceId: 'gone' }), planes), false);
+});
 
 // ---- addSkipZero / subtractSkipZero ----
 test('addSkipZero: 0をまたぐ加算は0を飛ばす（上方向）', () => {

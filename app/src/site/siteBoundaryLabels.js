@@ -36,7 +36,8 @@ function sanshaOutward(line, triangle) {
 
 /**
  * 敷地の外周の片（敷地座標）。
- * @returns {Array<{key:string, a:{x:number,y:number}, b:{x:number,y:number}, road:boolean, outward:{x:number,y:number}|null}>}
+ * owners＝その片を成す元の線（三斜＝{lineId}、長方形＝{rectId, side}）。編集画面が選択中の線・辺の強調を結合後の片へ戻すのに使う。
+ * @returns {Array<{key:string, a:{x:number,y:number}, b:{x:number,y:number}, road:boolean, outward:{x:number,y:number}|null, owners:Array<{lineId?:string, rectId?:string, side?:string}>}>}
  */
 export function boundaryPieces(site) {
   const outerIds = computeOuterLineIds(site);
@@ -52,6 +53,7 @@ export function boundaryPieces(site) {
     b: { x: l.endPoint.x, y: l.endPoint.y },
     road: l.lineKind === SiteLineKind.ROAD,
     outward: sanshaOutward(l, triangleOf(l)),
+    owners: [{ lineId: l.id }],
   }));
   const rect = computeOutlinePieces(site.rects).map((p, i) => ({
     key: `${PIECE_KEY_PREFIX.RECT}/${p.rectId}/${p.side}/${i}`,
@@ -59,6 +61,7 @@ export function boundaryPieces(site) {
     b: { ...p.b },
     road: p.owners.some(o => site.rectMap.get(o.rectId)?.roadSides.has(o.side)),
     outward: { ...rectSideOutward(p.side) },
+    owners: p.owners.map(o => ({ rectId: o.rectId, side: o.side })),
   }));
   return [...sansha, ...rect];
 }
@@ -84,6 +87,7 @@ function tryMerge(p, q) {
       return {
         key: `${p.key}${MERGED_KEY_SEPARATOR}${q.key}`,
         a: { ...pFar }, b: { ...qFar }, road: p.road, outward: p.outward ?? q.outward,
+        ...(p.owners || q.owners ? { owners: [...(p.owners ?? []), ...(q.owners ?? [])] } : {}),
       };
     }
   }

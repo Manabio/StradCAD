@@ -30,6 +30,13 @@ export function shouldShowStairFigure(appMode) {
   return shouldShowPlanFigure(appMode) && appMode !== 'ceiling';
 }
 
+// 敷地の境界線（境界線・角の丸・境界線ラベル。renderer/SiteBoundaryOverlayLayer.jsx）を重ねるモードか。
+// 平面（floorplan）・仕上げ（finish）・天伏（ceiling）・構造（structure）。敷地・展開・立面・建具などは重ねない。
+// 実際に出すのはこの述語＋「配置の指定がある」＋「1階（相当）の階を表示中」（floorNumber.js isGroundFloorEquivalent）。
+export function shouldShowSiteBoundaryOverlay(appMode) {
+  return appMode === 'floorplan' || appMode === 'finish' || appMode === 'ceiling' || appMode === 'structure';
+}
+
 // 平面の断面解決の**向き**: 天伏モード（'ceiling'）は切断高より上を見上げる（'up'）、他のモードは見下げる（'down'。未知のモードも）。
 // 向きの判断の唯一の供給源（PlanSolidsLayer へは SceneLayers がこの値を渡す）。
 export function planSectionDirection(appMode) {

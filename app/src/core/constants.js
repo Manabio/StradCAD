@@ -527,6 +527,15 @@ export const SITE_BOUNDARY_LABEL_ROAD = '道路境界線';
  * 浮動小数の誤差で ±90 の境目に来るため、この幅以内は鉛直とみなして「字の上が左」（−90）に固定する。リード裁定 2026-11-10。
  */
 export const SITE_BOUNDARY_LABEL_VERTICAL_EPS_DEG = 1e-6;
+/**
+ * 境界線（結合した区間）の破線部を、区間の両端からこの比の位置に中心を置く（site/siteBoundaryChain.js）。
+ * 区間長を 1 として 0.25 と 0.75 の 2 か所。ユーザー指示 2026-11-10。
+ */
+export const SITE_BOUNDARY_CHAIN_BREAK_FRACTION = 0.25;
+/** 最長の区間に対する長さの比がこの値以下の区間は、破線部を中央 1 か所にする（これより長い区間は 2 か所）。ユーザー指示 2026-11-10。 */
+export const SITE_BOUNDARY_CHAIN_SINGLE_BREAK_MAX_RATIO = 0.5;
+/** 階番号（Plane.startFloor）で「1 階」を指す値。他モードへ敷地の境界線を出す階の判定（floorNumber.js isGroundFloorEquivalent）の基準。 */
+export const GROUND_FLOOR_NUMBER = 1;
 /** 配置指定 UI（ui/SiteInfoPanel.jsx）の文言。 */
 export const SITE_PLACEMENT_HINT = '配置図の敷地の角（1 対目→2 対目の順）と通り芯ラベルをタップ';
 /** 配置パネルの 1 対目（頂点1・頂点2・通り芯・距離）の見出し。 */

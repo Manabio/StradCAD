@@ -325,7 +325,7 @@ id の振り直し・付け替えは、参照の種類（壁・開口・他の�
 三斜・四角とも「境界線＝最外周」は保存せず導出する（三斜＝三角形1つ以下にしか属さない辺〔`computeOuterLineIds`〕、四角＝和集合の外周）。保存するのは**道路の指定だけ**（三斜＝`SiteLine.lineKind`の ROAD、四角＝`roadSides`）。測量＝無指定（SURVEY）で、「隣地」は外周∧無指定の表示ラベル。BOUNDARY は旧データの読込み時（`restoreSite`）に SURVEY へ正規化し、FBS の enc/dec 表は変えない。
 - 外周を外れたら無指定へ格下げする。実行点は位相が変わる操作だけ（三斜＝`confirmSiteTriangle`、四角＝`commitAttachedRect`）。格下げは同じ undo エントリに含め、undo で指定が戻る。
 - 新しい辺（三斜の赤辺・青辺）の初期線種は常に無指定。道路指定は外周になった線へユーザーが明示的に行う。
-- 描画規則の唯一の供給源は`site/siteLineStyle.js`（三斜の`SiteLinesLayer`・四角の`SiteRectsLayer`）。値を各レイヤーへ書かない。受容した限界: 一点鎖線は`figureLineJoin`の角閉じの対象外で、隙間は角の丸が覆う。
+- 描画規則の唯一の供給源は`site/siteLineStyle.js`（三斜の`SiteLinesLayer`・四角の`SiteRectsLayer`）。値を各レイヤーへ書かない。受容した限界: 境界線は`figureLineJoin`の角閉じの対象外（`dash`付きの印で候補から外す）。角は実線部（下記「境界線の線種（S16）」）で、交点の丸が覆う。受容した限界: 三斜の線と長方形の辺が重なると外周が二重に描かれ、長さが違うと破線部が相手の実線で埋まる（S16 以前からの限界）。
 - 線・辺の当たり幅は倍率・線長に依らず画面 12px 固定（`lineHitWidth`）。`strokeScaleEnabled=false` の Line では Konva が hitStrokeWidth を画面 px として扱うため、実寸に直して渡すと当たりが 1/倍率 に膨らむ（2026-11-09 に実測で判明）。線長で狭める案は、Konva が最前面1本を選ぶので誤選択防止の効果が薄く、短い線が選べなくなる副作用の方が大きい。
 - 選択中の線・辺をもう一度タップすると解除（`toggleLineSelection`・`toggleRectEdge`）。ステージの pointerUp の「空白タップ＝解除」は、敷地の当たり図形（name `SITE_HIT_NODE_NAME`）を押していないときだけ行う——先に解除すると図形の onClick が同じ線を選び直すため。ステージとの比較で空白を判定しない理由は、当たり図形の name で判定する方が、描かれる図形の構成に依存しないため（かつては平面図一式が敷地モードでも描かれていた）。
 
@@ -377,6 +377,15 @@ id の振り直し・付け替えは、参照の種類（壁・開口・他の�
   - **描き方（S15 で改訂、2026-11-10 ユーザー指示。S14 の「はなれだけの段」は廃止）**: はなれは**通り芯の間隔の段（tier 0）の同じ行**に入れる（総長の段ではない）。上の行は segments の先頭に左のはなれ [to, from]・末尾に右のはなれ [from, to]、anchors にも境界点を足す（1 行に [2000][1820]…[1820][1900] が並び、寸法線は境界点から境界点まで 1 本通る）。左の行も同様（上から下の順に上のはなれ…下のはなれ）。区間は上端（HORIZONTAL 最小）／左端（VERTICAL 最小）で測った値。間隔の行の key は従来どおり `gr/<軸>/0`（はなれを含んでも変えない）。総長の段（tier 1）は通り芯どうしのまま。通り芯が 1 本で間隔の段が無い軸だけ、はなれだけの tier 0 の行を測った側ごとに作る（key `gr/<軸>/gap/<行の側>/<測った側>`・segments 1・anchors 2）。下・右は、反対の端（最大）で測った値が上・左と 1 つでも違う（`Math.round` 後）ときだけ、tier 0 のはなれだけの行（測った側ごとに 1 行）を足す（等しければ重複なので出さない。この条件は S14 から不変）。下・右の行は枠の下端・右端から外へ（上・左と対称。数値は線の外側）。丸ラベルは側ごとにその側の段数（tier の種類数）で離す（はなれは tier 0 に入るので段が増えず、S13 の値＝2 段で 87px に戻る。下・右に行が無ければ上・左と同じ距離）。
   - **寸法線の足（引出し線）**: はなれの区間の境界線側の端に、境界線上の測点から寸法線までの線を引く（通り芯側の端は通り芯の線が足の役なので無し）。compose の各行に `extensions: [{at, from}]`（at＝行に沿う座標＝境界点の x（上・下の行）／y（左・右の行）、from＝測点の直交座標＝測った位置の通り芯の値）を持たせ、layout が `{key, points}`（上・下の行 `[at, from, at, lineCoord]`・左・右の行 `[from, at, lineCoord, at]`）に直す。描画は `SitePlacementLayer` が GRID_DIM_COLOR・寸法線と同じ線幅（DIMENSION_LINE_WEIGHT）・strokeScaleEnabled false・listening false の Line で描く。はなれの無い行の extensions は `[]`。
   - **出す条件**: 敷地が無ければ無し。配置指定の有無に依らず（図芯合わせでも）出す。
+- **境界線の線種（S16、2026-11-10。ユーザー指示）**: 境界線は Konva の dash（線全体に一定周期）ではなく、**区間ごとに破線部の位置を決めて実線の小区間（runs）で描く**（純モジュール `site/siteBoundaryChain.js`）。
+  - **区間**＝`mergeCollinearPieces(boundaryPieces(site))` の結合した同一直線・同種の連なり（三斜の線と長方形の外周片をまとめた敷地全体）。最長の区間は敷地全体で判定する。
+  - **破線部**＝区間上の中心に「間・点・間」（点は実線、両側の間は空き。長さは `SITE_BOUNDARY_DASH` の間・点〔`SITE_BOUNDARY_CHAIN`〕のスクリーン px ÷ scale）。個数・位置は `chainBreakPositions`: 区間長が最長の `SITE_BOUNDARY_CHAIN_SINGLE_BREAK_MAX_RATIO`（0.5）以下なら中央 1 か所、超えるなら両端から `SITE_BOUNDARY_CHAIN_BREAK_FRACTION`（0.25）の 2 か所（長方形 13000×15000 なら長辺 3750・11250、短辺 3250・9750）。
+  - **端にかかるときは置かない**: 破線部の全長（2×間＋点）が区間長以上、または破線部が区間の端に接する・越えるときはその破線部を置かず実線のまま（角は常に実線＝交点が実線部）。隣り合う破線部が重なるなら後の方を置かない。
+  - **適用先**: 配置図（`SitePlacementLayer`。結合済みの `view.boundaryPieces`）と編集画面（`SiteLinesLayer`・`SiteRectsLayer`。`composeSiteBoundaryChains`）の両方。編集画面の当たり（`SITE_HIT_NODE_NAME` の線）は従来の 1 本のまま。選択中の強調は結合後の区間の `owners`（元の線・辺）から引く。三斜の線を含む区間は `SiteLinesLayer`、長方形だけの区間は `SiteRectsLayer` が描く（二重描画を避ける分担）。
+- **他モードの 1 階（相当）への表示（S16、2026-11-10。ユーザー指示）**: 配置の指定（`site.placement`）があるとき、平面（floorplan）・仕上げ・天伏・構造モードの**1 階（相当）**の階に、敷地の境界線（runs）・角の丸・境界線ラベルを重ねる（`renderer/SiteBoundaryOverlayLayer.jsx`。`composeSiteBoundaryOverlay`）。通り芯寸法・はなれ寸法・頂点番号は描かない。当たりなし（listening しない）。
+  - **対象モード**: `shouldShowSiteBoundaryOverlay(appMode)`（`planFigureVisibility.js`）。敷地・展開・立面・建具などは重ねない。
+  - **1 階相当**（`floorNumber.js` の `isGroundFloorEquivalent`）: 階番号（`startFloor`）1 の階があればそれ。無ければ GL 以上（elevation ≥ 0）で最も低い階。地下だけなら無し。検討案は参照元の採用階で判定。屋根専用平面は対象外。
+  - **変換**は配置の指定どおり（`siteTransformGroupProps`）。図芯合わせの状態（placement なし）では重ねない（位置が決まっていないため）。
 - 採らなかった案: 配置図を `subMode`（第3のタブ）にする案は、タブの下の表・面積・入力と排他にする分岐が各所に増えるため見送り。viewport は動かさない（表示を切り替えても画面の位置は変わらない）。
 
 ## 近傍検出の優先順位は「画面距離が最も近い1件」で解決する

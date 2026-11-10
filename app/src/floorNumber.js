@@ -3,7 +3,24 @@
  *
  * - addSkipZero / subtractSkipZero : 0 をまたぐ加減算（0 階を存在させない）
  * - makeFloorName                  : {startFloor, stories} → 表示名称
+ * - isGroundFloorEquivalent        : 1 階（相当）の階か
  */
+import { GROUND_FLOOR_NUMBER } from './core/constants.js';
+
+/**
+ * plane が「1 階（相当）」の階か。階番号（startFloor）1 の階があればそれ、無ければ GL 以上（elevation ≥ 0）で最も低い階。
+ * 検討案（isAlternative）は参照元の採用階（referenceId）で判定する。屋根専用平面・plane/planes が無い・該当階なしは false。
+ * @param {{id:string, startFloor?:number, elevation?:number, isAlternative?:boolean, referenceId?:string|null, isRoofPlane?:boolean}|null|undefined} plane
+ * @param {Array<{id:string, startFloor?:number, elevation?:number}>|null|undefined} planes 採用階（project.planes。屋根専用平面・検討案を含まない）
+ * @returns {boolean}
+ */
+export function isGroundFloorEquivalent(plane, planes) {
+  if (!plane || plane.isRoofPlane || !planes?.length) return false;
+  const targetId = plane.isAlternative ? plane.referenceId : plane.id;
+  const ground = planes.find(p => p.startFloor === GROUND_FLOOR_NUMBER)
+    ?? planes.filter(p => p.elevation >= 0).reduce((low, p) => (low === null || p.elevation < low.elevation ? p : low), null);
+  return ground !== null && ground !== undefined && ground.id === targetId;
+}
 
 /** 0 をスキップする加算。b > 0 で上方向、b < 0 で下方向。 */
 export function addSkipZero(a, b) {

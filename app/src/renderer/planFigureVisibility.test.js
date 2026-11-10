@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   shouldShowPlanFigure, shouldShowStairFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers, shouldShowColumnOriginMarks,
-  shouldShowEquipmentSymbols, shouldShowPlacedFigures, planSectionDirection,
+  shouldShowEquipmentSymbols, shouldShowPlacedFigures, planSectionDirection, shouldShowSiteBoundaryOverlay,
 } from './planFigureVisibility.js';
 
 // 行コメントを落としてから照合する（コメント中の言及を「コード上の参照」と誤検知しないため。
@@ -84,6 +84,11 @@ test('【不変条件】SceneLayers.jsx: ColumnsLayer の originMarks は should
 test('shouldShowPlacedFigures: 姿図の配置は平面図一式と同じモード（天伏も含む）で描き、伏図・展開・立面では描かない', () => {
   for (const mode of ['floorplan', 'finish', 'ceiling', 'opening']) assert.equal(shouldShowPlacedFigures(mode), true, mode);
   for (const mode of ['structure', 'elevation', 'facade', 'site']) assert.equal(shouldShowPlacedFigures(mode), false, mode);
+});
+
+test('shouldShowSiteBoundaryOverlay: 敷地の境界線の重ねは 平面・仕上げ・天伏・構造 だけ（敷地・展開・立面・建具・未知は偽）', () => {
+  for (const mode of ['floorplan', 'finish', 'ceiling', 'structure']) assert.equal(shouldShowSiteBoundaryOverlay(mode), true, mode);
+  for (const mode of ['site', 'elevation', 'facade', 'opening', 'unknown', undefined]) assert.equal(shouldShowSiteBoundaryOverlay(mode), false, String(mode));
 });
 
 test('shouldShowEquipmentSymbols: 昇降機器具の図中記号は室名が出るモード（floorplan・finish）でのみ描く', () => {

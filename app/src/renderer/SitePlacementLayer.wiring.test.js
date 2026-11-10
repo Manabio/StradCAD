@@ -24,7 +24,7 @@ test('SitePlacementLayer: 敷地の外周は siteTransformGroupProps を spread 
   assert.match(layer, /<Group \{\.\.\.siteTransformGroupProps\(view\.siteTransform\)\}>/, 'Group は listening を切らない（角の当たりを通すため）');
   const groupAt = layer.indexOf('<Group ');
   const roofAt = layer.indexOf('view.roofLines.map');
-  const siteAt = layer.indexOf('view.siteSegments.map');
+  const siteAt = layer.indexOf('boundaryChains.flatMap');
   const cornerAt = layer.indexOf('view.siteCorners.flatMap');
   assert.ok(roofAt > 0 && roofAt < groupAt, '屋根線は変換の Group より前（外）');
   assert.ok(groupAt < siteAt && siteAt < cornerAt, '敷地の外周線・角の丸は Group の中');
@@ -33,7 +33,7 @@ test('SitePlacementLayer: 敷地の外周は siteTransformGroupProps を spread 
 test('SitePlacementLayer: 屋根線は PLAN_SOLIDS_COLOR・細線、敷地は SITE_LINE_COLOR・一点鎖線で、当たり用の丸と Group 以外は listening しない', () => {
   assert.match(layer, /stroke=\{PLAN_SOLIDS_COLOR\}/);
   assert.match(layer, /viewport\.lineWeightsPx\[SITE_PLACEMENT_ROOF_LINE_WEIGHT\]/);
-  assert.match(layer, /dash=\{\[\.\.\.SITE_BOUNDARY_DASH\]\}/);
+  assert.ok(!/SITE_BOUNDARY_DASH/.test(layer), '境界線は Konva の dash ではなく runs（実線の小区間）で描く');
   assert.match(layer, /viewport\.lineWeightsPx\[siteLineWeightKey\(true, false\)\]/);
   assert.match(layer, /radius=\{markR\}/);
   assert.match(layer, /const markR = SITE_CORNER_MARK_RADIUS_PX \/ viewport\.scaleX;/);
@@ -54,6 +54,37 @@ test('SitePlacementLayer: はなれ寸法の足（row.extensions）は GRID_DIM_
   assert.match(block, /strokeWidth=\{viewport\.lineWeightsPx\[DIMENSION_LINE_WEIGHT\]\}/);
   assert.match(block, /strokeScaleEnabled=\{false\}/);
   assert.match(block, /listening=\{false\}/);
+});
+
+test('SitePlacementLayer: 敷地の外周は view.boundaryPieces（結合済み）から composeBoundaryChains(…, viewport.scaleX) で作った runs の Line（SITE_LINE_COLOR・dash なし・listening しない）', () => {
+  assert.match(layer, /const boundaryChains = composeBoundaryChains\(view\.boundaryPieces, viewport\.scaleX\);/);
+  const at = layer.indexOf('boundaryChains.flatMap');
+  const block = layer.slice(at, layer.indexOf('view.siteCorners.flatMap'));
+  assert.match(block, /c\.runs\.map\(\(run, i\) => \(/);
+  assert.match(block, /points=\{run\.points\}/);
+  assert.match(block, /stroke=\{SITE_LINE_COLOR\}/);
+  assert.match(block, /strokeWidth=\{siteWidth\}/);
+  assert.ok(!/dash=/.test(block));
+  assert.match(block, /listening=\{false\}/);
+});
+
+test('編集画面（SiteLinesLayer・SiteRectsLayer）の境界線は runs。dash は無く、三斜の当たり線は残り、長方形の当たり線も残る', () => {
+  const lines = code('./SiteLinesLayer.jsx');
+  const rects = code('./SiteRectsLayer.jsx');
+  for (const [name, src] of [['SiteLinesLayer', lines], ['SiteRectsLayer', rects]]) {
+    assert.match(src, /const boundaryChains = composeSiteBoundaryChains\(site, viewport\.scaleX\);/, `${name}: 最長の判定は敷地全体`);
+    assert.ok(!/SITE_BOUNDARY_DASH|dash=\{resolved|dash=\{\[\.\.\./.test(src), `${name}: 境界線に Konva の dash を使わない（入力中のプレビューの破線は別）`);
+    assert.match(src, /c\.runs\.map\(\(run, i\) => \(/, `${name}: runs を Line にする`);
+  }
+  // 三斜: 当たり線（name・hitStrokeWidth・onClick）が残り、外周は透明（見える線は runs）
+  assert.match(lines, /stroke=\{resolved\.dash \? 'transparent' : SITE_LINE_COLOR\}/);
+  assert.match(lines, /name=\{SITE_HIT_NODE_NAME\}\s+hitStrokeWidth=\{lineHitWidth\(\)\}\s+onClick=\{\(\) => onSelectLine\?\.\(line\.id\)\}/);
+  assert.match(lines, /boundaryChains\.filter\(isLinesLayerChain\)/);
+  assert.match(lines, /const isSelected = c\.owners\.some\(o => o\.lineId === selectedLineId\);/);
+  // 長方形: 三斜の線を含まない区間だけ。当たり線（辺全体）は従来どおり
+  assert.match(rects, /boundaryChains\.filter\(isRectsLayerChain\)/);
+  assert.match(rects, /const isSelected = c\.owners\.some\(o => isSelEdge\(o\.rectId, o\.side\)\);/);
+  assert.match(rects, /hitStrokeWidth=\{lineHitWidth\(\)\}/);
 });
 
 test('SitePlacementLayer: 角の当たり丸は SITE_HIT_NODE_NAME・透明ストローク（HIT_PX_MAX / scale）で、onClick/onTap が mode.pickPlacementVertex（敷地座標）を呼ぶ', () => {
@@ -92,8 +123,8 @@ test('SitePlacementLayer: 選択中の頂点は placementVertexLabelText で引�
 });
 
 test('SitePlacementLayer: 境界線ラベルは layoutBoundaryLabels の結果を敷地 Group の外の Text に写す（箱幅・offset・align・listening・色）', () => {
-  assert.match(layer, /const BOUNDARY_LABEL_BOX_PX = 200;/);
-  assert.match(layer, /const boundaryBoxW = BOUNDARY_LABEL_BOX_PX \/ viewport\.scaleX;/);
+  assert.ok(!/BOUNDARY_LABEL_BOX_PX = /.test(layer), '箱幅の定数は siteLineStyle.js 1 か所');
+  assert.match(layer, /const boundaryBoxW = SITE_BOUNDARY_LABEL_BOX_PX \/ viewport\.scaleX;/);
   assert.match(layer, /const fallbackCenter = view\.siteCenter \? applySiteTransform\(view\.siteCenter, view\.siteTransform\) : null;/);
   assert.match(layer, /layoutBoundaryLabels\(view\.boundaryPieces, view\.siteTransform, viewport\.scaleX, fallbackCenter\)/);
   const at = layer.indexOf('boundaryLabels.map');

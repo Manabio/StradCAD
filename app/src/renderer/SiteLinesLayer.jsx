@@ -3,8 +3,10 @@ import { Line, Circle, Group, Text } from 'react-konva';
 import { getSiteLineRedBlue } from '../site/siteGeometry.js';
 import { resolveSiteLinePointsMm } from '../site/siteLineJoinPrimitives.js';
 import { computeOuterLineIds, computeOuterCornerPoints } from '../site/lineClassification.js';
+import { composeSiteBoundaryChains, isLinesLayerChain } from '../site/siteBoundaryChain.js';
 import {
   SITE_LINE_COLOR, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT, lineHitWidth, SITE_HIT_NODE_NAME,
+  siteLineWeightKey,
 } from '../site/siteLineStyle.js';
 
 // ---- 描画中プレビュー ----
@@ -46,8 +48,10 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
 
   // L字の角の外角を閉じる延長（site/siteLineJoinPrimitives.js。展開図と同じ規則を境界線へ適用。
   // 詳細は同モジュール冒頭コメント・.claude/elevation-model.md「L字の角の外角を閉じる」節）。
-  // 幅・dash（外周=中線の一点鎖線／内側=細線）の判断もこの関数が唯一の供給源——.jsx側でisSelectedから再導出しない。
+  // resolved は当たり線（外周は透明）と内側の線（細線）の幅・座標にだけ使う。外周（境界線）の見える線の幅は
+  // siteBoundaryChain の owners と siteLineWeightKey から引く（下の boundaryChains）。
   const resolvedLines = resolveSiteLinePointsMm(site.lines, selectedLineId, viewport.lineWeightsPx, outerIds, viewport);
+  const boundaryChains = composeSiteBoundaryChains(site, viewport.scaleX); // 最長の判定は敷地全体（三斜＋長方形）
 
   return (
     <>
@@ -58,13 +62,12 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
         const resolved = resolvedLines.get(line.id);
 
         return [
-          // 線分
+          // 線分。外周（境界線）の見える線は下の境界線の runs が描くので、ここは当たり専用の透明な線にする
           <Line
             key={`l-${line.id}`}
             points={resolved.points}
-            stroke={SITE_LINE_COLOR}
+            stroke={resolved.dash ? 'transparent' : SITE_LINE_COLOR}
             strokeWidth={resolved.width}
-            dash={resolved.dash ? [...resolved.dash] : undefined}
             strokeScaleEnabled={false}
             name={SITE_HIT_NODE_NAME}
             hitStrokeWidth={lineHitWidth()}
@@ -92,6 +95,21 @@ export const SiteLinesLayer = observer(({ site, viewport, selectedLineId, onSele
             listening={false}
           />,
         ];
+      })}
+
+      {/* 境界線（外周）の見える線＝実線の小区間（破線部は間・点・間。site/siteBoundaryChain.js）。三斜の線を含む区間だけここで描く（長方形だけの区間は SiteRectsLayer） */}
+      {boundaryChains.filter(isLinesLayerChain).flatMap(c => {
+        const isSelected = c.owners.some(o => o.lineId === selectedLineId);
+        return c.runs.map((run, i) => (
+          <Line
+            key={`bc-${c.key}/${i}`}
+            points={run.points}
+            stroke={SITE_LINE_COLOR}
+            strokeWidth={viewport.lineWeightsPx[siteLineWeightKey(true, isSelected)]}
+            strokeScaleEnabled={false}
+            listening={false}
+          />
+        ));
       })}
 
       {/* 三角形の重心に丸番号バッジ（辺自体は site.lines として描画済み） */}

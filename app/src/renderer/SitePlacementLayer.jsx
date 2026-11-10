@@ -3,8 +3,9 @@ import { Line, Circle, Group, Text } from 'react-konva';
 import { placementVertexLabelText, placementVertexColorKind, PlacementVertexColorKind } from '../site/sitePlacementView.js';
 import { siteTransformGroupProps, applySiteTransform } from '../site/siteTransform.js';
 import { layoutBoundaryLabels } from '../site/siteBoundaryLabels.js';
+import { composeBoundaryChains } from '../site/siteBoundaryChain.js';
 import {
-  SITE_LINE_COLOR, SITE_BOUNDARY_DASH, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT, siteLineWeightKey,
+  SITE_LINE_COLOR, SITE_BOUNDARY_LABEL_BOX_PX, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT, siteLineWeightKey,
   HIT_PX_MAX, SITE_HIT_NODE_NAME,
 } from '../site/siteLineStyle.js';
 import { MEMBER_SELECTION_COLOR } from '../structural/memberSelection.js';
@@ -20,9 +21,6 @@ import { originColor } from './canvasStyle.js';
 import { DIMENSION_LINE_WEIGHT, NUM_FONT_PX, TEXT_GAP_PX, gridLineDash } from './dimensionStyle.js';
 import { labelCircle, dimensionRow } from './gutterPrimitives.jsx';
 import { labelCircleRadius } from '../layout.js';
-
-// 境界線ラベルの Text の箱幅（画面 px）。実幅に依らず中心を合わせるための箱で、描画都合の値。
-const BOUNDARY_LABEL_BOX_PX = 200;
 
 // 敷地の角の色（1 対目＝選択色・2 対目＝赤・共有＝紫）。どの枠でもない角は呼び出し側で SITE_LINE_COLOR
 const VERTEX_COLOR_BY_KIND = Object.freeze({
@@ -56,11 +54,12 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd, o
   const selectedGridKey = selectedGridId ? view.grid.lines.find(l => l.id === selectedGridId)?.key ?? null : null;
   const selectedAlongKey = selectedAlongId ? view.grid.lines.find(l => l.id === selectedAlongId)?.key ?? null : null;
   const siteWidth = viewport.lineWeightsPx[siteLineWeightKey(true, false)];
+  const boundaryChains = composeBoundaryChains(view.boundaryPieces, viewport.scaleX); // 境界線の実線の小区間（敷地座標）
   const g = layoutSitePlacementGrid(view.grid, viewport.scaleX);
   const gridLineWidth = viewport.lineWeightsPx[SITE_PLACEMENT_GRID_LINE_WEIGHT];
   const selectedLineWidth = viewport.lineWeightsPx[SITE_PLACEMENT_SELECTED_LINE_WEIGHT];
   const dimDotR = GRID_DIM_DOT_RADIUS_PX / viewport.scaleX;
-  const boundaryBoxW = BOUNDARY_LABEL_BOX_PX / viewport.scaleX;
+  const boundaryBoxW = SITE_BOUNDARY_LABEL_BOX_PX / viewport.scaleX;
   const fallbackCenter = view.siteCenter ? applySiteTransform(view.siteCenter, view.siteTransform) : null;
   const boundaryLabels = layoutBoundaryLabels(view.boundaryPieces, view.siteTransform, viewport.scaleX, fallbackCenter);
   return (
@@ -92,17 +91,16 @@ export const SitePlacementLayer = observer(({ view, viewport, mode, didPanEnd, o
         />
       ))}
       <Group {...siteTransformGroupProps(view.siteTransform)}>
-        {view.siteSegments.map(s => (
+        {boundaryChains.flatMap(c => c.runs.map((run, i) => (
           <Line
-            key={`sg-${s.key}`}
-            points={s.points}
+            key={`sg-${c.key}/${i}`}
+            points={run.points}
             stroke={SITE_LINE_COLOR}
             strokeWidth={siteWidth}
-            dash={[...SITE_BOUNDARY_DASH]}
             strokeScaleEnabled={false}
             listening={false}
           />
-        ))}
+        )))}
         {view.siteCorners.flatMap(c => {
           // 番号: 1 対目「1」「2」・2 対目「1'」「2'」・共有の角は併記。空文字＝どの枠でもない
           const idx = placementVertexLabelText(input, c);

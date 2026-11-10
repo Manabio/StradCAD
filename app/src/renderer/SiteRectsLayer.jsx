@@ -4,13 +4,14 @@ import {
   rectEdges, rectEdge, computeOutlinePieces, computeOutlineCorners, computeInnerEdgeSpans,
 } from '../site/siteRectGeometry.js';
 import { computeRectPreview, RECT_ANCHOR_NODE_NAME } from '../site/siteRectInput.js';
+import { composeSiteBoundaryChains, isRectsLayerChain } from '../site/siteBoundaryChain.js';
 import {
-  SITE_LINE_COLOR, SITE_BOUNDARY_DASH, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT,
+  SITE_LINE_COLOR, SITE_CORNER_MARK_RADIUS_PX, SITE_CORNER_MARK_WEIGHT,
   siteLineWeightKey, lineHitWidth, HIT_PX_MAX, SITE_HIT_NODE_NAME,
 } from '../site/siteLineStyle.js';
 
 // 敷地モードの長方形（.claude/data-model.md「敷地の長方形入力」節）。
-// 線の描画規則は site/siteLineStyle.js（三斜と共通）: 内側の辺＝細線・実線、外周片＝中線・一点鎖線、
+// 線の描画規則は site/siteLineStyle.js（三斜と共通）: 内側の辺＝細線・実線、外周片＝中線・一点鎖線（site/siteBoundaryChain.js の実線の小区間）、
 // 色は黒、選択辺は幅を1段上げる。外周の角に小さな丸。＋選択中の共有辺の基点の丸＋番号バッジ＋入力中のプレビュー。
 // 辺の当たりは subMode==='rect' のときだけ listening（透明の当たり線を辺全体に敷く）。
 export const SiteRectsLayer = observer(({ site, mode, viewport, onSelectRectEdge }) => {
@@ -26,6 +27,7 @@ export const SiteRectsLayer = observer(({ site, mode, viewport, onSelectRectEdge
   const pieces  = computeOutlinePieces(rects);
   const spans   = computeInnerEdgeSpans(rects, pieces);
   const corners = computeOutlineCorners(pieces);
+  const boundaryChains = composeSiteBoundaryChains(site, viewport.scaleX); // 最長の判定は敷地全体（三斜＋長方形）
   const isSelEdge = (rectId, side) => sel?.rectId === rectId && sel.side === side;
   const preview = computeRectPreview(site.rectMap, sel, mode.rectAnchor, mode.rectInputState);
 
@@ -65,18 +67,20 @@ export const SiteRectsLayer = observer(({ site, mode, viewport, onSelectRectEdge
         />
       ))}
 
-      {/* 外周片（中線・一点鎖線。選択中は1段上げ。隣地／道路は描画上同じ） */}
-      {pieces.map((p, i) => (
-        <Line
-          key={`o-${p.rectId}-${p.side}-${i}`}
-          points={[p.a.x, p.a.y, p.b.x, p.b.y]}
-          stroke={SITE_LINE_COLOR}
-          strokeWidth={viewport.lineWeightsPx[siteLineWeightKey(true, p.owners.some(o => isSelEdge(o.rectId, o.side)))]}
-          dash={[...SITE_BOUNDARY_DASH]}
-          strokeScaleEnabled={false}
-          listening={false}
-        />
-      ))}
+      {/* 外周（中線・一点鎖線の runs。選択中は1段上げ。隣地／道路は描画上同じ。三斜の線を含む区間は SiteLinesLayer が描く） */}
+      {boundaryChains.filter(isRectsLayerChain).flatMap(c => {
+        const isSelected = c.owners.some(o => isSelEdge(o.rectId, o.side));
+        return c.runs.map((run, i) => (
+          <Line
+            key={`o-${c.key}/${i}`}
+            points={run.points}
+            stroke={SITE_LINE_COLOR}
+            strokeWidth={viewport.lineWeightsPx[siteLineWeightKey(true, isSelected)]}
+            strokeScaleEnabled={false}
+            listening={false}
+          />
+        ));
+      })}
 
       {/* 外周の角の丸 */}
       {corners.map((c, i) => (

@@ -7,7 +7,7 @@ import { Site } from '../core.js';
 import { SitePlacementCenterSource } from '../core/constants.js';
 import {
   roofPlanLines, siteOutlineSegments, siteOutlineCorners, boundsOfPointLists, placeSiteSegments,
-  composeSitePlacementView,
+  composeSitePlacementView, composeSiteBoundaryOverlay,
   samePlacementVertex, placementVertexIndex,
   placementAlongVertexIndex, placementVertexLabels, placementVertexLabelText,
   placementVertexColorKind, PlacementVertexColorKind,
@@ -281,6 +281,45 @@ test('composeSitePlacementView: boundaryPieces（敷地座標・結合済み）�
   assert.equal(north.length, 1);
   assert.deepEqual([north[0].a.x, north[0].b.x, north[0].road], [0, 7000, false]);
   assert.deepEqual(composeSitePlacementView({ site: new Site(), roof: farRoof() }).boundaryPieces, []);
+});
+
+// ---- composeSiteBoundaryOverlay ----
+
+test('composeSiteBoundaryOverlay: 配置の指定どおりの変換・境界線の runs・角の丸・境界線ラベルだけを戻す（通り芯・屋根・寸法は含まない）', () => {
+  const site = new Site();
+  site.addRect(0, 0, 13000, 15000, 'r1', ['s']);
+  site.setPlacement({ rotationDeg: 90, tx: 1000, ty: 2000 });
+  const o = composeSiteBoundaryOverlay({ site, scale: 1 });
+  assert.deepEqual(o.transform, { rotationDeg: 90, tx: 1000, ty: 2000 });
+  assert.deepEqual(Object.keys(o).sort(), ['chains', 'corners', 'labels', 'transform']);
+  assert.equal(o.chains.length, 4);
+  assert.ok(o.chains.every(c => c.runs.length === 5), '13000・15000 とも最長 15000 の 1/2 より長い＝破線部 2 か所＝実線 5 本');
+  assert.equal(o.corners.length, 4);
+  assert.equal(o.labels.length, 4);
+  // 南辺だけ道路
+  assert.deepEqual(o.labels.map(l => l.text).sort(), ['隣地境界線(13000)', '隣地境界線(15000)', '隣地境界線(15000)', '道路境界線(13000)'].sort());
+  // 角の丸は敷地座標のまま（変換は Group が掛ける）
+  assert.deepEqual(o.corners.map(c => [c.x, c.y]).sort((p, q) => p[0] - q[0] || p[1] - q[1]), [[0, 0], [0, 15000], [13000, 0], [13000, 15000]]);
+});
+
+test('composeSiteBoundaryOverlay: ラベルは配置図座標（回転 90°・tx=1000,ty=2000 で北辺の中点 (6500,0) → (1000,2000+6500)）に外側へ離れて出る', () => {
+  const site = new Site();
+  site.addRect(0, 0, 13000, 15000, 'r1');
+  site.setPlacement({ rotationDeg: 90, tx: 1000, ty: 2000 });
+  const o = composeSiteBoundaryOverlay({ site, scale: 1 });
+  const north = o.labels.find(l => l.key.includes('/n/'));
+  // 北辺の外向き (0,-1) は 90° 回転で (1,0)。中点 (6500,0) → 配置図 (1000, 8500)。外向き (+x) へ離れる
+  assert.ok(north.x > 1000 && Math.abs(north.y - 8500) < 1e-6, `x=${north.x} y=${north.y}`);
+});
+
+test('【失敗系】composeSiteBoundaryOverlay: 配置の指定が無ければ null（重ねない）。敷地が空でも例外にならず空の一式', () => {
+  const site = new Site();
+  site.addRect(0, 0, 4000, 3000, 'r1');
+  assert.equal(composeSiteBoundaryOverlay({ site, scale: 1 }), null);
+  const empty = new Site();
+  empty.setPlacement({ rotationDeg: 0, tx: 0, ty: 0 });
+  const o = composeSiteBoundaryOverlay({ site: empty, scale: 1 });
+  assert.deepEqual([o.chains, o.corners, o.labels], [[], [], []]);
 });
 
 test('【失敗系】composeSitePlacementView: 敷地が空なら敷地側の図芯が無く、tx=ty=0。屋根は描く', () => {

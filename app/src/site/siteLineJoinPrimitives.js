@@ -12,7 +12,9 @@ import { siteLineWeightKey, SITE_BOUNDARY_DASH } from './siteLineStyle.js';
 //
 // 対象は site.lines 全件。線幅・dash は site/siteLineStyle.js の規則: 外周（境界線）は中線の
 // 一点鎖線（dash 付き＝figureLineJoin.js の collectCandidates が join 候補から除外する。角の
-// 隙間は丸が覆う）、外周以外は細線の実線（join 対象）。選択中は線幅を1段上げる。三斜の補助線
+// 隙間は丸が覆う）、外周以外は細線の実線（join 対象）。選択中は線幅を1段上げる。
+// 外周の見える線は SiteLinesLayer が site/siteBoundaryChain.js の実線の小区間（runs）で描く（S16）ので、ここの dash は
+// 「外周＝join 対象外」の印と SiteLinesLayer が当たり専用線を見分ける印として残る（Konva の dash としては使わない）。三斜の補助線
 // （重心バッジ）・寸法ラベル・選択ハイライトの丸・描画中プレビュー線（mode.siteDrawState /
 // SiteDrawPreview）は site.lines に含まれないため、このモジュールのシグネチャ上そもそも渡しようが
 // なく自然に対象外になる。
