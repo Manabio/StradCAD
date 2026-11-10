@@ -17,7 +17,7 @@
 // ================================================================
 
 import {
-  PenDir, DetailLenMode, DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam,
+  PenDir, DetailLenMode, DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam, DetailCategory,
   DetailMaterialField, DetailDash, DetailProvenanceSource, DETAIL_VIEW_COMBOS, DETAIL_FIGURE_VERSION,
   DETAIL_FIGURE_KEY_PREFIX, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_DRAFT_HISTORY_MAX,
   DETAIL_SLOT_TARGETS, DetailSlot, DetailEdgeMark, ROOM_DETAIL_SLOTS, KNEE_DROP_DETAIL_SLOTS, DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM, DETAIL_FIT_DEFAULT_BASEBOARD_HEIGHT_MM, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
@@ -80,6 +80,7 @@ export const DETAIL_PARAM_LABELS = Object.freeze({
   [DetailParam.FRAME_DEPTH]:      '枠の見込み',
   [DetailParam.WALL_THICKNESS]:   '壁厚',
   [DetailParam.BASEBOARD_HEIGHT]: '巾木高さ',
+  [DetailParam.DOOR_WIDTH]:       '扉幅',
 });
 export const DETAIL_MATERIAL_FIELD_LABELS = Object.freeze({
   [DetailMaterialField.THICKNESS]: '厚み',
@@ -837,7 +838,8 @@ export function comboOptions(category, view) {
   const viewsOf = uniq(DETAIL_VIEW_COMBOS.filter(c => c.category === category).map(c => c.view));
   const subjects = uniq(DETAIL_VIEW_COMBOS.filter(c => c.category === category && c.view === view).map(c => c.subject));
   return {
-    categories: categoryOptionsFor(CatalogKind.DETAIL_FIGURE),
+    // 建具一式（FITTING）は部品の束で、ヘルパー（1 本のペン命令列）では作れないので選ばせない
+    categories: categoryOptionsFor(CatalogKind.DETAIL_FIGURE).filter(c => c.value !== DetailCategory.FITTING),
     views: optionsOf(viewsOf, formatDetailViewLabel),
     subjects: optionsOf(subjects, formatDetailSubjectLabel),
   };

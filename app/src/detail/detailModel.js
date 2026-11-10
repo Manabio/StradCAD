@@ -24,6 +24,7 @@ import {
   DetailDatumRole, DetailParam, DetailMaterialField, DetailDash, DetailEdgeMark, DETAIL_VIEW_COMBOS,
   DetailPlacementView, PLACED_FIGURE_SUBJECTS, DETAIL_VIEWS_FIELD,
   DETAIL_FIGURE_VERSION, LINE_WEIGHT_MM, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_FIT_EPS_MM,
+  FittingPartRole, FITTING_PART_TARGETS, FITTING_PART_KEY_SEPARATOR,
 } from '../core/constants.js';
 
 /** 検証エラーの種類（detail/ 内部の語彙）。 */
@@ -66,6 +67,11 @@ export const DetailValidationError = Object.freeze({
   STRETCH_WITHOUT_END:     'stretchWithoutEnd',    // stretch があるのに end の Anchor が無い
   STRETCH_OUT_OF_SPAN:     'stretchOutOfSpan',     // stretch の手が origin〜end の頂点の間に無い
   BAD_VIEWS:               'badViews',             // views の形・キー・値が不正、または views を持てない分類（読める図なので SUPPORT_BLOCKING には入れない）
+  PARTS_EMPTY:             'partsEmpty',           // 建具一式の parts が 0 個（読める図）
+  PART_DUPLICATE:          'partDuplicate',        // 建具一式の部品の id・role の重複（読める図）
+  PART_UNKNOWN_ROLE:       'partUnknownRole',      // 建具一式の部品の role が語彙に無い（未知の語彙＝読めない図）
+  PART_BAD_TARGET:         'partBadTarget',        // 部品本体の (category, view, subject) が role の表と違う（読める図）
+  BAD_KEY_CHAR:            'badKeyChar',           // key に合成キーの区切り '#' を含む（読めないキー）
 });
 const E = DetailValidationError;
 
@@ -110,12 +116,10 @@ export function stretchPartsOf(stroke, axis) {
   return out;
 }
 
-/** 省略可能な項目の既定値を埋める。形が壊れていても例外にしない（壊れた値はそのまま残して検証に任せる）。 */
-export function normalizeDetailFigure(plain) {
-  const f = isObj(plain) ? plain : {};
+/** 図の本体（strokes・datums・anchors）の既定値を埋める。label・provenance・note は足さない（建具一式の部品の figure にも使う）。 */
+function normalizeBody(f) {
   return {
     ...f,
-    label: f.label ?? '',
     strokes: asArray(f.strokes).map(s => {
       if (!isObj(s)) return s;
       return {
@@ -131,8 +135,27 @@ export function normalizeDetailFigure(plain) {
     }),
     datums: asArray(f.datums).map(d => (isObj(d) ? { ...d, offsetMm: d.offsetMm ?? 0 } : d)),
     anchors: asArray(f.anchors),
+  };
+}
+
+/**
+ * 省略可能な項目の既定値を埋める。形が壊れていても例外にしない（壊れた値はそのまま残して検証に任せる）。
+ * parts（建具一式の部品）は配列のときだけ、各部品の figure の本体を埋める（label・provenance・note は足さない。parts の無い図にキーを足さない）。
+ */
+export function normalizeDetailFigure(plain) {
+  const f = isObj(plain) ? plain : {};
+  const body = normalizeBody(f);
+  return {
+    ...f,
+    label: f.label ?? '',
+    strokes: body.strokes,
+    datums: body.datums,
+    anchors: body.anchors,
     provenance: f.provenance ?? null,
     note: f.note ?? null,
+    ...(Array.isArray(f.parts)
+      ? { parts: f.parts.map(p => (isObj(p) ? { ...p, figure: isObj(p.figure) ? normalizeBody(p.figure) : p.figure } : p)) }
+      : {}),
   };
 }
 
@@ -164,6 +187,45 @@ function checkLen(len, path, push) {
   }
 }
 
+/**
+ * 建具一式の検証（最上位の形と部品）。部品本体は合成キー '<key>#<role>' の図として validateDetailFigure で検査し、path に parts[i].figure. を前置する。
+ * 戻り値は errors に積むだけ（push を受け取る）。
+ */
+function validateFittingSet(fig, input, push) {
+  const isEmptyList = v => v == null || (Array.isArray(v) && v.length === 0);
+  if (!isEmptyList(input.strokes) || !isEmptyList(input.datums) || !isEmptyList(input.anchors)) {
+    push(E.SHAPE, '建具一式の最上位に strokes・datums・anchors は持てない（部品が持つ）', 'strokes');
+  }
+  if (fig[DETAIL_VIEWS_FIELD] != null) push(E.BAD_VIEWS, '建具一式は views を持てない', DETAIL_VIEWS_FIELD);
+  if (!Array.isArray(fig.parts)) { push(E.SHAPE, 'parts が配列でない', 'parts'); return; }
+  if (fig.parts.length === 0) { push(E.PARTS_EMPTY, '部品が 0 個', 'parts'); return; }
+  const ids = new Set();
+  const roles = new Set();
+  fig.parts.forEach((part, i) => {
+    const pp = `parts[${i}]`;
+    if (!isObj(part)) { push(E.SHAPE, '部品がオブジェクトでない', pp); return; }
+    if (!isNonEmptyString(part.id)) push(E.EMPTY_KEY, '部品の id が空', `${pp}.id`);
+    else if (ids.has(part.id)) push(E.PART_DUPLICATE, `部品の id が重複: ${part.id}`, `${pp}.id`);
+    else ids.add(part.id);
+    const roleOk = isEnum(FittingPartRole, part.role);
+    if (!roleOk) push(E.PART_UNKNOWN_ROLE, `未知の部品の role: ${String(part.role)}`, `${pp}.role`);
+    else if (roles.has(part.role)) push(E.PART_DUPLICATE, `部品の role が重複: ${part.role}`, `${pp}.role`);
+    else roles.add(part.role);
+    if (!isObj(part.figure)) { push(E.SHAPE, '部品の figure がオブジェクトでない', `${pp}.figure`); return; }
+    if (roleOk) {
+      const want = FITTING_PART_TARGETS[part.role];
+      const f = part.figure;
+      if (f.category !== want.category || f.view !== want.view || f.subject !== want.subject) {
+        push(E.PART_BAD_TARGET, `部品 ${part.role} の分類が (${want.category}, ${want.view}, ${want.subject}) でない: (${String(f.category)}, ${String(f.view)}, ${String(f.subject)})`, `${pp}.figure`);
+      }
+    }
+    const body = validateDetailFigure(
+      { key: `${String(fig.key)}${FITTING_PART_KEY_SEPARATOR}${String(part.role)}`, version: fig.version, label: '', ...part.figure },
+    );
+    for (const e of body.errors) push(e.code, e.message, `${pp}.figure.${e.path ?? ''}`.replace(/\.$/, ''));
+  });
+}
+
 /** 検証。{ ok, errors:[{code, message, path?}] }。例外にしない。 */
 export function validateDetailFigure(input) {
   const errors = [];
@@ -176,6 +238,11 @@ export function validateDetailFigure(input) {
 
   if (fig.version !== DETAIL_FIGURE_VERSION) push(E.VERSION, `version が ${DETAIL_FIGURE_VERSION} でない: ${String(fig.version)}`, 'version');
   if (!isNonEmptyString(fig.key)) push(E.EMPTY_KEY, 'key が空', 'key');
+  else if (fig.key.includes(FITTING_PART_KEY_SEPARATOR)
+    // 例外: 建具一式の部品から作った単独の図（fittingPartFigure・部品本体の検査。key が '<一式のキー>#<role>'）は fit に渡すので通す
+    && !(fig.category !== DetailCategory.FITTING && parseFittingPartKey(fig.key) !== null)) {
+    push(E.BAD_KEY_CHAR, `key に ${FITTING_PART_KEY_SEPARATOR} は使えない（建具一式の部品を指す合成キーの区切り）: ${fig.key}`, 'key');
+  }
   const catOk = isEnum(DetailCategory, fig.category);
   const viewOk = isEnum(DetailView, fig.view);
   const subOk = isEnum(DetailSubject, fig.subject);
@@ -184,6 +251,11 @@ export function validateDetailFigure(input) {
   if (!subOk) push(E.UNKNOWN_SUBJECT, `未知の subject: ${String(fig.subject)}`, 'subject');
   if (catOk && viewOk && subOk && !DETAIL_VIEW_COMBOS.some(c => c.category === fig.category && c.view === fig.view && c.subject === fig.subject)) {
     push(E.BAD_COMBO, `組合せ表に無い (${fig.category}, ${fig.view}, ${fig.subject})`, 'category');
+  }
+  // 建具一式は最上位に形を持たない（strokes 無し・基準無し）。以降の本体の検査は部品ごとに validateFittingSet が行う
+  if (fig.category === DetailCategory.FITTING) {
+    validateFittingSet(fig, input, push);
+    return { ok: errors.length === 0, errors };
   }
 
   // ---- views（平面の姿図だけが持てる。壊れていても図自体は読める＝SUPPORT_BLOCKING に入れない）----
@@ -328,8 +400,37 @@ export function validateDetailFigure(input) {
 const SUPPORT_BLOCKING = new Set([
   E.SHAPE, E.VERSION, E.UNKNOWN_CATEGORY, E.UNKNOWN_VIEW, E.UNKNOWN_SUBJECT, E.UNKNOWN_DIR, E.UNKNOWN_MODE, E.UNKNOWN_PARAM,
   E.UNKNOWN_MATERIAL_FIELD, E.UNKNOWN_ROLE, E.UNKNOWN_KIND, E.UNKNOWN_AXIS, E.UNKNOWN_WEIGHT, E.UNKNOWN_DASH, E.BAD_LENGTH,
-  E.BAD_VECTOR_SIGN, E.UNKNOWN_EDGE_MARK,
+  E.BAD_VECTOR_SIGN, E.UNKNOWN_EDGE_MARK, E.PART_UNKNOWN_ROLE, E.BAD_KEY_CHAR,
 ]);
+
+/**
+ * 建具一式の部品を指す合成キー '<一式のキー>#<role>' を分ける。最初の区切りで分け、両側が空でなく role が語彙にあるときだけ
+ * { setKey, role }、それ以外は null（例外にしない）。
+ */
+export function parseFittingPartKey(key) {
+  if (typeof key !== 'string') return null;
+  const i = key.indexOf(FITTING_PART_KEY_SEPARATOR);
+  if (i <= 0) return null;
+  const setKey = key.slice(0, i);
+  const role = key.slice(i + FITTING_PART_KEY_SEPARATOR.length);
+  return role.length > 0 && isEnum(FittingPartRole, role) ? { setKey, role } : null;
+}
+
+/**
+ * 建具一式 entry の role の部品を、単独の詳細図（合成キー '<key>#<role>'・label '<label>（<role>）'）として返す。
+ * entry が建具一式でない・その role の部品が無いときは null。
+ */
+export function fittingPartFigure(entry, role) {
+  if (!isObj(entry) || entry.category !== DetailCategory.FITTING || !Array.isArray(entry.parts)) return null;
+  const part = entry.parts.find(p => isObj(p) && p.role === role && isObj(p.figure));
+  if (!part) return null;
+  return {
+    ...part.figure,
+    key: `${entry.key}${FITTING_PART_KEY_SEPARATOR}${role}`,
+    version: entry.version,
+    label: `${entry.label ?? ''}（${role}）`,
+  };
+}
 
 /** この版で読める図か（version・全語彙が既知・全 LenSpec の mm が有限かつ正・線の役割が既知）。例外にしない。 */
 export function isSupportedDetailFigure(plain) {

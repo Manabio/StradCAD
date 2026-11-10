@@ -4,10 +4,13 @@ import {
   PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumRole, DetailDatumKind, DetailAxis, DetailDash,
   DETAIL_VIEW_COMBOS, DETAIL_SLOT_TARGETS, LINE_WEIGHT_MM, DETAIL_DEFAULT_WEIGHT_ROLE,
   DetailPlacementView, PLACED_FIGURE_SUBJECTS, CEILING_PLACED_FIGURE_SUBJECTS,
+  DetailSlot, FittingPartRole, FITTING_PART_TARGETS, FITTING_PART_KEY_SEPARATOR,
 } from '../core/constants.js';
 import {
   validateDetailFigure, normalizeDetailFigure, isSupportedDetailFigure, moveParts, DetailValidationError as E,
+  parseFittingPartKey, fittingPartFigure,
 } from './detailModel.js';
+import detailBuiltinFigures from './detailBuiltins.js';
 import { fitDetailFigure, DetailFitError } from './detailFit.js';
 import {
   stretchFigure, rectFigure, figureOf, strokeOf, move, fixedLen, stretchLen, paramLen, materialLen, anchorOf, datumOf, DS0, DT0, vmove,
@@ -239,12 +242,12 @@ test('列挙: DETAIL_SLOT_TARGETS の全エントリが DETAIL_VIEW_COMBOS に�
   for (const [slot, t] of Object.entries(DETAIL_SLOT_TARGETS)) {
     assert.ok(DETAIL_VIEW_COMBOS.some(c => c.category === t.category && c.view === t.view && c.subject === t.subject), `${slot} が組合せ表に無い`);
   }
-  assert.equal(Object.keys(DETAIL_SLOT_TARGETS).length, 14); // jamb/head/sill/sashSection/nageshi/shikii + figure（S6b）+ figureBack（T2）+ floorWall/wallCeiling（S8a）+ kneeTop/dropBottom（S8b-1）+ floorStep（S8b-3）+ ceilingStep（S8b-4a）
+  assert.equal(Object.keys(DETAIL_SLOT_TARGETS).length, 15); // jamb/head/sill/sashSection/nageshi/shikii + figure（S6b）+ figureBack（T2）+ floorWall/wallCeiling（S8a）+ kneeTop/dropBottom（S8b-1）+ floorStep（S8b-3）+ ceilingStep（S8b-4a）+ fitting（C1）
 });
 
-test('列挙: DETAIL_VIEW_COMBOS は 27 組・重複なし・全要素が既知の語彙', () => {
-  assert.equal(DETAIL_VIEW_COMBOS.length, 27);
-  assert.equal(new Set(DETAIL_VIEW_COMBOS.map(c => `${c.category}/${c.view}/${c.subject}`)).size, 27);
+test('列挙: DETAIL_VIEW_COMBOS は 28 組・重複なし・全要素が既知の語彙', () => {
+  assert.equal(DETAIL_VIEW_COMBOS.length, 28);
+  assert.equal(new Set(DETAIL_VIEW_COMBOS.map(c => `${c.category}/${c.view}/${c.subject}`)).size, 28);
   for (const c of DETAIL_VIEW_COMBOS) {
     assert.ok(Object.values(DetailCategory).includes(c.category) && Object.values(DetailView).includes(c.view) && Object.values(DetailSubject).includes(c.subject));
   }
@@ -321,4 +324,192 @@ test('views が壊れていても図自体は読める（R4）。normalize は v
   const back = JSON.parse(JSON.stringify(f));
   assert.deepEqual(back.views, { front: 'df-f', ceiling: 'df-c' });
   assert.deepEqual(validateDetailFigure(back), { ok: true, errors: [] });
+});
+
+// ---- 建具一式（FITTING。C1）----
+// 部品の figure は key・version・label・provenance・note を持たない本体（分類・strokes・datums・anchors）だけ。
+function partBody(over = {}) {
+  const f = figureOf(rectFigure().strokes, over);
+  return { category: f.category, view: f.view, subject: f.subject, strokes: f.strokes, datums: f.datums, anchors: f.anchors };
+}
+const JAMB_PART = () => ({ id: 'p1', role: FittingPartRole.JAMB, figure: partBody() });
+const FIGURE_PART = () => ({
+  id: 'p2', role: FittingPartRole.FIGURE,
+  figure: partBody({ category: DetailCategory.FIGURE, view: DetailView.ELEVATION, subject: DetailSubject.OPENING }),
+});
+function fittingSet(over = {}) {
+  return {
+    key: 'df-fit', version: 1, label: '一式', category: DetailCategory.FITTING, view: DetailView.PLAN, subject: DetailSubject.OPENING,
+    strokes: [], datums: [], anchors: [], provenance: null, note: null,
+    parts: [JAMB_PART(), FIGURE_PART()],
+    ...over,
+  };
+}
+
+test('建具一式: 部品 2 個（jamb・figure）の一式は ok・読める', () => {
+  assert.deepEqual(validateDetailFigure(fittingSet()), { ok: true, errors: [] });
+  assert.equal(isSupportedDetailFigure(fittingSet()), true);
+  // 組合せ表・スロット表・部品の分類表が整合している
+  assert.ok(DETAIL_VIEW_COMBOS.some(c => c.category === DetailCategory.FITTING && c.view === DetailView.PLAN && c.subject === DetailSubject.OPENING));
+  assert.deepEqual(DETAIL_SLOT_TARGETS[DetailSlot.FITTING], { category: DetailCategory.FITTING, view: DetailView.PLAN, subject: DetailSubject.OPENING });
+  assert.equal(Object.values(FittingPartRole).length, 13);
+  assert.deepEqual(Object.keys(FITTING_PART_TARGETS).sort(), Object.values(FittingPartRole).sort());
+  for (const t of Object.values(FITTING_PART_TARGETS)) {
+    assert.ok(DETAIL_VIEW_COMBOS.some(c => c.category === t.category && c.view === t.view && c.subject === t.subject), JSON.stringify(t));
+  }
+});
+
+test('建具一式: 最上位の strokes・datums・anchors が空でなければ SHAPE・views があれば BAD_VIEWS', () => {
+  assertHasCode(fittingSet({ strokes: rectFigure().strokes }), E.SHAPE);
+  assertHasCode(fittingSet({ datums: [DS0] }), E.SHAPE);
+  assertHasCode(fittingSet({ anchors: [anchorOf('ds0', 'r', 0)] }), E.SHAPE);
+  assertHasCode(fittingSet({ views: { front: 'df-x' } }), E.BAD_VIEWS);
+  assert.equal(isSupportedDetailFigure(fittingSet({ strokes: rectFigure().strokes })), false, 'SHAPE は読めない図');
+  assert.equal(isSupportedDetailFigure(fittingSet({ views: { front: 'df-x' } })), true, 'BAD_VIEWS は読める図');
+});
+
+test('建具一式: parts が配列でない→SHAPE・0 個→PARTS_EMPTY（読める）・部品が非オブジェクト→SHAPE', () => {
+  assertHasCode(fittingSet({ parts: undefined }), E.SHAPE);
+  assertHasCode(fittingSet({ parts: 'x' }), E.SHAPE);
+  assertHasCode(fittingSet({ parts: [] }), E.PARTS_EMPTY);
+  assert.equal(isSupportedDetailFigure(fittingSet({ parts: [] })), true);
+  assertHasCode(fittingSet({ parts: [null] }), E.SHAPE);
+  assertHasCode(fittingSet({ parts: [{ id: 'p1', role: FittingPartRole.JAMB }] }), E.SHAPE);
+});
+
+test('建具一式: 部品の id 重複・role 重複は PART_DUPLICATE（読める）・id 空は EMPTY_KEY', () => {
+  assertHasCode(fittingSet({ parts: [JAMB_PART(), { ...FIGURE_PART(), id: 'p1' }] }), E.PART_DUPLICATE);
+  assertHasCode(fittingSet({ parts: [JAMB_PART(), { ...JAMB_PART(), id: 'p9' }] }), E.PART_DUPLICATE);
+  assert.equal(isSupportedDetailFigure(fittingSet({ parts: [JAMB_PART(), { ...JAMB_PART(), id: 'p9' }] })), true);
+  assertHasCode(fittingSet({ parts: [{ ...JAMB_PART(), id: '' }] }), E.EMPTY_KEY);
+});
+
+test('建具一式: 未知の role は PART_UNKNOWN_ROLE（読めない図）', () => {
+  const f = fittingSet({ parts: [{ ...JAMB_PART(), role: 'zzz' }] });
+  assertHasCode(f, E.PART_UNKNOWN_ROLE);
+  assert.equal(isSupportedDetailFigure(f), false);
+  // 未知 role の合成キー（df-fit#zzz）は部品側の検査でも BAD_KEY_CHAR になり、二重に出る（期待値として固定。isSupported は同じ）
+  assert.deepEqual(
+    validateDetailFigure(f).errors.map(e => [e.code, e.path]),
+    [[E.PART_UNKNOWN_ROLE, 'parts[0].role'], [E.BAD_KEY_CHAR, 'parts[0].figure.key']],
+  );
+});
+
+test('建具一式: 部品の分類が role の表と違えば PART_BAD_TARGET（読める）', () => {
+  const f = fittingSet({ parts: [{ ...JAMB_PART(), role: FittingPartRole.HEAD }] }); // jamb の図を head 役に
+  assertHasCode(f, E.PART_BAD_TARGET);
+  assert.equal(isSupportedDetailFigure(f), true);
+});
+
+test('建具一式: 部品本体の誤りは path に parts[i].figure. を前置して返る（ORIGIN_DATUM_COUNT・合成キーは BAD_KEY_CHAR にならない）', () => {
+  const f = fittingSet();
+  f.parts[1].figure.datums = [DS0]; // 軸 t の origin が無い
+  const r = validateDetailFigure(f);
+  assert.equal(r.ok, false);
+  const e = r.errors.find(x => x.code === E.ORIGIN_DATUM_COUNT);
+  assert.ok(e, JSON.stringify(r.errors));
+  assert.equal(e.path, 'parts[1].figure.datums');
+  assert.equal(r.errors.some(x => x.code === E.BAD_KEY_CHAR), false);
+  // 部品本体の SUPPORT_BLOCKING（長さ）は一式全体を読めない図にする
+  const g = fittingSet();
+  g.parts[0].figure.strokes[0].moves[0].len.mm = 0;
+  assertHasCode(g, E.BAD_LENGTH);
+  assert.equal(isSupportedDetailFigure(g), false);
+  assert.equal(validateDetailFigure(g).errors.find(x => x.code === E.BAD_LENGTH).path, 'parts[0].figure.strokes[0].moves[0].len');
+});
+
+test('建具一式: key に # を含む図は BAD_KEY_CHAR（読めない図・どの分類でも）', () => {
+  assertHasCode(fittingSet({ key: 'df-a#jamb' }), E.BAD_KEY_CHAR, '一式自身のキーは合成キーの形でも不可');
+  assert.equal(isSupportedDetailFigure(fittingSet({ key: 'df-a#jamb' })), false);
+  assertHasCode(mutated(stretchFigure(), f => { f.key = 'df-x#y'; }), E.BAD_KEY_CHAR);
+  assert.equal(isSupportedDetailFigure(mutated(stretchFigure(), f => { f.key = 'df-x#y'; })), false);
+  for (const key of ['df-x#', '#jamb', 'df-x#jamb#head']) assertHasCode(mutated(stretchFigure(), f => { f.key = key; }), E.BAD_KEY_CHAR);
+  // 例外: 合成キーの形（'<key>#<role>'）の非一式の図は通す＝fittingPartFigure の戻り（fit に渡す）
+  assert.deepEqual(validateDetailFigure(mutated(stretchFigure(), f => { f.key = 'df-x#jamb'; })), { ok: true, errors: [] });
+});
+
+test('normalize: 建具一式は冪等・部品の figure に label・provenance・note を足さない', () => {
+  const once = normalizeDetailFigure(fittingSet());
+  assert.deepEqual(normalizeDetailFigure(once), once);
+  const raw = fittingSet();
+  for (const p of raw.parts) { delete p.figure.datums[0].offsetMm; delete p.figure.datums[1].offsetMm; }
+  const n = normalizeDetailFigure(raw);
+  assert.equal(n.parts[0].figure.datums[0].offsetMm, 0, '部品の本体にも既定値を埋める');
+  for (const p of n.parts) {
+    for (const k of ['label', 'provenance', 'note']) assert.equal(Object.hasOwn(p.figure, k), false, k);
+  }
+  assert.equal(raw.parts[0].figure.datums[0].offsetMm, undefined, '入力を書き換えない');
+  // parts が配列でない値は触らず検証に任せる
+  assert.equal(normalizeDetailFigure(fittingSet({ parts: 'x' })).parts, 'x');
+});
+
+test('normalize: parts の無い図は従来の正規化とバイト単位で一致（キーの足し方・順序とも。組込み全図＋fixture）', () => {
+  // 従来の本体（C1 以前の normalizeDetailFigure と同じ式）
+  const legacy = plain => {
+    const f = plain !== null && typeof plain === 'object' && !Array.isArray(plain) ? plain : {};
+    const isO = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+    const arr = v => (Array.isArray(v) ? v : []);
+    return {
+      ...f,
+      label: f.label ?? '',
+      strokes: arr(f.strokes).map(s => {
+        if (!isO(s)) return s;
+        return {
+          ...s,
+          moves: arr(s.moves).map(m => (isO(m) && m.dir === PenDir.VECTOR ? { ...m, ss: m.ss ?? 1, st: m.st ?? 1 } : m)),
+          closed: s.closed ?? false,
+          line: s.line == null
+            ? { weightRole: DETAIL_DEFAULT_WEIGHT_ROLE, dashRole: DetailDash.SOLID }
+            : isO(s.line) ? { weightRole: s.line.weightRole ?? DETAIL_DEFAULT_WEIGHT_ROLE, dashRole: s.line.dashRole ?? DetailDash.SOLID } : s.line,
+        };
+      }),
+      datums: arr(f.datums).map(d => (isO(d) ? { ...d, offsetMm: d.offsetMm ?? 0 } : d)),
+      anchors: arr(f.anchors),
+      provenance: f.provenance ?? null,
+      note: f.note ?? null,
+    };
+  };
+  const bare = { key: 'k' }; // label 等が全部無い図でもキーの順序が従来と同じ
+  const samples = [...detailBuiltinFigures, stretchFigure(), rectFigure(), placedFigure(), bare, {}, null, 'x'];
+  assert.ok(detailBuiltinFigures.length > 0);
+  for (const fig of samples) {
+    assert.equal(JSON.stringify(normalizeDetailFigure(fig)), JSON.stringify(legacy(fig)));
+    assert.equal(Object.hasOwn(normalizeDetailFigure(fig), 'parts'), false);
+  }
+});
+
+test('parseFittingPartKey: 往復・空側・未知 role・# が 2 つ', () => {
+  for (const role of Object.values(FittingPartRole)) {
+    assert.deepEqual(parseFittingPartKey(`df-fit${FITTING_PART_KEY_SEPARATOR}${role}`), { setKey: 'df-fit', role });
+  }
+  assert.equal(parseFittingPartKey('df-fit#'), null);
+  assert.equal(parseFittingPartKey('#jamb'), null);
+  assert.equal(parseFittingPartKey('df-fit'), null);
+  assert.equal(parseFittingPartKey('df-fit#zzz'), null);
+  assert.equal(parseFittingPartKey('a#jamb#head'), null, '最初の # で分けるので role が jamb#head になり語彙に無い');
+  for (const bad of [undefined, null, 5, {}, '']) assert.equal(parseFittingPartKey(bad), null);
+});
+
+test('fittingPartFigure: 部品の合成図（キー・label）・部品無し／一式でないは null・合成図は validate を通る', () => {
+  const set = fittingSet();
+  const jamb = fittingPartFigure(set, FittingPartRole.JAMB);
+  assert.equal(jamb.key, 'df-fit#jamb');
+  assert.equal(jamb.label, '一式（jamb）');
+  assert.equal(jamb.version, 1);
+  assert.deepEqual(parseFittingPartKey(jamb.key), { setKey: 'df-fit', role: 'jamb' });
+  for (const role of [FittingPartRole.JAMB, FittingPartRole.FIGURE]) {
+    const part = fittingPartFigure(set, role);
+    assert.deepEqual(validateDetailFigure(part), { ok: true, errors: [] }, role);
+    assert.equal(fitDetailFigure(part, { datums: { ds0: 0, dt0: 0 } }).error, undefined, '合成図は fit できる');
+  }
+  // 部品の figure が自分で key・version・label を持っていても、合成キー・一式の version・合成 label が勝つ
+  const own = fittingSet();
+  Object.assign(own.parts[0].figure, { key: 'bogus', version: 999, label: 'x' });
+  const won = fittingPartFigure(own, FittingPartRole.JAMB);
+  assert.deepEqual([won.key, won.version, won.label], ['df-fit#jamb', 1, '一式（jamb）']);
+  assert.equal(fittingPartFigure(set, FittingPartRole.HEAD), null, '部品無し');
+  assert.equal(fittingPartFigure(set, 'zzz'), null);
+  assert.equal(fittingPartFigure(stretchFigure(), FittingPartRole.JAMB), null, '一式でない');
+  assert.equal(fittingPartFigure(null, FittingPartRole.JAMB), null);
+  assert.equal(fittingPartFigure(fittingSet({ parts: 'x' }), FittingPartRole.JAMB), null);
 });

@@ -21,7 +21,7 @@ export { computeEnvelope, computeUnderside, EnvelopeWeight } from './detailEnvel
 // catalogKinds.js の loadBuiltin は従来どおり detailBuiltins.js を動的 import する（catalog/ は静的に引かない）。
 export { default as detailBuiltinFigures } from './detailBuiltins.js';
 // 平面の配置図（姿図・平面・衛生/家具/空調）かの判定。renderer/ が detail/ から引く口はここだけ。
-export { canHaveDetailViews } from './detailModel.js';
+export { canHaveDetailViews, parseFittingPartKey, fittingPartFigure } from './detailModel.js';
 
 /**
  * 図の material 束縛（LenSpec.mode='material'）が指す材コード（空でない文字列のみ）の集合。部屋の取り合いの基準供給

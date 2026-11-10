@@ -195,6 +195,7 @@ const CATEGORY_LABELS_BY_KIND = Object.freeze({
     [DetailCategory.FREE_PART]: '自由部位',
     [DetailCategory.PAIRED]:    '対の部位',
     [DetailCategory.FIGURE]:    '姿図',
+    [DetailCategory.FITTING]:   '建具一式',
   }),
 });
 

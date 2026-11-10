@@ -632,6 +632,7 @@ export const DetailCategory = Object.freeze({
   FREE_PART: 'freePart',
   PAIRED:    'paired',
   FIGURE:    'figure',
+  FITTING:   'fitting', // 建具一式（部品の束。parts を持ち、最上位の strokes は空）
 });
 /** 詳細図の向き。 */
 export const DetailView = Object.freeze({
@@ -675,6 +676,26 @@ export const DetailSlot = Object.freeze({
   DROP_BOTTOM:  'dropBottom',  // 垂れ壁の下端（同上）
   FLOOR_STEP:   'floorStep',   // 床の段差（高い側の部屋の Room.detailRefs。S8b-3）
   CEILING_STEP: 'ceilingStep', // 天井の段差（低い側の天井面の持ち主＝区画の CeilingZone.detailRefs か部屋の Room.detailRefs。S8b-4a）
+  FITTING:      'fitting',     // 建具一式（opening.detailRefs・建具種別の detailFigures が持つ。部品の束を指す）
+});
+/**
+ * 建具一式（DetailCategory.FITTING）の部品の役割。部品は一式の parts[] の要素 { id, role, figure }。
+ * jamb 系＝平面の方立・head/sill＝展開の断面・figure 系＝姿図・slide* 6 個＝外付け引き戸の平面の部品（戸先・内側・戸尻と、その上階側）。
+ */
+export const FittingPartRole = Object.freeze({
+  JAMB:           'jamb',
+  JAMB_HINGE:     'jambHinge',
+  JAMB_LATCH:     'jambLatch',
+  HEAD:           'head',
+  SILL:           'sill',
+  FIGURE:         'figure',
+  FIGURE_BACK:    'figureBack',
+  SLIDE_LATCH:    'slideLatch',
+  SLIDE_INNER:    'slideInner',
+  SLIDE_TAIL:     'slideTail',
+  SLIDE_LATCH_UP: 'slideLatchUp',
+  SLIDE_INNER_UP: 'slideInnerUp',
+  SLIDE_TAIL_UP:  'slideTailUp',
 });
 /** 部屋（Room.detailRefs）に割り当てられる slot（S8a。wall・floor・ceiling の part は要素付き＝8b）。 */
 export const ROOM_DETAIL_SLOTS = Object.freeze([DetailSlot.FLOOR_WALL, DetailSlot.WALL_CEILING]);
@@ -720,6 +741,7 @@ export const DETAIL_VIEW_COMBOS = Object.freeze([
   { category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.CEILING },
   { category: DetailCategory.FREE_PART, view: DetailView.SECTION, subject: DetailSubject.EAVE },
   { category: DetailCategory.FREE_PART, view: DetailView.SECTION, subject: DetailSubject.VERGE },
+  { category: DetailCategory.FITTING, view: DetailView.PLAN, subject: DetailSubject.OPENING },
 ].map(Object.freeze));
 /** スロットごとの、割り当てられる詳細図の (category, view, subject)。DETAIL_VIEW_COMBOS に含まれる。 */
 export const DETAIL_SLOT_TARGETS = Object.freeze({
@@ -737,7 +759,30 @@ export const DETAIL_SLOT_TARGETS = Object.freeze({
   [DetailSlot.DROP_BOTTOM]:  Object.freeze({ category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.WALL }),
   [DetailSlot.FLOOR_STEP]:   Object.freeze({ category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.FLOOR }),
   [DetailSlot.CEILING_STEP]: Object.freeze({ category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.CEILING }),
+  [DetailSlot.FITTING]:      Object.freeze({ category: DetailCategory.FITTING, view: DetailView.PLAN, subject: DetailSubject.OPENING }),
 });
+const fittingTarget = (category, view, subject) => Object.freeze({ category, view, subject });
+const FITTING_JAMB_TARGET = fittingTarget(DetailCategory.PAIRED, DetailView.PLAN, DetailSubject.JAMB);
+const FITTING_FIGURE_TARGET = fittingTarget(DetailCategory.FIGURE, DetailView.ELEVATION, DetailSubject.OPENING);
+const FITTING_SLIDE_TARGET = fittingTarget(DetailCategory.FIGURE, DetailView.PLAN, DetailSubject.OPENING);
+/** 建具一式の部品の役割ごとの、部品本体の (category, view, subject)。DETAIL_VIEW_COMBOS に含まれる。 */
+export const FITTING_PART_TARGETS = Object.freeze({
+  [FittingPartRole.JAMB]:           FITTING_JAMB_TARGET,
+  [FittingPartRole.JAMB_HINGE]:     FITTING_JAMB_TARGET,
+  [FittingPartRole.JAMB_LATCH]:     FITTING_JAMB_TARGET,
+  [FittingPartRole.HEAD]:           fittingTarget(DetailCategory.PAIRED, DetailView.SECTION, DetailSubject.HEAD),
+  [FittingPartRole.SILL]:           fittingTarget(DetailCategory.PAIRED, DetailView.SECTION, DetailSubject.SILL),
+  [FittingPartRole.FIGURE]:         FITTING_FIGURE_TARGET,
+  [FittingPartRole.FIGURE_BACK]:    FITTING_FIGURE_TARGET,
+  [FittingPartRole.SLIDE_LATCH]:    FITTING_SLIDE_TARGET,
+  [FittingPartRole.SLIDE_INNER]:    FITTING_SLIDE_TARGET,
+  [FittingPartRole.SLIDE_TAIL]:     FITTING_SLIDE_TARGET,
+  [FittingPartRole.SLIDE_LATCH_UP]: FITTING_SLIDE_TARGET,
+  [FittingPartRole.SLIDE_INNER_UP]: FITTING_SLIDE_TARGET,
+  [FittingPartRole.SLIDE_TAIL_UP]:  FITTING_SLIDE_TARGET,
+});
+/** 建具一式の部品を指す合成キー '<一式のキー>#<role>' の区切り。詳細図のキーには使えない（detailModel.js の BAD_KEY_CHAR）。 */
+export const FITTING_PART_KEY_SEPARATOR = '#';
 /** 基準（Datum）の種別。origin=図を載せる原点・end=伸縮区間の終端。 */
 export const DetailDatumKind = Object.freeze({
   ORIGIN: 'origin',
@@ -775,6 +820,8 @@ export const DetailParam = Object.freeze({
   WALL_THICKNESS:   'wallThickness',
   /** 部屋の巾木高さ（仕上げ設定 RoomFinish.baseboardHeight の "h=<mm>" を解析した mm。junction の floorWall だけが供給。S8c） */
   BASEBOARD_HEIGHT: 'baseboardHeight',
+  /** 外付け引き戸の扉幅 DW（mm。建具一式の部品が引く。建具の間口 W から (W+50)/2 で導出） */
+  DOOR_WIDTH: 'doorWidth',
 });
 /** LenSpec.mode='material' が参照する材の寸法の項目。 */
 export const DetailMaterialField = Object.freeze({
@@ -843,6 +890,10 @@ export const DETAIL_BUILTIN_WINDOW_HEAD_KEY = 'df-builtin-window-head-25';
 export const DETAIL_BUILTIN_WINDOW_SILL_KEY = 'df-builtin-window-sill-25';
 /** 片開き戸の建具種別キー（openingCatalog.js の FITTING_CATALOG）。catalog/ は openings/ を引けないので暗黙の既定の同梱判定（usedEntries.js）と共有できるようここに置く。 */
 export const SWING_LEAF_SUBTYPE = 'singleSwing';
+/** 引き戸の建具種別キー（openingCatalog.js の FITTING_CATALOG の sliding。外付け引き戸の組込み一式の既定に使う。catalog/ は openings/ を引けないのでここに置く）。 */
+export const SLIDE_OUTSET_SUBTYPE = 'sliding';
+/** 外付け引き戸の組込み一式（建具一式 FITTING）の図のキー。図は後続（C4）で detail/detailBuiltins.js が定義する。 */
+export const DETAIL_BUILTIN_FITTING_SLIDING_KEY = 'df-builtin-fitting-sliding';
 
 // ---- 平面記号の枠寸法（mm。建具の方立の組込み図と従来の描きが共有する唯一の定義。openings/openingPlanSymbolGeometry.js が再輸出）----
 export const FRAME_OVERHANG_MM     = 12; // 枠が壁面から室内外へ出る量（ユーザー明示指示2026-09で10→12）

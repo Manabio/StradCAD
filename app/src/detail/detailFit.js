@@ -9,7 +9,7 @@
 // 解決できないものは黙って代用せず error を返す。
 // ================================================================
 
-import { DetailLenMode, DetailAxis, DetailDatumKind, DETAIL_FIT_EPS_MM } from '../core/constants.js';
+import { DetailCategory, DetailLenMode, DetailAxis, DetailDatumKind, DETAIL_FIT_EPS_MM } from '../core/constants.js';
 import { normalizeDetailFigure, validateDetailFigure, moveParts, stretchPartsOf } from './detailModel.js';
 import { penWalk } from './detailPen.js';
 
@@ -35,6 +35,8 @@ const isFiniteNumber = v => typeof v === 'number' && Number.isFinite(v);
  */
 export function fitDetailFigure(plain, targets) {
   const fig = normalizeDetailFigure(plain);
+  // 建具一式は部品の束（最上位は strokes が空）。strokes [] で黙って成功させない
+  if (fig.category === DetailCategory.FITTING) return fail(F.INVALID, '建具一式は部品を指定して位置合わせする');
   const v = validateDetailFigure(fig);
   if (!v.ok) return fail(F.INVALID, `詳細図が不正: ${v.errors.map(e => e.message).join(' / ')}`, { errors: v.errors });
 

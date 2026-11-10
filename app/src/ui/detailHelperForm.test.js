@@ -275,6 +275,13 @@ test('comboOptions: category で view を、(category, view) で subject を絞�
   assert.deepEqual(comboOptions(DetailCategory.JUNCTION, DetailView.PLAN).subjects, []);
 });
 
+test('comboOptions: 分類の選択肢に FITTING を出さない（C5 まで）', () => {
+  const values = comboOptions(DetailCategory.PAIRED, DetailView.PLAN).categories.map(c => c.value);
+  assert.equal(values.includes(DetailCategory.FITTING), false);
+  for (const c of Object.values(DetailCategory).filter(v => v !== DetailCategory.FITTING)) assert.ok(values.includes(c), c);
+  assert.equal(values.length, 5);
+});
+
 test('setClassification: 上位を変えると下位は組合せ表の先頭へ寄る（表に無い状態を作らない）', () => {
   const f = newDraft({ idFactory });
   const g = setClassification(f, 'category', DetailCategory.FREE_PART);

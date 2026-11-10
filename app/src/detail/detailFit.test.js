@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PenDir, DetailAxis, DetailDatumKind, DetailDatumRole, DetailDash } from '../core/constants.js';
+import {
+  PenDir, DetailAxis, DetailDatumKind, DetailDatumRole, DetailDash, DetailCategory, DetailView, DetailSubject, FittingPartRole,
+} from '../core/constants.js';
 import { fitDetailFigure, DetailFitError as F } from './detailFit.js';
 import { penWalk, DetailPenError } from './detailPen.js';
 import {
@@ -166,6 +168,21 @@ test('fit 失敗: 検証に通らない図は INVALID（errors に理由）', ()
   assert.equal(r.error.code, F.INVALID);
   assert.ok(r.error.errors.length > 0);
   assert.equal(fitDetailFigure(null, ZERO).error.code, F.INVALID);
+});
+
+test('fit: 建具一式（FITTING）は INVALID（部品を指定して位置合わせする）。strokes [] で黙って成功しない', () => {
+  const body = f => ({ category: f.category, view: f.view, subject: f.subject, strokes: f.strokes, datums: f.datums, anchors: f.anchors });
+  const set = {
+    key: 'df-fit', version: 1, label: '一式', category: DetailCategory.FITTING, view: DetailView.PLAN, subject: DetailSubject.OPENING,
+    strokes: [], datums: [], anchors: [], provenance: null, note: null,
+    parts: [{ id: 'p1', role: FittingPartRole.JAMB, figure: body(rectFigure()) }],
+  };
+  const r = fitDetailFigure(set, ZERO);
+  assert.equal(r.error.code, F.INVALID);
+  assert.match(r.error.message, /建具一式は部品を指定/);
+  assert.equal(r.strokes, undefined);
+  // 不正な一式でも例外にせず INVALID
+  assert.equal(fitDetailFigure({ ...set, parts: [] }, ZERO).error.code, F.INVALID);
 });
 
 test('fit: 入力の図を書き換えない', () => {

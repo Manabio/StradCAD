@@ -872,12 +872,13 @@ test('formatDetailViews（P2-3）: DetailPlacementView の順に「ラベル: �
   assert.deepEqual(Object.keys(DETAIL_PLACEMENT_VIEW_LABELS), Object.values(DetailPlacementView), '全 5 値を網羅');
 });
 
-test('formatCategoryLabel(DETAIL_FIGURE): 5 分類の表示名', () => {
+test('formatCategoryLabel(DETAIL_FIGURE): 全 6 分類（DetailCategory の網羅）の表示名', () => {
+  assert.equal(Object.values(DetailCategory).length, 6);
   assert.deepEqual(
-    [DetailCategory.PART, DetailCategory.JUNCTION, DetailCategory.FREE_PART, DetailCategory.PAIRED, DetailCategory.FIGURE]
-      .map(c => formatCategoryLabel(DF, c)),
-    ['部位', '取り合い', '自由部位', '対の部位', '姿図'],
+    Object.values(DetailCategory).map(c => formatCategoryLabel(DF, c)),
+    ['部位', '取り合い', '自由部位', '対の部位', '姿図', '建具一式'],
   );
+  assert.equal(formatCategoryLabel(DF, DetailCategory.FITTING), '建具一式');
   assert.equal(formatCategoryLabel(DF, 'other'), 'other');
 });
 
