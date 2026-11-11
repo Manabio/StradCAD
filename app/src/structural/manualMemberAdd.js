@@ -22,12 +22,28 @@
 // 純モジュール: react/.jsx/store.js/snap.js を静的 import しない。
 // ================================================================
 import { StructuralMaterialType } from '../core.js';
-import { rulesFor, woodColumnSectionId, effectiveStructure } from './structureRules.js';
+import { rulesFor, woodColumnSectionId, effectiveStructure, usesWallIntersectionColumns } from './structureRules.js';
 import { DEFAULT_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { autoFillColumnSizes, autoFillColumnBaseSizes, autoFillBeamEccentricity, fixedBeamGuardHonored } from './structuralAutoFill.js';
-import { autoFillWoodBeamDepths } from './woodAutoFill.js';
+import { autoFillWoodBeamDepths, resolveWoodColumnAnchorCL } from './woodAutoFill.js';
 import { woodBeamTopLevelOffsetMm } from './woodFraming.js';
 import { beamAxisSpan, removeAutoBeamsOverlapping } from './fixedBeamOverlap.js';
+
+/**
+ * 手動柱の vCL・hCL を、構造の自動補完が同じ位置に立てる柱のアンカーへ解決し直す。
+ * 在来木造（壁交点方式）の自動補完は柱のアンカーを resolveWoodColumnAnchorCL（通り芯／梁芯→壁のある中心線）で
+ * 決める。中心線の上に梁芯が重なる位置へ中心線のまま手動柱を立てると、柱の識別キーが食い違い、自動側が同じ位置に
+ * auto の柱を作っては重複の後始末（dedupeColumnsByAxis）で消す、を再計算のたびに繰り返す（実測）。
+ * 解決できない線は渡された線のまま。座標は線の effectiveValue（structuralAnchorAt が比較する値）。
+ * 在来木造以外は渡された線をそのまま返す。vCL・hCL は実在の CL が必須（欠落は例外）。
+ * @returns {{vCL: object, hCL: object}}
+ */
+export function resolveManualColumnAnchors(graph, project, { vCL, hCL } = {}) {
+  if (!vCL || !hCL) throw new Error('resolveManualColumnAnchors: vCL と hCL は必須です');
+  if (!usesWallIntersectionColumns(graph, project)) return { vCL, hCL };
+  const resolve = cl => resolveWoodColumnAnchorCL(graph, cl.centerLineType, cl.effectiveValue) ?? cl;
+  return { vCL: resolve(vCL), hCL: resolve(hCL) };
+}
 
 /** 柱を手動追加し、初期値算定後に locked にする。vCL・hCL は明示必須（欠落は例外）。
  *  @returns 追加した StructuralColumn */

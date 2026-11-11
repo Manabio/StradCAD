@@ -488,6 +488,13 @@ export function effectiveStructure(graph, project = null) {
     ?? graph?._structGraph?._structuralInfo?.mainStructure;
 }
 
+/** 柱が壁の交点に立つ構造（在来木造＝壁交点方式。rules.columnPlacement==='wallIntersections'）か。
+ *  自階の実効主構造から決める唯一の判定——建具の構造同期の適用条件（structuralSync.js）・柱を立てられる線の候補
+ *  （columnEditTarget.js）・手動柱のアンカー解決（manualMemberAdd.js resolveManualColumnAnchors）が共有する。 */
+export function usesWallIntersectionColumns(graph, project) {
+  return rulesFor(effectiveStructure(graph, project)).columnPlacement === 'wallIntersections';
+}
+
 /**
  * その階の在来木造の柱寸(mm)。graph.woodColumnWidthMm（「各階柱寸法」欄・ステップ4 C-2）が
  * 木造正角のカタログ幅（sectionCatalog.js WOOD_SQUARE_WIDTHS＝90/105/120）に含まれるときだけ

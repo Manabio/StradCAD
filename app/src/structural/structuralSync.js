@@ -21,7 +21,7 @@
 // （`structural/syncFloorRecorder.js`）。起動元は`applyFloorUndoRecords`（既存）でその配列を
 // undo/redoに使う——構造同期モジュール自身は依然としてundoエントリを積まない（3引数版の
 // request呼び出し・undoRecords省略時は従来どおり記録しない）。
-import { rulesFor, effectiveStructure } from './structureRules.js';
+import { usesWallIntersectionColumns } from './structureRules.js';
 import { recomputeForStructuralSync } from './structuralOrchestration.js';
 import { createSyncFloorRecorder } from './syncFloorRecorder.js';
 import { loadFloor, saveFloor } from '../storage/db.js';
@@ -35,13 +35,11 @@ function assertKnownScope(scope) {
 
 // 在来木造（columnPlacement:'wallIntersections'）の柱自動生成が袖柱を扱う唯一の経路
 // （structuralAutoFill.js autoFillColumnsForStructure と同じ述語）。建具の変更はこの主構造でしか
-// 意味を持たないため、request の既定 applies（常に真）ではなくこの述語を建具専用の要求形にだけ適用する。
-function wallIntersectionColumnsApply(graph, project) {
-  return rulesFor(effectiveStructure(graph, project)).columnPlacement === 'wallIntersections';
-}
+// 意味を持たないため、request の既定 applies（常に真）ではなくこの述語（structureRules.js
+// usesWallIntersectionColumns。判定は 1 か所）を建具専用の要求形にだけ適用する。
 
 /** 建具（openings/）の確定・undo/redo直後の要求形（scope='active'・在来限定）。 */
-export const OPENING_STRUCTURAL_SYNC = Object.freeze({ scope: 'active', applies: wallIntersectionColumnsApply });
+export const OPENING_STRUCTURAL_SYNC = Object.freeze({ scope: 'active', applies: usesWallIntersectionColumns });
 
 const ALWAYS_APPLIES = () => true;
 

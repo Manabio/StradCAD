@@ -1,12 +1,13 @@
 // 平面・構造モードの長クリックによる柱の追加・削除（manualMemberCommit.js）の「編集先の階」と「占有」の判定（純関数）。
 // react/store.js/snap.js/.jsx に依存しない（node:test から単体 import 可能）。
-import { rulesFor, effectiveStructure } from './structureRules.js';
+import { rulesFor, effectiveStructure, usesWallIntersectionColumns } from './structureRules.js';
 import { columnListCategory } from './framingDrawing.js';
 import { LayerRole } from '../figure/figureTypes.js';
 import { columnSlotKey, columnAnchorKey } from '../core/structuralEntities.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { bareColumnRect } from '../finish/columnWrap.js';
 import { manualColumnAnchorLines } from '../core/centerLineKindPolicy.js';
+import { resolveManualColumnAnchors } from './manualMemberAdd.js';
 
 /**
  * 柱を立てられる線（縦・横）を appMode ごとに解決する唯一の口。構造リスト「＋追加」（intersectionMemberOptions）と
@@ -16,8 +17,7 @@ import { manualColumnAnchorLines } from '../core/centerLineKindPolicy.js';
  */
 export function columnAnchorLinesFor(graph, project, appMode) {
   if (appMode !== 'structure') return manualColumnAnchorLines(graph, appMode);
-  const beamAxesAllowed = rulesFor(effectiveStructure(graph, project)).columnPlacement === 'wallIntersections';
-  return manualColumnAnchorLines(graph, appMode, { beamAxesAllowed });
+  return manualColumnAnchorLines(graph, appMode, { beamAxesAllowed: usesWallIntersectionColumns(graph, project) });
 }
 
 /**
@@ -28,6 +28,19 @@ export function columnAnchorLinesFor(graph, project, appMode) {
 export function intersectionMemberOptions(mapName, graph, project) {
   if (mapName === 'columnMap') return columnAnchorLinesFor(graph, project, 'structure');
   return { verticals: graph.gridXs, horizontals: graph.gridYs };
+}
+
+/**
+ * 長クリックで押した交点（x, y。vCL × hCL で引いた線）に立てる柱のアンカーと占有を 1 回で解決する。
+ * アンカーは resolveManualColumnAnchors（在来木造は通り芯／梁芯→中心線）で解決し、**解決後**の線で
+ * isColumnSlotOccupied を評価する——占有の判定と実際に立てるアンカー（commitManualColumnAdd が使う解決）が
+ * 食い違わない唯一の口。x, y は入力のまま返す。vCL/hCL 欠落・x/y 非有限は例外。
+ * @returns {{vCL: object, hCL: object, x: number, y: number, occupied: boolean}}
+ */
+export function resolveColumnSlot(graph, project, { vCL, hCL, x, y } = {}) {
+  const anchors = resolveManualColumnAnchors(graph, project, { vCL, hCL });
+  const occupied = isColumnSlotOccupied(graph, { ...anchors, x, y });
+  return { ...anchors, x, y, occupied };
 }
 
 /**

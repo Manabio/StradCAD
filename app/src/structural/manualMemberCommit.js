@@ -14,7 +14,7 @@
 import { runInAction } from 'mobx';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { undoManager } from '../undoManager.js';
-import { addManualColumn } from './manualMemberAdd.js';
+import { addManualColumn, resolveManualColumnAnchors } from './manualMemberAdd.js';
 import { renumberMembers } from './memberNumbering.js';
 import { REMOVE_FN_BY_MAP } from './memberCatalog.js';
 
@@ -33,10 +33,13 @@ export function pushGraphUndo(graph, before) {
  *  @returns 追加した StructuralColumn */
 export function commitManualColumnAdd(graph, project, { vCL, hCL }) {
   if (!vCL || !hCL) throw new Error('commitManualColumnAdd: vCL と hCL は必須です');
+  // 在来木造は自動補完と同じアンカー（通り芯／梁芯→中心線）へ解決してから立てる（識別キーが食い違うと
+  // 再計算のたびに auto の柱が作られては消える。manualMemberAdd.js resolveManualColumnAnchors）。
+  const anchors = resolveManualColumnAnchors(graph, project, { vCL, hCL });
   const before = serializeGraph(graph);
   let column;
   runInAction(() => {
-    column = addManualColumn(graph, project, { vCL, hCL });
+    column = addManualColumn(graph, project, anchors);
     renumberMembers(graph, project, 'columnMap');
   });
   pushGraphUndo(graph, before);
