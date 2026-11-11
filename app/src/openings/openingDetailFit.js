@@ -11,6 +11,7 @@ import {
   DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY, SWING_LEAF_SUBTYPE, OpeningCategory,
   DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
   DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
+  SLIDE_OUTSET_SUBTYPE, DETAIL_BUILTIN_FITTING_SLIDING_KEY,
 } from '../core/constants.js';
 import { detailFrameKindOf } from './openingPlanSymbolGeometry.js';
 import { ElevationLineRole, ElevationDash, weightForRole } from '../elevation/elevationStyle.js';
@@ -51,6 +52,9 @@ export function fittingKeyOf(opening, entry = undefined) {
   return detailFigureRefsOfEntry(e, [DetailSlot.FITTING])?.[DetailSlot.FITTING] ?? null;
 }
 
+// detailRefs がこの slot を null で明示している（＝「なし」。キー無し・undefined は含まない）。
+const refsSayNone = (refs, slot) => refs !== null && typeof refs === 'object' && Object.hasOwn(refs, slot) && refs[slot] === null;
+
 const refOf = (refs, slot) => {
   if (refs === null || typeof refs !== 'object' || Array.isArray(refs)) return undefined;
   const key = refs[slot];
@@ -74,13 +78,13 @@ export function resolveDetailFigure({ symbolKey, detailRefs = null, slot, subTyp
   const baseSource = isFigure ? 'subType' : 'symbol';
   const baseRefs = isFigure ? subTypeRefs : detailFigureRefsFor(symbolKey);
   // 建具一式（detailRefs.fitting を null で明示したときは種別の一式も見ない）。一式の部品が無い役割は候補にしない。
-  const fittingSaysNone = detailRefs !== null && typeof detailRefs === 'object' && Object.hasOwn(detailRefs, DetailSlot.FITTING) && detailRefs[DetailSlot.FITTING] === null;
+  const fittingSaysNone = refsSayNone(detailRefs, DetailSlot.FITTING);
   const candidates = [];
   for (const s of SLOT_ORDER[slot] ?? []) {
     // detailRefs がこの slot を null で明示しているときは「なし」＝建具一式・記号（姿図は建具種別）側の同じ slot を候補にしない
     // （保守パネルのプレビューが、保存済みの割当てを未保存で外した状態を描くための口）。キー無し・undefined は従来どおり記号へ進む。
     // 永続化（S6）は「空なら書かない」規約なので、保存された detailRefs に null は現れない。
-    const openingSaysNone = detailRefs !== null && typeof detailRefs === 'object' && Object.hasOwn(detailRefs, s) && detailRefs[s] === null;
+    const openingSaysNone = refsSayNone(detailRefs, s);
     // この slot の明示 null（「なし」）は記号の段だけでなく一式の段も飛ばす。
     const fittingKeys = typeof fittingKey === 'string' && fittingKey !== '' && !fittingSaysNone && !openingSaysNone
       ? (FITTING_SLOT_ROLES[s] ?? []).map(role => `${fittingKey}${FITTING_PART_KEY_SEPARATOR}${role}`).filter(k => detailFigureEntry(k) !== null)
@@ -165,6 +169,48 @@ export function frameDefaultKey(opening, slot, mechanism) {
   if (slot === DetailSlot.SILL) return windowHasSill(opening) ? DETAIL_BUILTIN_WINDOW_SILL_KEY : undefined;
   if (mechanism === OpeningMechanism.SLIDE_DOUBLE) return undefined;
   return WINDOW_JAMB_DEFAULT_KEYS[detailFrameKindOf(mechanism)];
+}
+
+/**
+ * 建具一式の暗黙の既定のキー（外付け引き戸＝subType が SLIDE_OUTSET_SUBTYPE の建具の組込み一式。無ければ null）。
+ * 枠の slot の既定（frameDefaultKey）には入れない（一式は部品を引く口で、slot の図ではない）。組込みが引けないときも null。
+ */
+export function fittingDefaultKey(opening) {
+  if (opening?.subType !== SLIDE_OUTSET_SUBTYPE) return null;
+  return detailFigureEntry(DETAIL_BUILTIN_FITTING_SLIDING_KEY) === null ? null : DETAIL_BUILTIN_FITTING_SLIDING_KEY;
+}
+
+/**
+ * 外付け引き戸の平面の部品 3 つ（戸先側 latch・戸尻側の短い縦枠 inner・端材と開けた扉 tail）の図の解決。
+ * 一式のキー＝建具個別・種別の指定（fittingKeyOf。source=EXPLICIT）、無ければ暗黙の既定（fittingDefaultKey。source=DEFAULT）。
+ * detailRefs.fitting を null で明示したときは既定も使わない（「なし」＝3 つとも null）。
+ * 部品のキーは合成キー '<一式>#<役割>'。見上げ（direction 'up'）は *Up の役割を先に探し、その部品が無ければ平面の部品。
+ * 一式の参照切れ・部品の無い役割は null（その部品だけ描かない）。
+ * @param {object} opening
+ * @param {object|null|undefined} entry 建具種別エントリ（省略時は fittingKeyOf が引く）
+ * @param {'down'|'up'} [direction]
+ * @returns {{latch: {key:string, source:string}|null, inner: {key:string, source:string}|null, tail: {key:string, source:string}|null}}
+ */
+export function resolveSlideFittingParts(opening, entry, direction = 'down') {
+  const none = { latch: null, inner: null, tail: null };
+  const refs = opening?.detailRefs ?? null;
+  const own = fittingKeyOf(opening, entry);
+  const setKey = own ?? (refsSayNone(refs, DetailSlot.FITTING) ? null : fittingDefaultKey(opening));
+  if (setKey === null) return none;
+  const source = own !== null ? DetailFigureSource.EXPLICIT : DetailFigureSource.DEFAULT;
+  const partKey = role => {
+    const key = `${setKey}${FITTING_PART_KEY_SEPARATOR}${role}`;
+    return detailFigureEntry(key) === null ? null : key;
+  };
+  const pick = (plainRole, upRole) => {
+    const key = (direction === 'up' ? partKey(upRole) : null) ?? partKey(plainRole);
+    return key === null ? null : { key, source };
+  };
+  return {
+    latch: pick(FittingPartRole.SLIDE_LATCH, FittingPartRole.SLIDE_LATCH_UP),
+    inner: pick(FittingPartRole.SLIDE_INNER, FittingPartRole.SLIDE_INNER_UP),
+    tail: pick(FittingPartRole.SLIDE_TAIL, FittingPartRole.SLIDE_TAIL_UP),
+  };
 }
 
 // 組込み図の fit・配置で出る浮動小数の丸め誤差（数 ULP）を、従来の描きと同じ式の値へ寄せる。寄せるのは DETAIL_FIT_EPS_MM 以内だけ。

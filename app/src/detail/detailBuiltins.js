@@ -6,6 +6,8 @@ import {
   DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
   DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
   WINDOW_FRAME_JAMB_WIDTH_MM, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
+  DETAIL_BUILTIN_FITTING_SLIDING_KEY, FittingPartRole, SLIDE_OUTSET_WIDTH_DEDUCT_MM, SLIDE_OUTSET_RECESS_DEPTH_MM,
+  SLIDE_OUTSET_DOOR_FACE_INSET_MM,
 } from '../core/constants.js';
 
 /** 巾木 出 10（高さは部屋の巾木設定）の詳細図キー（床と壁の取り合い）。部屋に巾木高さがあれば割当て無しでも既定で使う（S8c）。 */
@@ -231,7 +233,131 @@ const WINDOW_SILL_25 = pairedFrameFigure({
   anchorVertices: [0, 2, 3],
 });
 
+// ---- 外付け引き戸の一式（建具一式 FITTING。部品 6 個。設計＝問題1.md C4）----
+// 局所座標: s 0＝部品の置き場・正＝戸尻の向き／t 0＝走る面・正＝壁の中（壁厚が反対面）。扉は t 5〜35（面の逃げ 5＋扉厚 30）・欠き込みの底は t 50。
+// 欠き込みの底の線（t 50）は壁の領域が描くので図に入れない。戸尻側の縦枠の先端 t 38＝50−出幅 12（扉との隙間 3＝50−12−35 の導出）。
+// 局所プレビューの値（fit が解決する値ではない）: 扉幅 800・穴の幅＝800−50・建具幅 W＝2×800−50（引き戸の W＝2×DW−50）。
+const PREVIEW_DOOR_WIDTH_MM = 800;
+const PREVIEW_CLEAR_WIDTH_MM = PREVIEW_DOOR_WIDTH_MM - SLIDE_OUTSET_WIDTH_DEDUCT_MM;
+const PREVIEW_OPENING_WIDTH_MM = 2 * PREVIEW_DOOR_WIDTH_MM - SLIDE_OUTSET_WIDTH_DEDUCT_MM;
+const doorWidth = { mm: PREVIEW_DOOR_WIDTH_MM, mode: DetailLenMode.PARAM, param: DetailParam.DOOR_WIDTH };
+const clearWidth = { mm: PREVIEW_CLEAR_WIDTH_MM, mode: DetailLenMode.PARAM, param: DetailParam.OPENING_CLEAR_WIDTH };
+const wallStretch = stretch(PREVIEW_WALL_MM);
+const recessStretch = stretch(PREVIEW_WALL_MM - SLIDE_OUTSET_RECESS_DEPTH_MM); // 壁厚から欠き込みの底（t 50）までの伸縮
+const openingEndOrigin = { id: 'ds1', role: DetailDatumRole.OPENING_OUTER, axis: DetailAxis.S, kind: DetailDatumKind.END, offsetMm: 0 };
+
+const slideStroke = (id, closed, moves, dashRole = DetailDash.SOLID) => ({ id, closed, line: { weightRole: 'medium', dashRole }, moves });
+const slideAnchor = (datumId, strokeId, vertexIndex, offsetMm) => (offsetMm === undefined ? { datumId, strokeId, vertexIndex } : { datumId, strokeId, vertexIndex, offsetMm });
+const slidePart = (role, { strokes, datums, anchors }) => ({
+  id: role,
+  role,
+  figure: { category: DetailCategory.FIGURE, view: DetailView.PLAN, subject: DetailSubject.OPENING, strokes, datums, anchors },
+});
+
+// 戸先枠（縦枠 見付 J）と閉じた扉（戸先端から戸尻側へ DW）。置き場＝戸先端。
+const latchFrameStroke = slideStroke('a', true, [
+  { dir: PenDir.LEFT, len: fixed(FRAME_JAMB_WIDTH_MM) },
+  { dir: PenDir.DOWN, len: frameProjection },
+  { dir: PenDir.DOWN, len: wallStretch },
+  { dir: PenDir.DOWN, len: frameProjection },
+  { dir: PenDir.RIGHT, len: fixed(FRAME_JAMB_WIDTH_MM) },
+]);
+const closedDoorStroke = slideStroke('b', true, [
+  { dir: PenDir.RIGHT, len: doorWidth },
+  { dir: PenDir.DOWN, len: fixed(DOOR_LEAF_THICKNESS_MM) },
+  { dir: PenDir.LEFT, len: doorWidth },
+]);
+const latchFrameAnchors = [slideAnchor('ds0', 'a', 0), slideAnchor('dt0', 'a', 2), slideAnchor('dt1', 'a', 3)];
+const closedDoorAnchors = [slideAnchor('ds0', 'b', 0), slideAnchor('dt0', 'b', 0, SLIDE_OUTSET_DOOR_FACE_INSET_MM)];
+const slideCommonDatums = [openingOuterOrigin, wallFaceTOrigin, wallFaceTEnd];
+
+const SLIDE_LATCH = slidePart(FittingPartRole.SLIDE_LATCH, {
+  strokes: [latchFrameStroke, closedDoorStroke],
+  datums: slideCommonDatums,
+  anchors: [...latchFrameAnchors, ...closedDoorAnchors],
+});
+
+// 戸尻側の短い縦枠（欠き込みの底 t 50 から壁の反対面＋出幅まで。先端 t 38）。置き場＝戸先端＋穴の長さ。壁厚が欠き込み深さ以下なら伸縮が尽きて描かれない。
+const SLIDE_INNER = slidePart(FittingPartRole.SLIDE_INNER, {
+  strokes: [slideStroke('a', true, [
+    { dir: PenDir.UP, len: frameProjection },
+    { dir: PenDir.RIGHT, len: fixed(FRAME_JAMB_WIDTH_MM) },
+    { dir: PenDir.DOWN, len: frameProjection },
+    { dir: PenDir.DOWN, len: recessStretch },
+    { dir: PenDir.DOWN, len: frameProjection },
+    { dir: PenDir.LEFT, len: fixed(FRAME_JAMB_WIDTH_MM) },
+  ])],
+  datums: slideCommonDatums,
+  anchors: [slideAnchor('ds0', 'a', 0), slideAnchor('dt0', 'a', 0, SLIDE_OUTSET_RECESS_DEPTH_MM), slideAnchor('dt1', 'a', 4)],
+});
+
+// 端材（W の外側の縦枠。t 0 の外へ出幅・t 50 まで）と開けた扉（破線。端材から戸先側へ DW）。置き場＝W の戸尻端。
+const tailStrokes = [
+  slideStroke('a', true, [
+    { dir: PenDir.UP, len: frameProjection },
+    { dir: PenDir.RIGHT, len: fixed(FRAME_JAMB_WIDTH_MM) },
+    { dir: PenDir.DOWN, len: frameProjection },
+    { dir: PenDir.DOWN, len: fixed(SLIDE_OUTSET_RECESS_DEPTH_MM) },
+    { dir: PenDir.LEFT, len: fixed(FRAME_JAMB_WIDTH_MM) },
+  ]),
+  slideStroke('b', true, [
+    { dir: PenDir.LEFT, len: doorWidth },
+    { dir: PenDir.DOWN, len: fixed(DOOR_LEAF_THICKNESS_MM) },
+    { dir: PenDir.RIGHT, len: doorWidth },
+  ], DetailDash.DASHED),
+];
+const tailBody = {
+  strokes: tailStrokes,
+  datums: [openingOuterOrigin, wallFaceTOrigin],
+  anchors: [slideAnchor('ds0', 'a', 0), slideAnchor('dt0', 'a', 0), slideAnchor('ds0', 'b', 0), slideAnchor('dt0', 'b', 0, SLIDE_OUTSET_DOOR_FACE_INSET_MM)],
+};
+const SLIDE_TAIL = slidePart(FittingPartRole.SLIDE_TAIL, tailBody);
+
+// 天伏（見上げ）の部品。slideLatchUp＝戸先枠・閉じた扉に上レール（t −12。W 全長）を足す。slideInnerUp＝縦枠は t 50 で止め、上枠の外の線（t 壁厚＋出幅。穴の全長）を足す。slideTailUp＝slideTail と同じ。
+const SLIDE_LATCH_UP = slidePart(FittingPartRole.SLIDE_LATCH_UP, {
+  strokes: [latchFrameStroke, closedDoorStroke, slideStroke('c', false, [{ dir: PenDir.RIGHT, len: stretch(PREVIEW_OPENING_WIDTH_MM) }])],
+  datums: [openingOuterOrigin, openingEndOrigin, wallFaceTOrigin, wallFaceTEnd],
+  anchors: [...latchFrameAnchors, ...closedDoorAnchors, slideAnchor('ds0', 'c', 0), slideAnchor('dt0', 'c', 0, -FRAME_OVERHANG_MM), slideAnchor('ds1', 'c', 1)],
+});
+const SLIDE_INNER_UP = slidePart(FittingPartRole.SLIDE_INNER_UP, {
+  strokes: [
+    slideStroke('a', false, [
+      { dir: PenDir.RIGHT, len: fixed(FRAME_JAMB_WIDTH_MM) },
+      { dir: PenDir.DOWN, len: recessStretch },
+      { dir: PenDir.DOWN, len: frameProjection },
+      { dir: PenDir.LEFT, len: fixed(FRAME_JAMB_WIDTH_MM) },
+      { dir: PenDir.LEFT, len: clearWidth },
+    ]),
+    slideStroke('b', false, [
+      { dir: PenDir.DOWN, len: recessStretch },
+      { dir: PenDir.DOWN, len: frameProjection },
+    ]),
+  ],
+  datums: slideCommonDatums,
+  anchors: [
+    slideAnchor('ds0', 'a', 0), slideAnchor('dt0', 'a', 0, SLIDE_OUTSET_RECESS_DEPTH_MM), slideAnchor('dt1', 'a', 2),
+    slideAnchor('ds0', 'b', 0), slideAnchor('dt0', 'b', 0, SLIDE_OUTSET_RECESS_DEPTH_MM), slideAnchor('dt1', 'b', 1),
+  ],
+});
+const SLIDE_TAIL_UP = slidePart(FittingPartRole.SLIDE_TAIL_UP, tailBody);
+
+// 外付け引き戸の組込み一式（subType が SLIDE_OUTSET_SUBTYPE の建具の暗黙の既定。建具一式 FITTING＝最上位に形を持たず parts に部品を束ねる）。
+const FITTING_SLIDING = Object.freeze({
+  key: DETAIL_BUILTIN_FITTING_SLIDING_KEY,
+  version: DETAIL_FIGURE_VERSION,
+  label: `引き戸 一式（外付け・欠き込み ${SLIDE_OUTSET_RECESS_DEPTH_MM}）`,
+  category: DetailCategory.FITTING,
+  view: DetailView.PLAN,
+  subject: DetailSubject.OPENING,
+  strokes: [],
+  datums: [],
+  anchors: [],
+  parts: [SLIDE_LATCH, SLIDE_INNER, SLIDE_TAIL, SLIDE_LATCH_UP, SLIDE_INNER_UP, SLIDE_TAIL_UP],
+  provenance: null,
+  note: null,
+});
+
 export default [
   BASEBOARD_10, KNEE_CAP_20, DOOR_JAMB_30, DOOR_HEAD_30, WINDOW_JAMB_NOTCHED_25, WINDOW_JAMB_25, WINDOW_JAMB_OPEN_25,
-  WINDOW_HEAD_25, WINDOW_SILL_25,
+  WINDOW_HEAD_25, WINDOW_SILL_25, FITTING_SLIDING,
 ];

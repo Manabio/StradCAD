@@ -287,5 +287,5 @@ test('配線: 天伏の hidden 建具は記号を組む前に return する（S4
 test('配線: outsetSlidePrimitives の呼び出し元は buildSashOpenGroupPrimitives に host を渡す（ソース走査）', () => {
   const src = codeOnly('openingPlanSymbol.js');
   assert.match(src, /outsetSlideLayout\(opening, entry\.mechanism, host\)/);
-  assert.match(src, /symbolWeight, frameWeight, host\)/);
+  assert.match(src, /symbolWeight, frameWeight, host, direction\)/);
 });

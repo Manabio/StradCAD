@@ -81,6 +81,7 @@ export const DETAIL_PARAM_LABELS = Object.freeze({
   [DetailParam.WALL_THICKNESS]:   '壁厚',
   [DetailParam.BASEBOARD_HEIGHT]: '巾木高さ',
   [DetailParam.DOOR_WIDTH]:       '扉幅',
+  [DetailParam.OPENING_CLEAR_WIDTH]: '穴の幅',
 });
 export const DETAIL_MATERIAL_FIELD_LABELS = Object.freeze({
   [DetailMaterialField.THICKNESS]: '厚み',

@@ -124,6 +124,64 @@ export function placeDetailSides(fitted, { coord1, coord2, faceMin, faceMax, tSi
   return [side(coord1, 1), side(coord2, -1)];
 }
 
+// 外付け引き戸の部品（建具一式 slide* の平面）が供給する基準の値（局所座標。s＝戸先端（または部品の置き場）から戸尻へ・t＝走る面から壁の中へ）。
+//   s: OPENING_OUTER の origin＝0・end＝建具幅 W（slideLatchUp の上レールの長さ）
+//   t: WALL_FINISH_FACE の origin＝0（走る面）・end＝壁厚（反対面）
+function slideDatumBase(d, { wallThickness, width }) {
+  if (d.role === DetailDatumRole.OPENING_OUTER && d.axis === DetailAxis.S) {
+    if (d.kind === DetailDatumKind.ORIGIN) return 0;
+    if (d.kind === DetailDatumKind.END) return width;
+  }
+  if (d.role === DetailDatumRole.WALL_FINISH_FACE && d.axis === DetailAxis.T) {
+    if (d.kind === DetailDatumKind.ORIGIN) return 0;
+    if (d.kind === DetailDatumKind.END) return wallThickness;
+  }
+  return undefined;
+}
+
+/**
+ * 外付け引き戸の部品用の fitLocal の targets（fitDetailLocalMemo の targetsOf に渡す。detailFrameTargets と同形）。
+ * params は 枠の出幅・扉幅 DW・穴の幅 DW−50・壁厚・枠の見付。供給できない基準は UNSUPPORTED_DATUM。
+ * @param {object} fig 部品の図（合成キーの単独図）
+ * @param {{wallThickness:number, projection:number, doorWidth:number, width:number, clearWidth:number, faceWidth:number}} dims
+ */
+export function detailSlidePlanTargets(fig, dims) {
+  const datums = {};
+  for (const d of Array.isArray(fig?.datums) ? fig.datums : []) {
+    if (d === null || typeof d !== 'object') continue; // 形の不正は fit の検証（INVALID）が理由つきで返す
+    const base = slideDatumBase(d, dims);
+    if (base === undefined) {
+      return fail(DetailFrameError.UNSUPPORTED_DATUM, ERR_DETAIL_DATUM_UNSUPPORTED(d.id, `${d.role}・${d.axis}・${d.kind}`));
+    }
+    datums[d.id] = base;
+  }
+  return {
+    targets: {
+      datums,
+      params: {
+        [DetailParam.FRAME_PROJECTION]: dims.projection,
+        [DetailParam.DOOR_WIDTH]: dims.doorWidth,
+        [DetailParam.OPENING_CLEAR_WIDTH]: dims.clearWidth,
+        [DetailParam.WALL_THICKNESS]: dims.wallThickness,
+        [DetailParam.FRAME_FACE_WIDTH]: dims.faceWidth,
+      },
+    },
+  };
+}
+
+/**
+ * fit 済みの外付け引き戸の部品を平面の世界座標へ写す。局所の s＝along（戸尻へ向かう符号 sx・refAlong が s=0）、t＝走る面から壁の中へ
+ * （world perp の向き ty＝−runPerpDir・facePerp が t=0）。横の壁は (along, perp)＝(x, y)、縦の壁は (perp, along)＝(x, y)。
+ * @param {{strokes: object[]}} fitted fitLocal の結果（error でないもの）
+ * @param {{refAlong:number, sx:1|-1, facePerp:number, ty:1|-1, isVertical:boolean}} p
+ * @returns {{id:string, points:number[][], closed:boolean, line:object, source:string}[]}
+ */
+export function placeSlidePart(fitted, { refAlong, sx, facePerp, ty, isVertical }) {
+  return placeStrokes(fitted, isVertical
+    ? { ox: facePerp, oy: refAlong, sx: 0, sy: sx, tx: ty, ty: 0 }
+    : { ox: refAlong, oy: facePerp, sx, sy: 0, tx: 0, ty });
+}
+
 /**
  * ストロークの点列から、前後の点と一直線上にあって向きが変わらない中間の頂点を除く（片開き戸の方立 S8e-1。
  * 組込み図は t の基準を置くために共線の頂点を持つので、従来の六角形と同じ点列に揃える）。三方枠（S3）の出力には使わない。

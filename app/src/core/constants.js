@@ -822,6 +822,8 @@ export const DetailParam = Object.freeze({
   BASEBOARD_HEIGHT: 'baseboardHeight',
   /** 外付け引き戸の扉幅 DW（mm。建具一式の部品が引く。建具の間口 W から (W+50)/2 で導出） */
   DOOR_WIDTH: 'doorWidth',
+  /** 外付け引き戸の穴の長さ DW−50（mm。天井詳細の上枠の線が引く。建具一式 slideInnerUp の部品が使う） */
+  OPENING_CLEAR_WIDTH: 'clearWidth',
 });
 /** LenSpec.mode='material' が参照する材の寸法の項目。 */
 export const DetailMaterialField = Object.freeze({

@@ -470,8 +470,10 @@ test('normalize: parts の無い図は従来の正規化とバイト単位で一
     };
   };
   const bare = { key: 'k' }; // label 等が全部無い図でもキーの順序が従来と同じ
-  const samples = [...detailBuiltinFigures, stretchFigure(), rectFigure(), placedFigure(), bare, {}, null, 'x'];
-  assert.ok(detailBuiltinFigures.length > 0);
+  // parts を持つ組込み（建具一式。C4）は対象外（この表明は「parts の無い図」の不変。一式の正規化は openings/openingPlanSymbol.slideFitting.test.js）
+  const plainBuiltins = detailBuiltinFigures.filter(f => !Object.hasOwn(f, 'parts'));
+  const samples = [...plainBuiltins, stretchFigure(), rectFigure(), placedFigure(), bare, {}, null, 'x'];
+  assert.ok(plainBuiltins.length > 0);
   for (const fig of samples) {
     assert.equal(JSON.stringify(normalizeDetailFigure(fig)), JSON.stringify(legacy(fig)));
     assert.equal(Object.hasOwn(normalizeDetailFigure(fig), 'parts'), false);

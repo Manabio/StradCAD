@@ -103,7 +103,7 @@ test('登録表: 照合・比較・重複禁止の項目', () => {
   assert.deepEqual(def.overrideLockedFields, []);
 });
 
-test('登録表: loadBuiltin は組込み 9 件（巾木 出 10・床と壁／天板 厚 20・腰壁の天端／片開き戸の方立・上枠／窓の方立 3 種／窓の上枠・下枠）で、validate と isSupported を通る', async () => {
+test('登録表: loadBuiltin は組込み 10 件（巾木 出 10・床と壁／天板 厚 20・腰壁の天端／片開き戸の方立・上枠／窓の方立 3 種／窓の上枠・下枠／引き戸の建具一式）で、validate と isSupported を通る', async () => {
   const def = kindDef(DF);
   const list = await def.loadBuiltin();
   assert.deepEqual(list.map(e => [e.key, e.category, e.subject]), [
@@ -112,6 +112,7 @@ test('登録表: loadBuiltin は組込み 9 件（巾木 出 10・床と壁／�
     ['df-builtin-window-jamb-notched-25', 'paired', 'jamb'], ['df-builtin-window-jamb-25', 'paired', 'jamb'],
     ['df-builtin-window-jamb-open-25', 'paired', 'jamb'],
     ['df-builtin-window-head-25', 'paired', 'head'], ['df-builtin-window-sill-25', 'paired', 'sill'],
+    ['df-builtin-fitting-sliding', 'fitting', 'opening'],
   ]);
   for (const entry of list) {
     assert.doesNotThrow(() => def.validate(entry));

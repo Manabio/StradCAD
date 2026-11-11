@@ -53,7 +53,7 @@
 // ================================================================
 
 import { LINE_WEIGHT_MM, OpeningCategory } from '../core.js';
-import { IMPLEMENTED_MECHANISMS, OpeningMechanism, frameProfileFor } from './openingCatalog.js';
+import { IMPLEMENTED_MECHANISMS, OpeningMechanism, frameProfileFor, fitDetailLocalMemo } from './openingCatalog.js';
 import {
   planFrameBand, bandPerp, planSymbolPlan, swingOpenPerpDir, innerSpanOpening,
   swingClosedLeafSpan, closedAngleFor, leafOpenAngle, angleVectors,
@@ -62,8 +62,9 @@ import {
   frameOnlyPerpRange, clampFrameFaceWidth, jambWidthFor, frameInnerSpan,
   DOOR_OPEN_ANGLE_DEG, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
 } from './openingPlanSymbolGeometry.js';
-import { resolveDetailFrame, resolveSwingDoorFrame, frameDefaultKey, fittingKeyOf } from './openingDetailFit.js';
-import { DetailSlot, DetailFigureSource, SWING_LEAF_SUBTYPE, WINDOW_FRAME_JAMB_WIDTH_MM, SLIDE_OUTSET_DOOR_FACE_INSET_MM } from '../core/constants.js';
+import { resolveDetailFrame, resolveSwingDoorFrame, resolveSlideFittingParts, frameDefaultKey, fittingKeyOf } from './openingDetailFit.js';
+import { detailSlidePlanTargets, placeSlidePart } from './openingDetailFrame.js';
+import { DetailSlot, DetailDash, DetailFigureSource, SWING_LEAF_SUBTYPE, WINDOW_FRAME_JAMB_WIDTH_MM, SLIDE_OUTSET_DOOR_FACE_INSET_MM, DETAIL_PRIM_SOURCE } from '../core/constants.js';
 import { isOutsetSlide, outsetSlideLayout, slideRecessBand } from './slideOutset.js';
 import { fixtureSymbolOf, effectiveFrameFaceWidth, effectiveFrameProjection } from './openingNumbering.js';
 import { LodLevel } from '../viewport.js';
@@ -421,15 +422,69 @@ function sashFrameOpenPrimitives(opening, band, jambWidth, frameWeight) {
   ];
 }
 
+// 位置合わせ・配置済みの部分詳細図のストローク（placeStrokes の結果）を平面のプリミティブにする。実線＝polyline（役割 frame）、
+// 破線（DetailDash.DASHED）＝閉じ辺を足した点列の線分ごとの line（役割 symbol・SLIDE_OPEN_DASH。polyline は dash を持たないため）。
+// 全部に source: DETAIL_PRIM_SOURCE を付ける。
+function detailStrokesToPlanPrimitives(placed, { frameWeight, symbolWeight }) {
+  const out = [];
+  for (const st of placed) {
+    if (st.points.length < 2) continue;
+    if (st.line?.dashRole === DetailDash.DASHED) {
+      const pts = st.closed ? [...st.points, st.points[0]] : st.points;
+      for (let i = 1; i < pts.length; i += 1) {
+        out.push({
+          ...linePrim('symbol', symbolWeight, { x: pts[i - 1][0], y: pts[i - 1][1] }, { x: pts[i][0], y: pts[i][1] }, SLIDE_OPEN_DASH),
+          source: DETAIL_PRIM_SOURCE,
+        });
+      }
+    } else {
+      out.push({ ...polylinePrim('frame', frameWeight, st.points.flat(), st.closed), source: DETAIL_PRIM_SOURCE });
+    }
+  }
+  return out;
+}
+
+// 外付け引き戸の建具一式（resolveSlideFittingParts。既定は組込み）の部品 3 つを走る面へ置いたプリミティブ列（詳細 LOD）。
+// 置き場（along）: 戸先枠・閉じた扉＝戸先端 A（layout.latchAlong）／戸尻側の短い縦枠＝A＋sx·穴の長さ／端材・開けた扉＝A＋sx·W（sx＝戸尻へ向かう符号）。
+// 面（perp）: 走る面。t（壁の中）の向き＝−runPerpDir。部品が無い・fit できないものはその部品だけ描かない。何も描けなければ空配列（呼び出し側が一般記号の実寸版へ）。
+// 呼び出し側は走る面が決まっている（runPerpDir≠0・faceRange が有限・壁厚が欠き込み深さ超）ときだけ呼ぶ。
+function slideFittingPrimitives(opening, layout, faceRange, { entry, direction, symbolWeight, frameWeight }) {
+  const parts = resolveSlideFittingParts(opening, entry, direction);
+  const { runPerpDir, tailSide, latchAlong, cutLength, doorWidth, jambWidth } = layout;
+  const sx = tailSide < 0 ? -1 : 1;
+  const width = Math.abs(opening.coord2 - opening.coord1);
+  const dims = {
+    wallThickness: faceRange[1] - faceRange[0], projection: FRAME_OVERHANG_MM,
+    doorWidth, width, clearWidth: cutLength, faceWidth: jambWidth,
+  };
+  const place = { sx, facePerp: runPerpDir > 0 ? faceRange[1] : faceRange[0], ty: -runPerpDir, isVertical: opening.isVertical };
+  const out = [];
+  for (const [part, refAlong] of [[parts.latch, latchAlong], [parts.inner, latchAlong + sx * cutLength], [parts.tail, latchAlong + sx * width]]) {
+    if (part === null) continue;
+    const fitted = fitDetailLocalMemo({ figureKey: part.key, slot: DetailSlot.FITTING, dims, targetsOf: detailSlidePlanTargets });
+    if (fitted.error) continue;
+    out.push(...detailStrokesToPlanPrimitives(placeSlidePart(fitted, { ...place, refAlong }), { frameWeight, symbolWeight }));
+  }
+  return out;
+}
+
 // 外付け引き戸（SLIDE_SINGLE。layoutはoutsetSlideLayoutの結果＝引けたときだけ呼ぶ）の記号。
 // 穴（cut）の枠＋走る面の内側 [面−(5+扉厚), 面−5] を走る閉じた扉（戸先端から戸尻側へDW）＋開けた扉
-// （引き代pull。破線）。一般LODは扉を中心線1本、詳細LODは実寸矩形（詳細の一式は別担当のため常にこの
-// フォールバック）。方立は穴の内側（cutから派生した建具へ既存のsashFrameOpenPrimitives）。
+// （引き代pull。破線）。一般LODは扉を中心線1本、詳細LODは建具一式の部品で描き（slideFittingPrimitives）、
+// 一式が無い・1つも描けないときは一般記号を実寸で描き直したフォールバック（実寸矩形）。方立は穴の内側
+// （cutから派生した建具へ既存のsashFrameOpenPrimitives）。
 // 走る面が決まらない（runPerpDir 0）・面が不明（faceLo/faceHi非有限）・壁厚が欠き込み深さ以下は枠＋帯中央の扉線（cut長）のみ。
-function outsetSlidePrimitives(opening, layout, band, { detail, faceRange, jambW, symbolWeight, frameWeight }) {
+function outsetSlidePrimitives(opening, layout, band, { detail, faceRange, jambW, symbolWeight, frameWeight, entry, direction }) {
   const { isVertical } = opening;
   const { cut, pull, doorWidth, tailSide, runPerpDir } = layout;
   const [cutLo, cutHi] = cut;
+  // 走る面が決まらない・面が不明・壁厚が欠き込み深さ以下（S3b と同じ slideRecessBand が null＝欠き込まない）は扉を面の内側へ描けない。
+  const runsOnFace = runPerpDir !== 0 && !!faceRange && slideRecessBand(layout.recess, faceRange) !== null;
+  // 詳細 LOD は建具一式の部品（戸先枠・閉じた扉／戸尻側の短い縦枠／端材・開けた扉）で描く。1 つも描けなければ下の一般記号の実寸版（フォールバック）。
+  if (detail && runsOnFace) {
+    const fitted = slideFittingPrimitives(opening, layout, faceRange, { entry, direction, symbolWeight, frameWeight });
+    if (fitted.length > 0) return fitted;
+  }
   const inner = detail ? frameInnerSpan(cutLo, cutHi, jambW) : null;
   const spanOpening = detail ? innerSpanOpening(opening, { lo: cutLo, hi: cutHi, width: cutHi - cutLo }) : null;
   const frame = detail
@@ -439,8 +494,7 @@ function outsetSlidePrimitives(opening, layout, band, { detail, faceRange, jambW
     ]
     : [rectPrim('frame', frameWeight, isVertical, cutLo, cutHi, band.lo, band.hi)];
 
-  // 走る面が決まらない・面が不明・壁厚が欠き込み深さ以下（S3b と同じ slideRecessBand が null＝欠き込まない）は扉を面の内側へ描けない。
-  if (runPerpDir === 0 || !faceRange || slideRecessBand(layout.recess, faceRange) === null) {
+  if (!runsOnFace) {
     const mid = band.center;
     return [...frame, linePrim('symbol', symbolWeight, toWorld(isVertical, cutLo, mid), toWorld(isVertical, cutHi, mid))];
   }
@@ -472,13 +526,13 @@ function outsetSlidePrimitives(opening, layout, band, { detail, faceRange, jambW
 // クランプ）のまま——このグループの機構は回転しないためpivotPerp自体は使わない。
 // 外付け引き戸（isOutsetSlide）だけは先頭で別記号へ分岐する（layoutが引けないとき＝外壁ホスト・W≤50・
 // coord非有限は下の従来経路）。
-function buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight, host) {
+function buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight, host, direction) {
   const jambW = jambWidthFor(opening);
   if (isOutsetSlide(entry.mechanism)) {
     const layout = outsetSlideLayout(opening, entry.mechanism, host);
     if (layout) {
       const faceRange = Number.isFinite(faceLo) && Number.isFinite(faceHi) ? [Math.min(faceLo, faceHi), Math.max(faceLo, faceHi)] : null;
-      return outsetSlidePrimitives(opening, layout, band, { detail, faceRange, jambW, symbolWeight, frameWeight });
+      return outsetSlidePrimitives(opening, layout, band, { detail, faceRange, jambW, symbolWeight, frameWeight, entry, direction });
     }
   }
   const openPerpDir = swingOpenPerpDir(opening.isVertical, opening.hingeSide, opening.swingSide, entry.mechanism, entry);
@@ -1030,6 +1084,7 @@ function buildHingeGroup2Primitives(opening, entry, lodLevel, band, detail, axis
  *   entry: findCatalogEntryの結果（無ければnull）。lodLevel: viewport.js LodLevel。
  *   axisValue: host.axisValue。faceLo/faceHi: 壁面線（略図LODでは未定義）。
  *   host（任意）: 建具の実ホスト壁。外付け引き戸が外壁ホストか（isExteriorWall）の判定だけに使う（null＝外壁でない扱い）。
+ *   direction（任意。'down'＝見下げ〔既定〕・'up'＝見上げ〔天伏〕）: 外付け引き戸の建具一式の部品を *Up（天井詳細）に切り替える。xy は鏡像にしない。
  *   exteriorDirOf: 開口の外部側方向(±1)を返すthunk（詳細LODかつframeDepth>0の見込帯、または
  *   OVERHEAD/EMERGENCYの記号自身が参照するときだけ呼ぶ。呼ぶたびに再計算しないよう内部で
  *   1回だけメモ化して呼ぶ）。
@@ -1037,7 +1092,7 @@ function buildHingeGroup2Primitives(opening, entry, lodLevel, band, detail, axis
  *   カバーし終えたため、entry無し・未実装機構文字列だけがtickPrimitivesへフォールバックする）。
  */
 export function buildOpeningPlanSymbol(opening, ctx) {
-  const { entry = null, lodLevel, axisValue, faceLo, faceHi, exteriorDirOf, host = null } = ctx ?? {};
+  const { entry = null, lodLevel, axisValue, faceLo, faceHi, exteriorDirOf, host = null, direction = 'down' } = ctx ?? {};
 
   if (!Number.isFinite(axisValue)) {
     throw new TypeError(`buildOpeningPlanSymbol: ctx.axisValueは有限数が必要です（受け取った値: ${axisValue}）`);
@@ -1104,7 +1159,7 @@ export function buildOpeningPlanSymbol(opening, ctx) {
   // STANDARD/DETAILで非蝶番sashOpen系（SASH_OPEN_GROUP_MECHANISMS）: 専用ディスパッチへ。
   if (sashOpenGroup) {
     const frameWeight = planSymbolWeightMm('frame', opening, detail);
-    return buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight, host);
+    return buildSashOpenGroupPrimitives(opening, entry, lodLevel, band, detail, axisValue, faceLo, faceHi, symbolWeight, frameWeight, host, direction);
   }
 
   // STANDARD/DETAILで非蝶番sash系（SASH_GROUP_MECHANISMS＝FOLD・PIVOT・SHUTTER・OVERHEAD・
