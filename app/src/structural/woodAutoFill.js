@@ -35,6 +35,8 @@ import { worldToCell } from '../finish/gridCells.js';
 import { withGraphReadScope } from '../graphReadScope.js';
 import { bareColumnRect } from '../finish/columnWrap.js';
 import { findHostWall } from '../openings/openingGeometry.js';
+import { findCatalogEntry } from '../openings/openingCatalog.js';
+import { outsetSlideLayout, isOutsetSlide } from '../openings/slideOutset.js';
 import { selfWallFreeEnds, stairPartitionEnds, stairLandingFrontWallPoints } from './wallFreeEnds.js';
 import { PARTITION_BACKING_MM } from '../finish/stair/stairPartition.js';
 import { ColumnOrigin, mergeSlot, formatColumnOrigins } from './columnOrigins.js';
@@ -158,6 +160,17 @@ export function nearestAnchorCL(graph, centerLineType, coord) {
     }
   }
   return best;
+}
+
+/**
+ * 袖柱の走行方向の基準区間 {lo, hi, outset}。外付け引き戸（実ホストが外壁でない SLIDE_SINGLE・W>50）は穴（J 込み cut）の両端
+ * （outset:true）、それ以外は開口の外形 coord1/coord2（outset:false）。core/structuralEntities.js _woodJambAxis と同じ区間になる。
+ */
+function jambSpanOf(opening, graph) {
+  const mechanism = findCatalogEntry(opening.category, opening.subType)?.mechanism;
+  // 引き戸以外は findHostWall を引かない（構造再計算の性能。golden-struct 不変の根拠でもある）。
+  const layout = isOutsetSlide(mechanism) ? outsetSlideLayout(opening, mechanism, findHostWall(opening, graph)) : null;
+  return layout ? { lo: layout.cut[0], hi: layout.cut[1], outset: true } : { lo: opening.coord1, hi: opening.coord2, outset: false };
 }
 
 // 建具の袖柱の法線方向アンカーに使う「下地オーナー壁」を解決する。findHostWall（openings/
@@ -523,8 +536,9 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
       })),
     ];
     const openingsById = new Map(graph.openings.map(o => [o.id, o]));
+    const jambSpanById = new Map([...openingsById.values()].map(o => [o.id, jambSpanOf(o, graph)])); // 開口ごとに 1 回だけ解決（findHostWall を使い回す）
     const jambCandidates = jambColumnPositions(
-      [...openingsById.values()].map(o => ({ id: o.id, lo: o.coord1, hi: o.coord2 })),
+      [...openingsById.values()].map(o => ({ id: o.id, ...jambSpanById.get(o.id) })),
       columnWidth,
     ).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : a.side - b.side)); // 決定的順序（開口id昇順→side）
 
@@ -562,7 +576,10 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
       acceptedRects.push(rect);
       mergeSlot(slots, `jamb:${opening.id}:${cand.side}`, {
         verticalCL, horizontalCL,
-        woodJambRef: { openingId: opening.id, side: cand.side, isVertical: opening.isVertical },
+        woodJambRef: {
+          openingId: opening.id, side: cand.side, isVertical: opening.isVertical,
+          ...(jambSpanById.get(opening.id).outset ? { outset: true } : {}), // 外付け引き戸＝穴基準（core/structuralEntities.js _woodJambAxis が読む）
+        },
       }, []);
     }
   }
@@ -614,7 +631,7 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
         if (opening) {
           const axisCL = woodJambRef.isVertical ? verticalCL : horizontalCL;
           const axisNormal = axisCL.effectiveValue + axisOffsetOf(axisCL);
-          const jamb = jambColumnPositions([{ id: opening.id, lo: opening.coord1, hi: opening.coord2 }], columnWidth)
+          const jamb = jambColumnPositions([{ id: opening.id, ...jambSpanOf(opening, graph) }], columnWidth)
             .find(j => j.side === woodJambRef.side)?.jamb;
           if (Number.isFinite(jamb)) {
             return { x: woodJambRef.isVertical ? axisNormal : jamb, y: woodJambRef.isVertical ? jamb : axisNormal };
@@ -830,6 +847,12 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
       if (formatted !== column.woodColumnOrigins) {
         column.setField('woodColumnOrigins', formatted);
         originsUpdated.push(column.id);
+      }
+      // 袖柱の穴基準の印（woodJambRef.outset）の書き戻し: 旧データ（印なし）・建具種別や壁種（外壁化）の変更で
+      // 今回の印と食い違うときだけ参照ごと差し替える（冪等）。保存要否は由来の書き戻しと同じ originsUpdated へ載せる。
+      if (slot.woodJambRef && column.woodJambRef && (column.woodJambRef.outset === true) !== (slot.woodJambRef.outset === true)) {
+        column.setField('woodJambRef', slot.woodJambRef);
+        if (!originsUpdated.includes(column.id)) originsUpdated.push(column.id);
       }
       // 隔て壁の端の柱の個別柱寸（90）の書き戻し（毎パス再計算。階の柱寸が変わって「階の値と同値」になる／
       // 非自由端へ変わるときは null へ戻す）。書き戻すのは現在値が null か 90（＝この点源が入れた値）のときだけ。

@@ -11,29 +11,16 @@
 import { OpeningMechanism, findCatalogEntry } from './openingCatalog.js';
 import { swingSideTowardPerp, findHostWall } from './openingGeometry.js';
 import { SLIDE_OUTSET_WIDTH_DEDUCT_MM, SLIDE_OUTSET_RECESS_DEPTH_MM, FRAME_JAMB_WIDTH_MM } from '../core/constants.js';
+import { slideDoorWidth, slideClearWidth, slideTailSide, outsetSlideCutSpanOf } from '../core/slideOutsetGeometry.js';
 
 /** 外付け引き戸か（唯一の定義）。 */
 export function isOutsetSlide(mechanism) {
   return mechanism === OpeningMechanism.SLIDE_SINGLE;
 }
 
-/** 建具幅 W から扉幅 DW＝(W+50)/2 を返す。W が有限でない・50 以下（穴が 0 以下＝不正）は null。 */
-export function slideDoorWidth(width) {
-  if (!Number.isFinite(width) || width <= SLIDE_OUTSET_WIDTH_DEDUCT_MM) return null;
-  return (width + SLIDE_OUTSET_WIDTH_DEDUCT_MM) / 2;
-}
-
-/** 建具幅 W から穴の幅（穴の長さ）DW−50 を返す。slideDoorWidth が null なら null。 */
-export function slideClearWidth(width) {
-  const doorWidth = slideDoorWidth(width);
-  return doorWidth === null ? null : doorWidth - SLIDE_OUTSET_WIDTH_DEDUCT_MM;
-}
-
-/** 引き代側（戸尻側）の端。opening.hingeSide が −1/1 ならそれ、それ以外は −1（裁定 R7 既定。−1＝coord1〔lo〕側）。 */
-export function slideTailSide(opening) {
-  const h = opening?.hingeSide;
-  return h === -1 || h === 1 ? h : -1;
-}
+// 寸法の純計算（slideDoorWidth・slideClearWidth・slideTailSide・穴 cut の式）は core/slideOutsetGeometry.js が唯一の定義
+// （core の袖柱 AXIS 導出と共有）。ここから再輸出する。
+export { slideDoorWidth, slideClearWidth, slideTailSide };
 
 /**
  * 外付け引き戸の配置。引き戸でない・W 不正・coord 非有限は null。
@@ -65,7 +52,7 @@ export function outsetSlideLayout(opening, mechanism, host = null) {
   const latchAlong = tailSide < 0 ? hi : lo;
   const sx = tailSide < 0 ? -1 : 1;
   const sorted = (a, b) => (a <= b ? [a, b] : [b, a]);
-  const cut = sorted(latchAlong - sx * jambWidth, latchAlong + sx * (cutLength + jambWidth));
+  const cut = outsetSlideCutSpanOf(lo, hi, tailSide); // 穴の式は core/slideOutsetGeometry.js の 1 か所
   const recessSpan = sorted(latchAlong + sx * (cutLength + jambWidth), latchAlong + sx * (hi - lo + jambWidth));
   const footprint = [lo - jambWidth, hi + jambWidth];
   const swingSide = opening.swingSide;

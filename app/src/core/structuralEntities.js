@@ -15,6 +15,7 @@ import { findSectionEntry, diaphragmProjection } from '../structural/sectionCata
 import { rulesFor, effectiveStructure, PIN_BEAM_END_CLEARANCE_MM } from '../structural/structureRules.js';
 import { jambAxisValue } from '../structural/woodFraming.js';
 import { BeamAxisOrigin, isGridCenterLine } from './centerLine.js';
+import { outsetSlideCutSpanOf, slideTailSide } from './slideOutsetGeometry.js';
 
 // ---- module-private helpers（構造部材の平面位置導出。core/_internal とは別に構造専用） ----
 
@@ -40,7 +41,8 @@ function _gridY(entity) {
   return _axisY(entity) + entity.eccentricity.y;
 }
 
-// 建具の袖柱（WoodColumn.woodJambRef={openingId, side, isVertical}）の走行方向AXIS。
+// 建具の袖柱（WoodColumn.woodJambRef={openingId, side, isVertical, outset?}）の走行方向AXIS。
+// ref.outset なら外付け引き戸の穴（J 込み cut）基準、無ければ開口の外形（coord1/coord2）基準（S9）。
 // isVertical は開口（Opening）の向き（＝法線方向がX＝verticalCL側になる開口かどうか）——法線方向
 // （isForXがisVerticalと一致する側）はCL位置のまま（下のresolveWoodColumnAnchorCLで解決済みの
 // 実CLが袖座標とほぼ一致するよう woodAutoFill.js が選ぶため）、走行方向（一致しない側）だけ、
@@ -56,6 +58,11 @@ function _woodJambAxis(entity, isForX) {
   if (!opening || !Number.isFinite(opening.coord1) || !Number.isFinite(opening.coord2)) return null;
   const width = findSectionEntry(entity.sectionDefId)?.width;
   if (!Number.isFinite(width)) return null;
+  // 外付け引き戸の袖柱（ref.outset）は W でなく穴（J 込み cut）の両端基準（問題2.md S9・Q-S9）。cut が引けない（W≤50）は null＝CL へ戻す。
+  if (ref.outset) {
+    const cut = outsetSlideCutSpanOf(opening.coord1, opening.coord2, slideTailSide(opening));
+    return cut ? jambAxisValue(ref.side, cut[0], cut[1], width) : null;
+  }
   return jambAxisValue(ref.side, opening.coord1, opening.coord2, width);
 }
 
