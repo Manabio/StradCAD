@@ -56,9 +56,9 @@ const savesThroughSharedPath = body => !!body
   && !/\b(upsertUserCatalogEntry|commitUserEntries)\(/.test(body);
 const confirmsBeforeClose = (src, guardBody) => !!guardBody
   && /setConfirm\(/.test(guardBody) && /guardDiscard\(onClose\)/.test(src);
-// guardDiscard は dirty のときだけ確認し、dirty は isDraftDirty で束縛される。
+// guardDiscard は dirty のときだけ確認し、dirty は isDocDirty（単一図は isDraftDirty、一式は書き戻し後のエントリの比較）で束縛される。
 const guardsOnDirty = (src, guardBody) => !!guardBody
-  && /if \(!dirty\)/.test(guardBody) && /const dirty = isDraftDirty\(/.test(src);
+  && /if \(!dirty\)/.test(guardBody) && /const dirty = isDocDirty\(/.test(src);
 // 閉じる経路が 2 つとも guardDiscard を通る（Escape と閉じるボタン。別々に判定する）。
 const escapeGuarded = (src, keyBody) => !!keyBody && /guardDiscard\(onClose\)/.test(keyBody);
 const closeButtonGuarded = src => /onClick=\{\(\) => guardDiscard\(onClose\)\}>\{DETAIL_HELPER_TEXT\.close\}/.test(src);
@@ -113,7 +113,7 @@ test('【配線】DetailHelperPanel.jsx: 閉じる・新規・ライブラリ選
   const guard = extractBalancedBody(src, 'function guardDiscard(action) {');
   assert.ok(confirmsBeforeClose(src, guard));
   assert.ok(/<ConfirmDialog\b/.test(src));
-  assert.ok(/guardDiscard\(\(\) => replaceDoc\(freshDoc\(\)\)\)/.test(src) && /guardDiscard\(\(\) => replaceDoc\(docForLibraryEntry\(entry, origin\)\)\)/.test(src));
+  assert.ok(/guardDiscard\(\(\) => replaceDoc\(freshDoc\(\)\)\)/.test(src) && /guardDiscard\(\(\) => replaceDoc\(docOfLibraryEntry\(entry, origin\)\)\)/.test(src));
   assert.ok(!/undoManager|planGraph|graphReadScope|floorOps/.test(src), 'グラフ・undo を引いている');
 });
 
@@ -139,7 +139,7 @@ test('【配線】DetailHelperPanel.jsx(S8d): 組込みに戻すは planRevert �
   // 一覧は組込み層込み
   assert.ok(/helperLibraryRows\(\{\s*userEntries: overlayFor\(KIND\)\.user, builtinList: detailBuiltinFigures,\s*docContext: docContextFor\(/.test(src), '一覧が同梱の文脈（doc-diff の印）を渡していない');
   // 読み取り専用の組込みは edit が弾く
-  assert.ok(/if \(d\.readOnly\) return d;/.test(extractBalancedBody(src, 'function edit(fn, { track = true } = {}) {')));
+  assert.ok(/if \(d\.readOnly \|\| isPartlessFittingDoc\(d\)\) return d;/.test(extractBalancedBody(src, 'function edit(fn, { track = true } = {}) {')));
 });
 
 // 組込みに戻す: クリックも確定も guardDiscard を通り、確認中に別の操作（複製・編集解錠）をしたら確認は消える。
@@ -151,11 +151,14 @@ const clearsRevertConfirm = body => !!body && /setRevertConfirm\(null\)/.test(bo
 const readOnlyHandlersGuarded = src => {
   const pen = extractBalancedBody(src, 'function handlePen(dir) {');
   const undo = extractBalancedBody(src, 'function handleUndo() {');
-  return !!pen && !!undo && /d\.readOnly \? d : penStep\(/.test(pen) && /d\.readOnly \? null : undoDraft\(/.test(undo)
-    && /const canSave = saveEnabled\(form, result\) && !busy && !readOnly;/.test(src)
+  return !!pen && !!undo && /d\.readOnly \|\| isPartlessFittingDoc\(d\) \? d : penStep\(/.test(pen) && /d\.readOnly \? null : undoDraft\(/.test(undo)
+    && /const canSave = \(fitting \? result\.ok && blockers\.length === 0 : saveEnabled\(form, result\)\) && !busy && !readOnly;/.test(src)
+    && /const inertWhenNoPart = readOnly \|\| partless \|\| undefined;/.test(src)
     && /onEditDim=\{showDxf \|\| fitOn \|\| readOnly \? undefined :/.test(src);
 };
-const inertCount = src => (src.match(/inert=\{inertWhenReadOnly\}/g) ?? []).length;
+// 編集の入口の inert（ペン・手の一覧・基準の 3 つは一式で部品なしのときも塞ぐ inertWhenNoPart、右の呼称・分類は inertWhenReadOnly）。別々に数える。
+const inertNoPartCount = src => (src.match(/inert=\{inertWhenNoPart\}/g) ?? []).length;
+const inertReadOnlyCount = src => (src.match(/inert=\{inertWhenReadOnly\}/g) ?? []).length;
 
 test('【配線】DetailHelperPanel.jsx(S8d): 組込みに戻すのクリックと確定は guardDiscard を通り、複製・編集解錠で確認は消える', () => {
   const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
@@ -170,7 +173,8 @@ test('【配線】DetailHelperPanel.jsx(S8d): 組込みに戻すのクリック�
 test('【配線】DetailHelperPanel.jsx(S8d): 読み取り専用は handlePen・handleUndo・保存・寸法編集・ペン／手の一覧・右の 2 ブロックで塞がる', () => {
   const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
   assert.ok(readOnlyHandlersGuarded(src));
-  assert.equal(inertCount(src), 4, 'inert の入口数（ペン・手の一覧・右の 2 ブロック）');
+  assert.equal(inertNoPartCount(src), 3, 'inertWhenNoPart の入口数（ペン・手の一覧・基準）');
+  assert.equal(inertReadOnlyCount(src), 1, 'inertWhenReadOnly の入口数（右の呼称・分類）');
 });
 
 test('【検出力】組込みに戻す・読み取り専用の配線を壊すと判定が落ちる', () => {
@@ -180,11 +184,15 @@ test('【検出力】組込みに戻す・読み取り専用の配線を壊す�
   assert.ok(!revertGuarded(src, click, confirmed.replace('guardDiscard(performRevert)', 'performRevert()')));
   assert.ok(!revertGuarded(src, click.replace('guardDiscard(() => setRevertConfirm(', '(() => setRevertConfirm('), confirmed));
   assert.ok(!clearsRevertConfirm(extractBalancedBody(src, 'function handleDuplicate() {').replace('setRevertConfirm(null)', '')));
-  assert.ok(!readOnlyHandlersGuarded(src.replace('d.readOnly ? d : penStep(', 'penStep(')));
+  assert.ok(!readOnlyHandlersGuarded(src.replace('d.readOnly || isPartlessFittingDoc(d) ? d : penStep(', 'penStep(')));
   assert.ok(!readOnlyHandlersGuarded(src.replace('d.readOnly ? null : undoDraft(', 'undoDraft(')));
   assert.ok(!readOnlyHandlersGuarded(src.replace('!busy && !readOnly;', '!busy;')));
   assert.ok(!readOnlyHandlersGuarded(src.replace('fitOn || readOnly ?', 'fitOn ?')));
-  assert.equal(inertCount(src.replace('inert={inertWhenReadOnly}', '')), 3);
+  assert.equal(inertReadOnlyCount(src.replace('inert={inertWhenReadOnly}', '')), 0);
+  assert.notEqual(inertNoPartCount(src.replace('inert={inertWhenNoPart}', '')), 3);
+  // 入れ替え（ペンの入口を inertWhenReadOnly にする）は別々の数で落ちる
+  assert.notEqual(inertNoPartCount(src.replace('inert={inertWhenNoPart}', 'inert={inertWhenReadOnly}')), 3);
+  assert.notEqual(inertReadOnlyCount(src.replace('inert={inertWhenNoPart}', 'inert={inertWhenReadOnly}')), 1);
 });
 
 test('【配線】DetailHelperPanel.jsx: 削除は collectCurrentCatalogUsage の結果を performDelete へ渡す', () => {
@@ -198,7 +206,7 @@ test('【検出力】dirty の束縛・Escape・閉じるボタン・使用状�
   const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
   const guard = extractBalancedBody(src, 'function guardDiscard(action) {');
   assert.ok(!guardsOnDirty(src, guard.replace('if (!dirty)', 'if (false)')));
-  assert.ok(!guardsOnDirty(src.replace('const dirty = isDraftDirty(', 'const dirty = Boolean('), guard));
+  assert.ok(!guardsOnDirty(src.replace('const dirty = isDocDirty(', 'const dirty = Boolean('), guard));
   const key = extractBalancedBody(src, 'function handleKeyDown(e) {');
   assert.ok(!escapeGuarded(src, key.replace('guardDiscard(onClose)', 'onClose()')));
   assert.ok(!closeButtonGuarded(src.replace('onClick={() => guardDiscard(onClose)}>{DETAIL_HELPER_TEXT.close}', 'onClick={onClose}>{DETAIL_HELPER_TEXT.close}')));
@@ -298,4 +306,46 @@ test('【不変条件】図の束の文言は error.js にだけ直書きされ�
 test('【検出力】図の束の文言の直書き判定は、コード中の文字列に反応しコメントには反応しない', () => {
   assert.ok(VIEWS_WORDING.test(stripComments("const x = '図の束';")));
   assert.ok(!VIEWS_WORDING.test(stripComments("// 図の束\nconst x = 1;")));
+});
+
+// ---- 建具一式モード（C5）の配線 ----
+// 部品の一覧は一式のときだけ・view/subject の select は一式のとき隠す・保存は一式を書き戻したエントリ・分類の切替は switchToFitting を通る。
+const fittingPanelWired = src => /\{fitting && \(\s*<div className="dthlp-block dthlp-parts">/.test(src)
+  && /\{!fitting && \(\s*<>\s*<label className="dthlp-row">\{DETAIL_HELPER_TEXT\.fieldView\}/.test(src)
+  && /const entry = fitting \? fittingEntryOf\(doc\) : entryFromForm\(form\);/.test(src)
+  && /switchToFitting\(doc, \{ idFactory: newKeyPart \}\)/.test(src)
+  && /onChange=\{handleCategory\}/.test(src);
+// 試し込みは引き戸の部品の分岐を 1 つ持ち、defaultFitDimsFor・fitDimFieldsFor にも同じ判定がある。comboOptions は FITTING を除外しない。
+const fittingFormWired = src => /if \(isSlidePartForm\(form\)\) return tryFitSlidePart\(form, dims\);/.test(src)
+  && /if \(isSlidePartForm\(form\)\) \{/.test(src) && /: isSlidePartForm\(form\) \? SLIDE_PART_FIT_DIM_FIELDS/.test(src)
+  && !/DetailCategory\.FITTING\)/.test(src);
+
+test('【配線】DetailHelperPanel.jsx: 部品の一覧は一式のときだけ・view/subject の select は一式で隠す・保存は fittingEntryOf・分類切替は switchToFitting', () => {
+  const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
+  assert.ok(fittingPanelWired(src));
+  assert.equal((src.match(/dthlp-block dthlp-parts/g) ?? []).length, 1, '部品の一覧は 1 か所だけ');
+});
+
+test('【配線】detailHelperForm.js: tryFit・defaultFitDimsFor・fitDimFieldsFor が isSlidePartForm で分岐し、comboOptions が FITTING を除外していない', () => {
+  assert.ok(fittingFormWired(stripComments(readSrc('ui/detailHelperForm.js'))));
+});
+
+test('【配線】DetailHelperPanel.jsx: 一式のとき DXF／PDF の「下書きへ写す」は disabled で文言を出し、handleDxfCopy も弾く', () => {
+  const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
+  assert.ok(/const importCopyNotice = fitting \? DETAIL_HELPER_MESSAGES\.fittingNoImportCopy : null;/.test(src));
+  assert.ok(/disabled=\{busy \|\| !canCopy \|\| !!copyNotice\} onClick=\{onCopy\}/.test(src));
+  assert.equal((src.match(/copyNotice=\{importCopyNotice\}/g) ?? []).length, 2, 'DXF・PDF の両方へ渡す');
+  assert.ok(/function handleDxfCopy\(\) \{\s*if \(fitting\) return;/.test(src));
+  assert.equal(readSrc('ui/detailHelperForm.js').includes('建具一式の部品へは写せません'), true);
+});
+
+test('【検出力】建具一式の配線を壊すと判定が落ちる', () => {
+  const panel = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
+  assert.ok(!fittingPanelWired(panel.replace('{fitting && (', '{true && (')));
+  assert.ok(!fittingPanelWired(panel.replace('{!fitting && (', '{true && (')));
+  assert.ok(!fittingPanelWired(panel.replace('fitting ? fittingEntryOf(doc) : entryFromForm(form)', 'entryFromForm(form)')));
+  assert.ok(!fittingPanelWired(panel.replace('switchToFitting(doc,', 'Object.assign(doc,')));
+  const form = stripComments(readSrc('ui/detailHelperForm.js'));
+  assert.ok(!fittingFormWired(form.replace('if (isSlidePartForm(form)) return tryFitSlidePart(form, dims);', '')));
+  assert.ok(!fittingFormWired(form.replace('categoryOptionsFor(CatalogKind.DETAIL_FIGURE)', 'categoryOptionsFor(CatalogKind.DETAIL_FIGURE).filter(c => c.value !== DetailCategory.FITTING)')));
 });

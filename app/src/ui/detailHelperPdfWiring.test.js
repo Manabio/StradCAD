@@ -63,7 +63,7 @@ const extractsInsideRunBusy = body => {
 };
 // 「写す」「抽出」の無効条件は純関数（縮尺必須）へ寄せ、パネルはそれを渡すだけ。
 const gatesViaPureFunctions = src => /canCopy=\{pdfCanCopy\(pdf\)\}/.test(src) && /disabled=\{busy \|\| !pdfCanExtract\(pdf\)\}/.test(src);
-const copyButtonUsesCanCopy = src => /disabled=\{busy \|\| !canCopy\}/.test(src);
+const copyButtonUsesCanCopy = src => /disabled=\{busy \|\| !canCopy( \|\| !!copyNotice)?\}/.test(src); // 一式のときは copyNotice でも無効（C5）
 // pdfjs を import してよいのは ui/pdfLoader.js だけ（静的にも動的にも）。
 const importsPdfjs = src => /from\s+['"]pdfjs-dist|import\(\s*['"]pdfjs-dist/.test(src);
 const staticallyImportsLoader = src => /^\s*import[^;]*from\s+['"]\.\/pdfLoader\.js['"]/m.test(src);

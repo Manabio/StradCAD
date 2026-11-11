@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { OpeningMechanism, findCatalogEntry } from './openingCatalog.js';
 import { swingOpenPerpDir } from './openingPlanSymbolGeometry.js';
 import {
-  isOutsetSlide, slideDoorWidth, slideTailSide, outsetSlideLayout, openingCutSpan, slideRecessBand,
+  isOutsetSlide, slideDoorWidth, slideClearWidth, slideTailSide, outsetSlideLayout, openingCutSpan, slideRecessBand,
   openingFootprint, openingFootprintExtraHalf, openingFootprintExtraHalfOf, openingEditExtraHalfOf, openingMinWidthOf, footprintResolver,
 } from './slideOutset.js';
 import { SLIDE_OUTSET_RECESS_DEPTH_MM } from '../core/constants.js';
@@ -159,6 +159,12 @@ test('失敗側: W ≤ 50・W 非有限は layout null・cutSpan 恒等（coord 
     assert.equal(outsetSlideLayout(op({ coord2 }), SLIDE), null);
     assert.deepEqual(openingCutSpan(op({ coord2 }), SLIDE), [1000, coord2]);
   }
+  // 穴の幅＝DW−50（null 伝播。layout の cutLength と同じ値）
+  assert.equal(slideClearWidth(1550), 750);
+  assert.equal(slideClearWidth(1750), 850);
+  assert.equal(slideClearWidth(50), null);
+  assert.equal(slideClearWidth(NaN), null);
+  assert.equal(outsetSlideLayout(op({ coord2: 1750 + 1000 }), SLIDE).cutLength, slideClearWidth(1750));
   assert.equal(slideDoorWidth(NaN), null);
   assert.equal(slideDoorWidth(Infinity), null);
   assert.equal(slideDoorWidth(50), null);

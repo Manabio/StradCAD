@@ -17,11 +17,12 @@
 // ================================================================
 
 import {
-  PenDir, DetailLenMode, DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam, DetailCategory,
+  PenDir, DetailLenMode, DetailDatumRole, DetailDatumKind, DetailAxis, DetailParam,
   DetailMaterialField, DetailDash, DetailProvenanceSource, DETAIL_VIEW_COMBOS, DETAIL_FIGURE_VERSION,
   DETAIL_FIGURE_KEY_PREFIX, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_DRAFT_HISTORY_MAX,
   DETAIL_SLOT_TARGETS, DetailSlot, DetailEdgeMark, ROOM_DETAIL_SLOTS, KNEE_DROP_DETAIL_SLOTS, DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM, DETAIL_FIT_DEFAULT_BASEBOARD_HEIGHT_MM, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
   DXF_PROVENANCE_FIELDS, DXF_PREVIEW_STYLE, DetailPlacementView, DETAIL_VIEWS_FIELD,
+  FITTING_PART_TARGETS, FittingPartRole, SLIDE_OUTSET_SUBTYPE, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM,
 } from '../core/constants.js';
 import { readDxf, buildDxfScene } from '../detail/dxf/dxfImport.js';
 import { buildDxfProvenance, baseNameOf } from '../detail/dxf/dxfProvenance.js';
@@ -43,7 +44,8 @@ import {
   DETAIL_PLACEMENT_VIEW_LABELS, DETAIL_OPTION_NOTE_WRONG_SLOT, DETAIL_OPTION_NOTE_MISSING,
 } from '../catalog/catalogMaintenance.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
-import { detailFrameTargets, detailElevationTargets } from '../openings/openingDetailFrame.js';
+import { detailFrameTargets, detailElevationTargets, detailSlidePlanTargets } from '../openings/openingDetailFrame.js';
+import { slideDoorWidth, slideClearWidth } from '../openings/slideOutset.js';
 import { junctionTargets, partTargets, floorStepTargets, ceilingStepTargets } from '../finish/roomDetailTargets.js';
 import { placedFigureTargets, isPlacementFigure, isPlaceableViewFigure } from '../finish/placedFigure/placedFigureTargets.js';
 import { evalNumpadExpr } from './numpadUtils.js';
@@ -150,6 +152,11 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   lineRole: '線の役割', dashSolid: '実線', dashDashed: '破線', dashSwing: '開き勝手',
   // 姿図の図の束（P2-3。各 view の名前は DETAIL_PLACEMENT_VIEW_LABELS、未割当ては ROOM_DETAIL_REF_TEXT.none を再利用する）
   viewsGroup: DETAIL_VIEWS_GROUP_LABEL,
+  // 建具一式（C5）。部品の一覧・追加・削除。行は「建具一式（部品 n）」。
+  partsHeading: '部品', addPart: '部品を追加',
+  fittingRowLabel: n => `建具一式（部品 ${n}）`,
+  partErrorBadge: n => `エラー ${n}`,
+  deletePartConfirm: roleLabel => `部品「${roleLabel}」を削除します。`,
 });
 export { DETAIL_PLACEMENT_VIEW_LABELS };
 /** ストロークの線の役割（Line.dashRole）の表示名。 */
@@ -175,8 +182,10 @@ export const distanceButtonLabel = penText => `${DETAIL_NUMPAD_LABELS.penDistanc
 export const offsetButtonLabel = offset => `${DETAIL_NUMPAD_LABELS.offset} ${displayLen(offset)}`;
 /** 試し込みの目標値ボタンの文言。 */
 export const fitDimButtonLabel = (label, value) => `${label}: ${value}`;
-/** ライブラリ行の分類表示。 */
-export const libraryMetaLabel = row => `${row.categoryLabel} / ${row.viewLabel} / ${row.subjectLabel}`;
+/** ライブラリ行の分類表示。建具一式（partCount を持つ行）は「建具一式（部品 n）」。 */
+export const libraryMetaLabel = row => (row.partCount === undefined
+  ? `${row.categoryLabel} / ${row.viewLabel} / ${row.subjectLabel}`
+  : DETAIL_HELPER_TEXT.fittingRowLabel(row.partCount));
 /** 壁厚の材一覧が読めなかったとき（既定値で代用中）の注記。読めていれば null。 */
 export function wallThicknessNotice(materialLoadFailed) {
   return materialLoadFailed ? DETAIL_HELPER_MESSAGES.materialLoadFailed : null;
@@ -186,6 +195,7 @@ export function wallThicknessNotice(materialLoadFailed) {
 export const DETAIL_NUMPAD_LABELS = Object.freeze({
   penDistance: '距離', moveLen: '長さ', offset: 'オフセット', wallThickness: '壁厚', faceWidth: '見付', projection: '出幅',
   width: '幅', height: '高さ', sill: '窓台', stepHeight: '段差高', baseboardHeight: '巾木高さ',
+  doorWidth: DETAIL_PARAM_LABELS[DetailParam.DOOR_WIDTH], clearWidth: DETAIL_PARAM_LABELS[DetailParam.OPENING_CLEAR_WIDTH],
 });
 /** 試し込みの目標値の欄（三方枠。順序＝表示順。field は defaultFitDims／tryFit の項目名）。 */
 export const FIT_DIM_FIELDS = Object.freeze([
@@ -203,6 +213,21 @@ export const ELEVATION_FIT_DIM_FIELDS = Object.freeze([
 /** 分類が建具の姿図（slot=figure の取り付け先: figure/elevation/opening）か。 */
 export function isElevationFigureForm(form) {
   const t = DETAIL_SLOT_TARGETS[DetailSlot.FIGURE];
+  return form?.category === t.category && form?.view === t.view && form?.subject === t.subject;
+}
+/** 試し込みの目標値の欄（外付け引き戸の部品。壁厚・見付・出幅＋建具幅・扉幅・穴の幅）。 */
+export const SLIDE_PART_FIT_DIM_FIELDS = Object.freeze([
+  ...FIT_DIM_FIELDS,
+  Object.freeze({ field: 'width', label: DETAIL_NUMPAD_LABELS.width }),
+  Object.freeze({ field: 'doorWidth', label: DETAIL_NUMPAD_LABELS.doorWidth }),
+  Object.freeze({ field: 'clearWidth', label: DETAIL_NUMPAD_LABELS.clearWidth }),
+]);
+/**
+ * 分類が外付け引き戸の部品（建具一式の slide* 部品＝figure/plan/opening）か。この分類は単独の図としても選べるが、
+ * 割当て先は建具一式の部品だけなので、引き戸の部品として試し込む。
+ */
+export function isSlidePartForm(form) {
+  const t = FITTING_PART_TARGETS[FittingPartRole.SLIDE_LATCH];
   return form?.category === t.category && form?.view === t.view && form?.subject === t.subject;
 }
 /** 試し込みの目標値の欄（部屋の取り合い。壁厚だけ）。 */
@@ -253,6 +278,7 @@ export function usesBaseboardHeightParam(form) {
 const PLACEMENT_FIT_DIM_FIELDS = Object.freeze([]);
 export const fitDimFieldsFor = form => (isPlacementFigure(form) ? PLACEMENT_FIT_DIM_FIELDS
   : isElevationFigureForm(form) ? ELEVATION_FIT_DIM_FIELDS
+  : isSlidePartForm(form) ? SLIDE_PART_FIT_DIM_FIELDS
   : isFloorStepForm(form) || isCeilingStepForm(form) ? FLOOR_STEP_FIT_DIM_FIELDS
     : usesBaseboardHeightParam(form) ? BASEBOARD_FIT_DIM_FIELDS
       : junctionSlotOf(form) || partSlotOf(form) ? JUNCTION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
@@ -264,6 +290,12 @@ export const DETAIL_HELPER_MESSAGES = Object.freeze({
   revertNoOverride: '上書きがないため、組込みに戻せません',
   revertFailed: '組込みに戻す処理に失敗しました: ',
   noop: '変更はありません',
+  // 建具一式（C5）
+  fittingNewOnly: '建具一式は新規の下書きでだけ選べます',
+  fittingRoleExists: 'この役割の部品は既にあります',
+  fittingNoParts: '部品がありません',
+  fittingUnknownRole: '未知の部品の役割です',
+  fittingNoImportCopy: '建具一式の部品へは写せません', // DXF／PDF の「下書きへ写す」（写し先は C8）
   discard: '保存していない変更があります。破棄して続けますか？',
   discardButton: '破棄して続ける',
   cancelButton: 'キャンセル',
@@ -839,8 +871,8 @@ export function comboOptions(category, view) {
   const viewsOf = uniq(DETAIL_VIEW_COMBOS.filter(c => c.category === category).map(c => c.view));
   const subjects = uniq(DETAIL_VIEW_COMBOS.filter(c => c.category === category && c.view === view).map(c => c.subject));
   return {
-    // 建具一式（FITTING）は部品の束で、ヘルパー（1 本のペン命令列）では作れないので選ばせない
-    categories: categoryOptionsFor(CatalogKind.DETAIL_FIGURE).filter(c => c.value !== DetailCategory.FITTING),
+    // 建具一式（FITTING）も出す（部品の束。新規の空の下書きからだけ切り替えられる＝ui/detailHelperFitting.js switchToFitting）
+    categories: categoryOptionsFor(CatalogKind.DETAIL_FIGURE),
     views: optionsOf(viewsOf, formatDetailViewLabel),
     subjects: optionsOf(subjects, formatDetailSubjectLabel),
   };
@@ -973,6 +1005,7 @@ export function libraryRows(entries) {
       categoryLabel: formatCategoryLabel(CatalogKind.DETAIL_FIGURE, e.category),
       viewLabel: formatDetailViewLabel(e.view),
       subjectLabel: formatDetailSubjectLabel(e.subject),
+      ...(Array.isArray(e.parts) ? { partCount: e.parts.length } : {}),
     }))
     .sort((a, b) => a.label.localeCompare(b.label, 'ja'));
 }
@@ -1014,6 +1047,8 @@ export function defaultFitDims(wallThickness) {
 // 姿図の試し込みの既定の建具種別（保守パネルの代表種別 ui/catalogPreview.js fixtureSymbolRepresentativeEntry の fitting 側と同じ）。
 // 幅・高さはその defaultWidth／defaultHeight（catalogPreview の openingSubTypePreview と同じ供給源）。窓台 0。
 const ELEVATION_FIT_REPRESENTATIVE = Object.freeze({ category: 'fitting', subType: 'singleSwing' });
+// 外付け引き戸の部品の試し込みの既定の建具種別（既定幅 W の供給源）。
+const SLIDE_FIT_REPRESENTATIVE = Object.freeze({ category: 'fitting', subType: SLIDE_OUTSET_SUBTYPE });
 
 /**
  * 分類に合う試し込みの目標値の既定（文字列）。三方枠は defaultFitDims、建具の姿図は代表建具種別の既定幅・高さと窓台 0。
@@ -1023,6 +1058,18 @@ export function defaultFitDimsFor(form, wallThickness) {
   if (isFloorStepForm(form) || isCeilingStepForm(form)) return { stepHeight: String(DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM) };
   // 巾木高さの param を使う床と壁の図: 部屋の巾木の既定と同じ高さを試し込みの既定にする
   if (usesBaseboardHeightParam(form)) return { ...defaultFitDims(wallThickness), baseboardHeight: String(DETAIL_FIT_DEFAULT_BASEBOARD_HEIGHT_MM) };
+  if (isSlidePartForm(form)) {
+    // 外付け引き戸の部品: 建具幅＝引き戸の既定幅 W・扉幅 DW＝(W+50)/2・穴の幅＝DW−50・見付＝縦枠の見付・出幅＝枠の出幅（平面の記号と同じ供給源）
+    const width = findCatalogEntry(SLIDE_FIT_REPRESENTATIVE.category, SLIDE_FIT_REPRESENTATIVE.subType)?.defaultWidth;
+    const doorWidth = slideDoorWidth(width);
+    const clearWidth = slideClearWidth(width);
+    return {
+      ...defaultFitDims(wallThickness), faceWidth: String(FRAME_JAMB_WIDTH_MM), projection: String(FRAME_OVERHANG_MM),
+      width: width == null ? '' : String(width),
+      doorWidth: doorWidth === null ? '' : String(doorWidth),
+      clearWidth: clearWidth === null ? '' : String(clearWidth),
+    };
+  }
   if (!isElevationFigureForm(form)) return defaultFitDims(wallThickness);
   const entry = findCatalogEntry(ELEVATION_FIT_REPRESENTATIVE.category, ELEVATION_FIT_REPRESENTATIVE.subType);
   return {
@@ -1086,6 +1133,26 @@ function tryFitPlaced(form) {
   return fitLocal(fig, t.targets);
 }
 
+// 外付け引き戸の部品の試し込み: 壁厚・見付・出幅・建具幅・扉幅・穴の幅に合わせる。基準の対応は openings/openingDetailFrame.js detailSlidePlanTargets。
+function tryFitSlidePart(form, dims) {
+  const wallThickness = parseNumberText(dims.wallThickness);
+  const faceWidth = parseNumberText(dims.faceWidth);
+  const projection = parseNumberText(dims.projection);
+  const width = parseNumberText(dims.width);
+  const doorWidth = parseNumberText(dims.doorWidth);
+  const clearWidth = parseNumberText(dims.clearWidth);
+  if (!Number.isFinite(wallThickness) || wallThickness <= 0) return badFitDim('壁厚は正の数で入力してください');
+  if (!Number.isFinite(faceWidth) || faceWidth <= 0) return badFitDim('見付は正の数で入力してください');
+  if (!Number.isFinite(projection) || projection < 0) return badFitDim('出幅は 0 以上の数で入力してください');
+  if (!Number.isFinite(width) || width <= 0) return badFitDim('幅は正の数で入力してください');
+  if (!Number.isFinite(doorWidth) || doorWidth <= 0) return badFitDim('扉幅は正の数で入力してください');
+  if (!Number.isFinite(clearWidth) || clearWidth <= 0) return badFitDim('穴の幅は正の数で入力してください');
+  const fig = entryFromForm(form);
+  const t = detailSlidePlanTargets(fig, { wallThickness, projection, doorWidth, width, clearWidth, faceWidth });
+  if (t.error) return { error: t.error };
+  return fitLocal(fig, t.targets);
+}
+
 /**
  * 試し込み: 取り付け先の寸法に図を合わせる。建具の姿図（figure/elevation/opening）は幅・高さ・窓台、
  * それ以外は三方枠の寸法（壁厚・見付・出幅。文字列か数値）。
@@ -1094,6 +1161,7 @@ function tryFitPlaced(form) {
 export function tryFit(form, dims, { materialMap = null } = {}) {
   if (isPlacementFigure(form)) return tryFitPlaced(form);
   if (isElevationFigureForm(form)) return tryFitElevation(form, dims);
+  if (isSlidePartForm(form)) return tryFitSlidePart(form, dims);
   if (isFloorStepForm(form)) return tryFitFloorStep(form, dims, materialMap);
   if (isCeilingStepForm(form)) return tryFitFloorStep(form, dims, materialMap, ceilingStepTargets);
   const junctionSlot = junctionSlotOf(form);

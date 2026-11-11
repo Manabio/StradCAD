@@ -23,6 +23,12 @@ export function slideDoorWidth(width) {
   return (width + SLIDE_OUTSET_WIDTH_DEDUCT_MM) / 2;
 }
 
+/** 建具幅 W から穴の幅（穴の長さ）DW−50 を返す。slideDoorWidth が null なら null。 */
+export function slideClearWidth(width) {
+  const doorWidth = slideDoorWidth(width);
+  return doorWidth === null ? null : doorWidth - SLIDE_OUTSET_WIDTH_DEDUCT_MM;
+}
+
 /** 引き代側（戸尻側）の端。opening.hingeSide が −1/1 ならそれ、それ以外は −1（裁定 R7 既定。−1＝coord1〔lo〕側）。 */
 export function slideTailSide(opening) {
   const h = opening?.hingeSide;
@@ -51,7 +57,7 @@ export function outsetSlideLayout(opening, mechanism, host = null) {
   const hi = Math.max(coord1, coord2);
   const doorWidth = slideDoorWidth(hi - lo);
   if (doorWidth === null) return null;
-  const cutLength = doorWidth - SLIDE_OUTSET_WIDTH_DEDUCT_MM;
+  const cutLength = slideClearWidth(hi - lo);
   const tailSide = slideTailSide(opening);
   const pull = tailSide < 0 ? [lo, hi - cutLength] : [lo + cutLength, hi];
   // 戸先端 A と戸尻へ向かう符号 sx。穴・欠き込みは縦枠の見付 J だけ W の外へ広がる（枠の外面〜外面。S3c）。

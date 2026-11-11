@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import './DetailHelperPanel.css';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { overlayFor, docDiffMap } from '../catalog/catalogRegistry.js';
-import { planRemoveUserEntry, applyCatalogEditPlan } from '../catalog/catalogMaintenance.js';
-import { DetailLenMode, DetailEdgeMark } from '../core/constants.js';
+import { planRemoveUserEntry, applyCatalogEditPlan, FITTING_PART_ROLE_TEXT } from '../catalog/catalogMaintenance.js';
+import { DetailLenMode, DetailEdgeMark, DetailCategory } from '../core/constants.js';
 import { canHaveDetailViews } from '../detail/detailModel.js';
 import { detailFigureCatalog } from '../openings/openingCatalog.js';
 import { detailBuiltinFigures } from '../detail/detailPlacement.js';
@@ -19,16 +19,21 @@ import { useScrollIntoViewWhenActive } from './useScrollIntoViewWhenActive.js';
 import {
   DETAIL_HELPER_TEXT, DETAIL_HELPER_MESSAGES, DETAIL_NUMPAD_LABELS, PEN_BUTTONS, PREVIEW_FRAME_PX,
   DETAIL_ROLE_LABELS, DETAIL_MODE_LABELS, DETAIL_PARAM_LABELS, DETAIL_MATERIAL_FIELD_LABELS, DETAIL_DATUM_KIND_LABELS, DETAIL_AXIS_LABELS,
-  newDraft, entryFromForm, freshDocOf, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, isDraftDirty, undoDraft, penStep, penUp, setClosed, setDashRole, DETAIL_DASH_LABELS,
+  newDraft, entryFromForm, freshDocOf, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, undoDraft, penStep, penUp, setClosed, setDashRole, DETAIL_DASH_LABELS,
   setMoveLen, setMoveMode, setMoveEdge, rebaseOrigin, rebaseDelta, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, saveDecision, planSave, afterSaveDoc,
   deleteConfirmMessage, defaultFitDimsFor, fitDimFieldsFor, tryFit, previewPrimitivesOf, labelOptions, pushHistory,
   displayLen, strokeLabel, strokeTitle, moveSpanLabel, distanceButtonLabel, offsetButtonLabel, fitDimButtonLabel,
   libraryMetaLabel, wallThicknessNotice, DETAIL_PLACEMENT_VIEW_LABELS, placementViewOptions, setPlacementView,
-  helperLibraryRows, libraryOriginOf, libraryRowActions, libraryEntryOf, planRevert, unlockDoc, docForLibraryEntry, LIBRARY_ORIGIN,
+  helperLibraryRows, libraryOriginOf, libraryRowActions, libraryEntryOf, planRevert, unlockDoc, LIBRARY_ORIGIN,
   loadDxf, setDxfUnit, toggleDxfLayer, setDxfLayers, dxfLayerRows, toggleDxfComponent, setDxfProvenanceField, dxfComponentRows, dxfUnitHint, dxfWarningTexts,
   dxfPreviewPrimitives, draftFromDxf, draftDocOf, provenanceNoticeOf, DETAIL_HELPER_TABS, setProvenanceField,
 } from './detailHelperForm.js';
+import {
+  isFittingDoc, isPartlessFittingDoc, docOfLibraryEntry, fittingEntryOf, selectFittingPart, addFittingPart, removeFittingPart, setFittingLabel,
+  availableFittingRoles, switchToFitting, duplicateFittingDoc, isDocDirty, afterSaveFittingDoc, fittingValidation, fittingSetErrorTexts,
+  fittingPartRows, fittingSaveBlockers,
+} from './detailHelperFitting.js';
 import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
 import { isPdfBytes } from '../detail/pdf/pdfImport.js';
 import {
@@ -100,7 +105,7 @@ function LibraryRow({ row, active, disabled, onSelect }) {
 const sha256OfBytes = bytes => sha256HexWith(globalThis.crypto?.subtle)(bytes);
 
 /** 読込み結果の共通部分（警告・連結成分の一覧・出所欄・下書きへ写す）。DXF と PDF で共用。配線だけ。 */
-function ImportResult({ state, warnings, busy, canCopy, onToggle, onField, onCopy, onClearPick, onToggleLayer, onAllLayersOn }) {
+function ImportResult({ state, warnings, busy, canCopy, copyNotice, onToggle, onField, onCopy, onClearPick, onToggleLayer, onAllLayersOn }) {
   const rows = state.scene ? pickedComponentRows(state, dxfComponentRows(state)) : [];
   const layerRows = dxfLayerRows(state);
   const pickSummary = pickSummaryOf(state);
@@ -160,13 +165,14 @@ function ImportResult({ state, warnings, busy, canCopy, onToggle, onField, onCop
           <input className="dthlp-input" value={state.licenseNote} onChange={e => onField(DXF_PROVENANCE_FIELDS.LICENSE_NOTE, e.target.value)} />
         </label>
       </div>
-      <button className="dthlp-btn dthlp-btn--primary" disabled={busy || !canCopy} onClick={onCopy}>{DETAIL_HELPER_TEXT.dxfCopy}</button>
+      {copyNotice && <div className="dthlp-error">{copyNotice}</div>}
+      <button className="dthlp-btn dthlp-btn--primary" disabled={busy || !canCopy || !!copyNotice} onClick={onCopy}>{DETAIL_HELPER_TEXT.dxfCopy}</button>
     </>
   );
 }
 
 /** 左ペインの「図面読込み」タブ（DXF）。配線だけ（判断は detailHelperForm.js）。 */
-function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy, onClearPick, onToggleLayer, onAllLayersOn }) {
+function DxfPane({ dxf, message, busy, copyNotice, onOpen, onUnit, onToggle, onField, onCopy, onClearPick, onToggleLayer, onAllLayersOn }) {
   return (
     <div className="dthlp-dxf">
       <button className="dthlp-btn" disabled={busy} onClick={onOpen}>{DETAIL_HELPER_TEXT.dxfOpen}</button>
@@ -177,7 +183,7 @@ function DxfPane({ dxf, message, busy, onOpen, onUnit, onToggle, onField, onCopy
           <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onUnit}>
             {DETAIL_HELPER_TEXT.dxfUnit}: {displayLen(dxf.unitText)}（{dxfUnitHint(dxf)}）
           </button>
-          <ImportResult state={dxf} warnings={dxfWarningTexts(dxf)} busy={busy} canCopy={dxf.selected.length > 0} onToggle={onToggle} onField={onField} onCopy={onCopy} onClearPick={onClearPick} onToggleLayer={onToggleLayer} onAllLayersOn={onAllLayersOn} />
+          <ImportResult state={dxf} warnings={dxfWarningTexts(dxf)} busy={busy} canCopy={dxf.selected.length > 0} copyNotice={copyNotice} onToggle={onToggle} onField={onField} onCopy={onCopy} onClearPick={onClearPick} onToggleLayer={onToggleLayer} onAllLayersOn={onAllLayersOn} />
         </>
       )}
     </div>
@@ -391,7 +397,7 @@ function FigureGestureLayer({ t, info, frame, view, onView, svgRef, canPick, pic
  * 左ペインの「図面読込み」タブ（PDF）。ページ選定（番号・前後）→ ページ画像（canvas。表示専用）の上で矩形を 1 回ドラッグ
  * （数値欄と同期）→ 縮尺 → 「抽出」→ 連結成分。配線だけ（判断は detailHelperPdf.js）。
  */
-function PdfPane({ pdf, message, busy, onOpen, onPrev, onNext, onPageNumpad, onScale, onClipField, onClipDrag, onExtract, onToggle, onField, onCopy, onClearPick, renderPage, onView, onRenderError }) {
+function PdfPane({ pdf, message, busy, copyNotice, onOpen, onPrev, onNext, onPageNumpad, onScale, onClipField, onClipDrag, onExtract, onToggle, onField, onCopy, onClearPick, renderPage, onView, onRenderError }) {
   const canvasRef = useRef(null);
   const dragFrom = useRef(null);
   useEffect(() => {
@@ -434,7 +440,7 @@ function PdfPane({ pdf, message, busy, onOpen, onPrev, onNext, onPageNumpad, onS
       </div>
       <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onScale}>{DETAIL_HELPER_TEXT.pdfScale}: {displayLen(pdf.scaleText)}</button>
       <button className="dthlp-btn dthlp-btn--primary" disabled={busy || !pdfCanExtract(pdf)} onClick={onExtract}>{DETAIL_HELPER_TEXT.pdfExtract}</button>
-      <ImportResult state={pdf} warnings={pdfWarningTexts(pdf)} busy={busy} canCopy={pdfCanCopy(pdf)} onToggle={onToggle} onField={onField} onCopy={onCopy} onClearPick={onClearPick} />
+      <ImportResult state={pdf} warnings={pdfWarningTexts(pdf)} busy={busy} canCopy={pdfCanCopy(pdf)} copyNotice={copyNotice} onToggle={onToggle} onField={onField} onCopy={onCopy} onClearPick={onClearPick} />
     </div>
   );
 }
@@ -452,7 +458,10 @@ export function DetailHelperPanel({ onClose }) {
   const dxfInputRef = useRef(null);
   const pdfDocRef = useRef(null);    // pdfjs の文書（状態に入れない）
   const pdfLoaderRef = useRef(null); // ui/pdfLoader.js（初回の PDF を開くときに動的 import）
-  const { form, history, baseline, prevEntry } = doc;
+  const { form, history, prevEntry, set: fittingSet, partIndex } = doc;
+  const fitting = isFittingDoc(doc);
+  const partless = isPartlessFittingDoc(doc); // 一式で部品が 0 個（部品の編集は受けない）
+  const importCopyNotice = fitting ? DETAIL_HELPER_MESSAGES.fittingNoImportCopy : null; // 一式のとき DXF／PDF は部品へ写せない（写し先は C8）
   const penError = doc.penError ?? null;
   const rootRef = useRef(null);
   const [penText, setPenText] = useState('');
@@ -489,7 +498,7 @@ export function DetailHelperPanel({ onClose }) {
   const viewCatalog = canHaveDetailViews(form) ? [...detailFigureCatalog().values()] : null;
   // 部屋の取り合いの材束縛を解く材マップ（材コード→材。材の一覧が読めるまでは null＝材束縛の図は UNRESOLVED_MATERIAL）
   const materialMap = useMemo(() => (materialList ? new Map(materialList.map(m => [m.code, m])) : null), [materialList]);
-  const fitted = useMemo(() => (fitOn ? tryFit(form, fitDims, { materialMap }) : null), [fitOn, form, fitDims, materialMap]);
+  const fitted = useMemo(() => (fitOn && !partless ? tryFit(form, fitDims, { materialMap }) : null), [fitOn, partless, form, fitDims, materialMap]);
   const primitives = useMemo(() => previewPrimitivesOf(form, fitted), [form, fitted]);
   const showDxf = leftTab === DETAIL_HELPER_TABS.DXF;
   const imported = pdf ?? dxf;
@@ -544,9 +553,15 @@ export function DetailHelperPanel({ onClose }) {
   const pickRectNow = showDxf ? activePickRect(imported) : null;
   const canFitRect = !busy && !!pickRectNow && shownPrims.length > 0;
   const provenanceNotice = provenanceNoticeOf(form);
-  const result = useMemo(() => validation(form), [form]);
-  const blockers = saveBlockers(form, result);
-  const dirty = isDraftDirty(form, baseline);
+  // 一式は一式全体を検証する（選んでいる部品の編集を含む）。部品のエラーは行のバッジ、一式全体のエラーは一覧の上へ振り分ける。
+  const result = useMemo(
+    () => (fittingSet ? fittingValidation({ form, set: fittingSet, partIndex }) : validation(form)),
+    [form, fittingSet, partIndex],
+  );
+  const blockers = fitting ? fittingSaveBlockers(doc, result) : saveBlockers(form, result);
+  const dirty = isDocDirty(doc);
+  const partRows = fitting ? fittingPartRows(doc, result) : [];
+  const setErrors = fitting ? fittingSetErrorTexts(result) : [];
   const options = comboOptions(form.category, form.view);
   // overlay は React が追跡しないモジュール状態。保存・削除の完了で setLibTick により再レンダーして毎回引き直す（一覧は小さい）。
   const libItems = helperLibraryRows({
@@ -560,7 +575,7 @@ export function DetailHelperPanel({ onClose }) {
 
   function edit(fn, { track = true } = {}) {
     setDoc(d => {
-      if (d.readOnly) return d;
+      if (d.readOnly || isPartlessFittingDoc(d)) return d;
       const next = fn(d.form);
       if (next === d.form) return d;
       return clearPenError({ ...d, form: next, history: track ? pushHistory(d.history, d.form) : d.history });
@@ -592,7 +607,41 @@ export function DetailHelperPanel({ onClose }) {
   }
   // 計算は setDoc の関数の中（現在の doc から）。エラーは doc.penError に入る。
   function handlePen(dir) {
-    setDoc(d => (d.readOnly ? d : penStep(d, dir, penText)));
+    setDoc(d => (d.readOnly || isPartlessFittingDoc(d) ? d : penStep(d, dir, penText)));
+  }
+
+  // ---- 建具一式の部品（判断は ui/detailHelperFitting.js） ----
+  function handleSelectPart(index) {
+    setDoc(d => clearPenError(selectFittingPart(d, index)));
+    setFitOverrides({});
+  }
+  function handleAddPart(role) {
+    if (!role || readOnly) return;
+    const { error } = addFittingPart(doc, role); // エラー表示だけ今の doc で判定し、状態の更新は関数形（連打でも取りこぼさない）
+    if (error) { setMessage({ text: error, isError: true }); return; }
+    setDoc(d => (d.readOnly || !d.set ? d : (addFittingPart(d, role).doc ?? d)));
+    setFitOverrides({});
+    setMessage(null);
+  }
+  // 部品の削除は確認してから（部品の図が丸ごと消える）。確認を出している間の編集を取り込まないよう、実行時の doc で作り直す。
+  function handleRemovePart(index) {
+    if (readOnly) return;
+    setConfirm({
+      message: DETAIL_HELPER_TEXT.deletePartConfirm(FITTING_PART_ROLE_TEXT[doc.set.parts[index]?.role] ?? ''),
+      buttons: [
+        { label: DETAIL_HELPER_MESSAGES.confirmDeleteButton, value: 'ok', primary: true, danger: true },
+        { label: DETAIL_HELPER_MESSAGES.cancelButton, value: 'cancel' },
+      ],
+      onSelect: v => { setConfirm(null); if (v === 'ok') { setDoc(d => removeFittingPart(d, index)); setFitOverrides({}); } },
+    });
+  }
+  // 分類の「分類」select。建具一式は新規の空の下書きからだけ選べる（Q-C5b）。一式の doc の分類は変えられない。
+  function handleCategory(value) {
+    if (fitting) return;
+    if (value !== DetailCategory.FITTING) { edit(f => setClassification(f, 'category', value), { track: false }); return; }
+    const r = switchToFitting(doc, { idFactory: newKeyPart });
+    if (r.error) { setMessage({ text: r.error, isError: true }); return; }
+    replaceDoc(r.doc);
   }
 
   function openNumpad(target, value, label) {
@@ -680,6 +729,7 @@ export function DetailHelperPanel({ onClose }) {
   }
   // 選んだ成分を新規下書きへ写す（未保存の下書きがあれば破棄の確認を通す）。DXF・PDF 共通。
   function handleDxfCopy() {
+    if (fitting) return;
     const r = draftFromDxf({ dxf: imported, idFactory: newKeyPart });
     if (r.error) { setDxfMessage({ text: r.error, isError: true }); return; }
     guardDiscard(() => {
@@ -696,7 +746,7 @@ export function DetailHelperPanel({ onClose }) {
     const entry = libraryEntryOf(key, { userEntries, builtinList: detailBuiltinFigures });
     if (!entry) return;
     const origin = libraryOriginOf(key, { builtinKeys: BUILTIN_KEYS, userKeys: userKeysNow() });
-    guardDiscard(() => replaceDoc(docForLibraryEntry(entry, origin)));
+    guardDiscard(() => replaceDoc(docOfLibraryEntry(entry, origin)));
   }
   // 組込みの図の「編集（上書きを作る）」: 同キーのまま編集可にする（保存で overridesBuiltin の上書きが作られる）。
   function handleEditOverride() {
@@ -731,14 +781,14 @@ export function DetailHelperPanel({ onClose }) {
     setRevertConfirm(null);
     setLibTick(t => t + 1);
     const builtin = libraryEntryOf(key, { userEntries: overlayFor(KIND).user, builtinList: detailBuiltinFigures });
-    setDoc(d => (d.prevEntry?.key === key && builtin ? docForLibraryEntry(builtin, LIBRARY_ORIGIN.BUILTIN) : d));
+    setDoc(d => (d.prevEntry?.key === key && builtin ? docOfLibraryEntry(builtin, LIBRARY_ORIGIN.BUILTIN) : d));
     setMessage({ text: DETAIL_HELPER_MESSAGES.reverted, isError: false });
   }
 
   // 保存・削除・busy・失敗文言は CatalogMaintenancePanel.jsx の useCatalogEditActions と同型。共有化は S5 後の整理課題。
   async function handleSave() {
     if (busy) return;
-    const entry = entryFromForm(form);
+    const entry = fitting ? fittingEntryOf(doc) : entryFromForm(form); // 一式は選んでいる部品の編集を書き戻した一式
     // 同梱にも同じキーがあるとき、保守パネルと同じ行状態（doc-same 等）で保存し、同梱を外して開いている文書へ即反映する。
     const plan = planSave(entry, prevEntry, docContextFor(KIND, { overlayFor, docDiffMap, builtinList: detailBuiltinFigures }));
     const decision = saveDecision(plan);
@@ -767,7 +817,7 @@ export function DetailHelperPanel({ onClose }) {
     } finally {
       setBusy(false);
     }
-    setDoc(d => afterSaveDoc(d, entry, savedForm));
+    setDoc(d => (d.set ? afterSaveFittingDoc(d, entry) : afterSaveDoc(d, entry, savedForm)));
     setLibTick(t => t + 1);
     setMessage({ text: decision.message, isError: false });
   }
@@ -819,7 +869,7 @@ export function DetailHelperPanel({ onClose }) {
   }
 
   function handleDuplicate() {
-    setDoc(d => duplicateDoc(d, { idFactory: newKeyPart }));
+    setDoc(d => (d.set ? duplicateFittingDoc(d, { idFactory: newKeyPart }) : duplicateDoc(d, { idFactory: newKeyPart })));
     setMessage(null);
     setRevertConfirm(null);
   }
@@ -832,8 +882,9 @@ export function DetailHelperPanel({ onClose }) {
 
   const rows = moveRows(form);
   const wallNotice = wallThicknessNotice(materialLoadFailed);
-  const canSave = saveEnabled(form, result) && !busy && !readOnly;
+  const canSave = (fitting ? result.ok && blockers.length === 0 : saveEnabled(form, result)) && !busy && !readOnly;
   const inertWhenReadOnly = readOnly || undefined; // 組込みの図は編集の部品を押せなくする（edit／handlePen も doc.readOnly で弾く）
+  const inertWhenNoPart = readOnly || partless || undefined; // 部品の編集（ペン・手・基準）。一式で部品 0 個のときも受けない
 
   return (
     <div className="dthlp-root" ref={rootRef} tabIndex={-1} onKeyDown={handleKeyDown}>
@@ -848,13 +899,36 @@ export function DetailHelperPanel({ onClose }) {
       <div className="dthlp-body">
         {/* 左: ペン操作と命令一覧 */}
         <section className="dthlp-pane dthlp-left">
+          {fitting && (
+            <div className="dthlp-block dthlp-parts">
+              <div className="dthlp-block-head">
+                <span>{DETAIL_HELPER_TEXT.partsHeading}</span>
+                <Select value="" empty={DETAIL_HELPER_TEXT.addPart} disabled={readOnly || busy}
+                  options={availableFittingRoles(doc).map(role => ({ value: role, label: FITTING_PART_ROLE_TEXT[role] ?? role }))}
+                  onChange={handleAddPart} />
+              </div>
+              {setErrors.length > 0 && <ul className="dthlp-errors">{setErrors.map((t, i) => <li key={i}>{t}</li>)}</ul>}
+              {partRows.map(r => (
+                <div key={r.role} className="dthlp-part">
+                  <button className={`dthlp-lib-row${r.selected ? ' dthlp-lib-row--active' : ''}`} disabled={busy} onClick={() => handleSelectPart(r.index)}>
+                    <span className="dthlp-lib-label">{r.roleLabel}</span>
+                    <span className="dthlp-lib-meta">
+                      {r.errorCount > 0 && <span className="dthlp-lib-badge dthlp-lib-badge--error">{DETAIL_HELPER_TEXT.partErrorBadge(r.errorCount)}</span>}
+                      {r.classLabel}
+                    </span>
+                  </button>
+                  <button className="dthlp-btn dthlp-btn--small" disabled={busy || readOnly} onClick={() => handleRemovePart(r.index)}>{DETAIL_HELPER_TEXT.remove}</button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="dthlp-tabs">
             <button className={`dthlp-btn${showDxf ? '' : ' dthlp-btn--active'}`} onClick={() => setLeftTab(DETAIL_HELPER_TABS.PEN)}>{DETAIL_HELPER_TEXT.tabPen}</button>
             <button className={`dthlp-btn${showDxf ? ' dthlp-btn--active' : ''}`} onClick={() => setLeftTab(DETAIL_HELPER_TABS.DXF)}>{DETAIL_HELPER_TEXT.tabDxf}</button>
           </div>
           {showDxf && pdf && (
             <PdfPane
-              pdf={pdf} message={dxfMessage} busy={busy}
+              pdf={pdf} message={dxfMessage} busy={busy} copyNotice={importCopyNotice}
               onOpen={() => dxfInputRef.current?.click()}
               onPrev={() => applyPdfResult(stepPdfPage(pdf, -1))}
               onNext={() => applyPdfResult(stepPdfPage(pdf, 1))}
@@ -874,7 +948,7 @@ export function DetailHelperPanel({ onClose }) {
           )}
           {showDxf && !pdf && (
             <DxfPane
-              dxf={dxf} message={dxfMessage} busy={busy}
+              dxf={dxf} message={dxfMessage} busy={busy} copyNotice={importCopyNotice}
               onOpen={() => dxfInputRef.current?.click()}
               onUnit={() => openNumpad({ kind: 'dxfUnit' }, dxf.unitText, DETAIL_HELPER_TEXT.dxfUnit)}
               onToggle={index => setDxf(d => toggleDxfComponent(d, index))}
@@ -886,7 +960,7 @@ export function DetailHelperPanel({ onClose }) {
             />
           )}
           {!showDxf && (<>
-          <div className="dthlp-pen" inert={inertWhenReadOnly}>
+          <div className="dthlp-pen" inert={inertWhenNoPart}>
             <button className="dthlp-btn dthlp-distance" onClick={() => openNumpad({ kind: 'pen' }, penText, DETAIL_NUMPAD_LABELS.penDistance)}>
               {distanceButtonLabel(penText)}
             </button>
@@ -902,7 +976,7 @@ export function DetailHelperPanel({ onClose }) {
             {penError && <div className="dthlp-error">{penError}</div>}
           </div>
 
-          <div className="dthlp-moves" inert={inertWhenReadOnly}>
+          <div className="dthlp-moves" inert={inertWhenNoPart}>
             {rows.map(r => (
               <div key={r.strokeId} className="dthlp-stroke">
                 <div className="dthlp-stroke-head">
@@ -1007,17 +1081,23 @@ export function DetailHelperPanel({ onClose }) {
         <section className="dthlp-pane dthlp-right">
           <div className="dthlp-block" inert={inertWhenReadOnly}>
             <label className="dthlp-row">{DETAIL_HELPER_TEXT.fieldLabel}
-              <input className="dthlp-input" value={form.label} onChange={e => edit(f => ({ ...f, label: e.target.value }), { track: false })} />
+              <input className="dthlp-input" value={fitting ? fittingSet.label : form.label}
+                onChange={e => (fitting ? setDoc(d => (d.readOnly ? d : setFittingLabel(d, e.target.value))) : edit(f => ({ ...f, label: e.target.value }), { track: false }))} />
             </label>
             <label className="dthlp-row">{DETAIL_HELPER_TEXT.fieldCategory}
-              <Select value={form.category} options={options.categories} onChange={v => edit(f => setClassification(f, 'category', v), { track: false })} />
+              <Select value={fitting ? fittingSet.category : form.category} options={options.categories} disabled={fitting} onChange={handleCategory} />
             </label>
-            <label className="dthlp-row">{DETAIL_HELPER_TEXT.fieldView}
-              <Select value={form.view} options={options.views} onChange={v => edit(f => setClassification(f, 'view', v), { track: false })} />
-            </label>
-            <label className="dthlp-row">{DETAIL_HELPER_TEXT.fieldSubject}
-              <Select value={form.subject} options={options.subjects} onChange={v => edit(f => setClassification(f, 'subject', v), { track: false })} />
-            </label>
+            {/* 一式の分類は部品の役割で決まる（view・subject は選ばせない） */}
+            {!fitting && (
+              <>
+                <label className="dthlp-row">{DETAIL_HELPER_TEXT.fieldView}
+                  <Select value={form.view} options={options.views} onChange={v => edit(f => setClassification(f, 'view', v), { track: false })} />
+                </label>
+                <label className="dthlp-row">{DETAIL_HELPER_TEXT.fieldSubject}
+                  <Select value={form.subject} options={options.subjects} onChange={v => edit(f => setClassification(f, 'subject', v), { track: false })} />
+                </label>
+              </>
+            )}
             {canHaveDetailViews(form) && (
               <div>
                 <span>{DETAIL_HELPER_TEXT.viewsGroup}</span>
@@ -1031,7 +1111,7 @@ export function DetailHelperPanel({ onClose }) {
             )}
           </div>
 
-          <div className="dthlp-block" inert={inertWhenReadOnly}>
+          <div className="dthlp-block" inert={inertWhenNoPart}>
             <div className="dthlp-block-head">
               <span>{DETAIL_HELPER_TEXT.datumHeading}</span>
               <button className="dthlp-btn dthlp-btn--small" onClick={() => edit(f => addDatum(f))}>{DETAIL_HELPER_TEXT.addDatum}</button>

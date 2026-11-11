@@ -22,7 +22,7 @@ const ALLOWED_DIRECT = new Set([
   'detail/detailModel.js', 'detail/detailPreview.js', 'detail/detailPlacement.js', 'detail/detailPen.js',
   'detail/dxf/dxfImport.js', 'detail/dxf/dxfProvenance.js', 'detail/pdf/pdfProvenance.js', 'error.js',
   'catalog/catalogKinds.js', 'catalog/catalogMaintenance.js',
-  'openings/openingCatalog.js', 'openings/openingDetailFrame.js', 'finish/roomDetailTargets.js',
+  'openings/openingCatalog.js', 'openings/openingDetailFrame.js', 'openings/slideOutset.js', 'finish/roomDetailTargets.js', // slideOutset＝引き戸の扉幅（slideDoorWidth。C5 の部品の試し込みの既定）
   'finish/placedFigure/placedFigureTargets.js', // 姿図の配置の試し込み（S10 P2-2。placedFigureTargets・isPlacementFigure）
   'ui/numpadUtils.js',
   'structural/sectionFigure/svgFigurePrimitives.js',
@@ -118,6 +118,20 @@ test('【不変条件】detailHelperPick.js の直接 import は許可表の 4 �
   // 検出力: 許可表の外（detailHelperForm.js・store.js）を引くソースは違反に出る
   assert.ok(directOffenders('ui/detailHelperPick.js', "import { x } from './detailHelperForm.js';", PICK_LOGIC_ALLOWED).length > 0);
   assert.ok(directOffenders('ui/detailHelperPick.js', "import { x } from '../store.js';", PICK_LOGIC_ALLOWED).length > 0);
+});
+
+// 建具一式モードの純ロジック（detailHelperFitting.js。C5）。detailHelperForm.js は引くが、逆に form から引かれない（循環回避）。
+const FITTING_LOGIC_ALLOWED = new Set([
+  'core/constants.js', 'detail/detailModel.js', 'catalog/catalogMaintenance.js', 'catalog/catalogKinds.js', 'ui/detailHelperForm.js',
+]);
+test('【不変条件】detailHelperFitting.js の直接 import は許可表の内側だけで、推移的にも store.js・snap.js・.jsx・react を静的に引かない', () => {
+  const fittingTarget = path.join(srcDir, 'ui', 'detailHelperFitting.js');
+  assert.ok(specifiersOf(fittingTarget).includes('./detailHelperForm.js'), 'import を読めていない');
+  assert.deepEqual(directOffenders('ui/detailHelperFitting.js', fs.readFileSync(fittingTarget, 'utf8'), FITTING_LOGIC_ALLOWED), []);
+  const { offenders } = transitiveOffenders([fittingTarget]);
+  assert.deepEqual(offenders, []);
+  assert.ok(!specifiersOf(target).some(s => s.includes('detailHelperFitting')), 'form が fitting を引くと循環する');
+  assert.ok(directOffenders('ui/detailHelperFitting.js', "import { x } from '../store.js';", FITTING_LOGIC_ALLOWED).length > 0);
 });
 
 test('【不変条件】detailHelperForm.js は detailHelperPick.js を引かない（form→pick→pdf→form の循環を作らない）', () => {

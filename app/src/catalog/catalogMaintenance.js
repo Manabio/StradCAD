@@ -33,7 +33,7 @@ import { stripOverridesBuiltin, isImportedFigure, IMPORTED_SOURCES } from './use
 export { isImportedFigure, IMPORTED_SOURCES };
 import {
   DetailCategory, DetailView, DetailSubject, DetailSlot, DETAIL_SLOT_TARGETS, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD,
-  DetailProvenanceSource, DetailPlacementView,
+  DetailProvenanceSource, DetailPlacementView, FittingPartRole,
 } from '../core/constants.js';
 import { MSG_IMPORTED_NOT_IN_FILE, DETAIL_PLACEMENT_VIEW_LABEL_TEXT } from '../error.js';
 
@@ -1377,6 +1377,23 @@ export const FIXTURE_SYMBOL_DETAIL_SLOT_TEXT = Object.freeze({
   [DetailSlot.FIGURE]: Object.freeze({ label: '部分詳細図（姿図）', unassigned: 'なし' }),
   // 向こう側から見た姿図（T2-2。任意。無ければ姿図を両側に使う）
   [DetailSlot.FIGURE_BACK]: Object.freeze({ label: '部分詳細図（姿図・向こう側）', unassigned: '姿図の図を使う' }),
+});
+
+/** 建具一式（FITTING）の部品の役割の表示名（ヘルパーの部品一覧・閲覧・通知が共有）。全 FittingPartRole を持つ（テストで固定）。 */
+export const FITTING_PART_ROLE_TEXT = Object.freeze({
+  [FittingPartRole.JAMB]:           '方立（両側）',
+  [FittingPartRole.JAMB_HINGE]:     '方立（吊元側）',
+  [FittingPartRole.JAMB_LATCH]:     '方立（戸先側）',
+  [FittingPartRole.HEAD]:           '上枠',
+  [FittingPartRole.SILL]:           '下枠',
+  [FittingPartRole.FIGURE]:         '姿図',
+  [FittingPartRole.FIGURE_BACK]:    '姿図（向こう側）',
+  [FittingPartRole.SLIDE_LATCH]:    '戸先側（枠＋閉じた扉）',
+  [FittingPartRole.SLIDE_INNER]:    '戸尻側の縦枠',
+  [FittingPartRole.SLIDE_TAIL]:     '戸尻の端材＋開けた扉',
+  [FittingPartRole.SLIDE_LATCH_UP]: '戸先側（枠＋閉じた扉）（見上げ）',
+  [FittingPartRole.SLIDE_INNER_UP]: '戸尻側の縦枠（見上げ）',
+  [FittingPartRole.SLIDE_TAIL_UP]:  '戸尻の端材＋開けた扉（見上げ）',
 });
 
 /** 建具記号フォームの方立・上枠・下枠の割当て欄に添える説明（どの建具で効くか）。 */

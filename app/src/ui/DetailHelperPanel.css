@@ -129,3 +129,9 @@
 .dthlp-lib-badge { font-size: 10px; color: #475569; background: #e2e8f0; border-radius: 3px; padding: 0 4px; margin-right: 4px; }
 .dthlp-lib-badge--override { color: #92400e; background: #fef3c7; }
 .dthlp-lib-badge--doc { color: #9a3412; background: #ffedd5; }
+
+/* ---- 建具一式の部品の一覧 ---- */
+.dthlp-parts { display: flex; flex-direction: column; gap: 4px; }
+.dthlp-part { display: flex; align-items: stretch; gap: 4px; }
+.dthlp-part .dthlp-lib-row { flex: 1; }
+.dthlp-lib-badge--error { color: #b91c1c; background: #fee2e2; }

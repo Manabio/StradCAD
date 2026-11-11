@@ -268,18 +268,20 @@ test('comboOptions: category で view を、(category, view) で subject を絞�
   const o = comboOptions(DetailCategory.PAIRED, DetailView.SECTION);
   assert.deepEqual(o.views.map(v => v.value), ['plan', 'section']);
   assert.deepEqual(o.subjects.map(s => s.value), ['jamb', 'head', 'sill', 'sashSection', 'nageshi', 'shikii']);
-  assert.deepEqual(o.categories.map(c => c.value), ['part', 'junction', 'freePart', 'paired', 'figure']);
+  assert.deepEqual(o.categories.map(c => c.value), ['part', 'junction', 'freePart', 'paired', 'figure', 'fitting']);
   const j = comboOptions(DetailCategory.JUNCTION, DetailView.SECTION);
   assert.deepEqual(j.views.map(v => v.value), ['section']);
   assert.deepEqual(j.subjects.map(s => s.value), ['floorWall', 'wallCeiling']);
   assert.deepEqual(comboOptions(DetailCategory.JUNCTION, DetailView.PLAN).subjects, []);
 });
 
-test('comboOptions: 分類の選択肢に FITTING を出さない（C5 まで）', () => {
-  const values = comboOptions(DetailCategory.PAIRED, DetailView.PLAN).categories.map(c => c.value);
-  assert.equal(values.includes(DetailCategory.FITTING), false);
-  for (const c of Object.values(DetailCategory).filter(v => v !== DetailCategory.FITTING)) assert.ok(values.includes(c), c);
-  assert.equal(values.length, 5);
+test('comboOptions: 分類の選択肢に FITTING（建具一式）を出す（平面・断面のどちらの絞り込みでも）', () => {
+  for (const view of [DetailView.PLAN, DetailView.SECTION]) {
+    const values = comboOptions(DetailCategory.PAIRED, view).categories.map(c => c.value);
+    assert.ok(values.includes(DetailCategory.FITTING));
+    for (const c of Object.values(DetailCategory)) assert.ok(values.includes(c), c);
+    assert.equal(values.length, 6);
+  }
 });
 
 test('setClassification: 上位を変えると下位は組合せ表の先頭へ寄る（表に無い状態を作らない）', () => {
