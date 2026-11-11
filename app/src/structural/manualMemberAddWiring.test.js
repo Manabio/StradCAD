@@ -11,7 +11,9 @@ import path from 'node:path';
 import { stripCommentLines } from '../uiBusySourceScan.js';
 
 const srcPath = path.resolve(import.meta.dirname, 'MemberListTab.jsx');
-const stripped = stripCommentLines(fs.readFileSync(srcPath, 'utf8'));
+// stripCommentLines は `//` 行しか落とさないため、複数行のブロックコメントに呼び出し行を入れて実体を消す変異を
+// 見逃す。先にブロックコメントを除いてから行コメントを除く（共有ヘルパは変えずこのファイル内で足す）。
+const stripped = stripCommentLines(fs.readFileSync(srcPath, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''));
 
 /** リテラル文字列needleの出現回数を数える（正規表現の特殊文字はエスケープする）。 */
 function countOccurrences(text, needle) {
@@ -32,8 +34,20 @@ function countWholeLines(text, line) {
   return (text.match(new RegExp(`^\\s*${escaped}$`, 'gm')) || []).length;
 }
 
-test('【配線】MemberListTabはaddManualColumn/addManualFooting/addManualBeamを各1回だけ、引数まで固定した形で呼ぶ', () => {
-  assert.equal(countWholeLines(stripped, 'addManualColumn(graph, project, { vCL, hCL });'), 1, 'addManualColumn(graph, project, { vCL, hCL }); の行は1つのはず');
+test('【配線】MemberListTabは柱の追加・部材の削除・Undo記録をmanualMemberCommit.js経由で1回ずつ呼び、直書きを残さない', () => {
+  assert.equal(countOccurrences(stripped, 'commitManualColumnAdd('), 1, 'commitManualColumnAdd( の呼び出しは1回のはず');
+  assert.equal(countOccurrences(stripped, 'commitManualMemberRemoval('), 1, 'commitManualMemberRemoval( の呼び出しは1回のはず');
+  assert.equal(countWholeLines(stripped, 'commitManualColumnAdd(graph, project, { vCL, hCL });'), 1, '柱の追加は引数まで固定した1行');
+  assert.equal(countWholeLines(stripped, 'commitManualMemberRemoval(g, project, deleteConfirm.mapName, deleteConfirm.ids);'), 1, '削除は引数まで固定した1行');
+  assert.equal(countOccurrences(stripped, 'addManualColumn('), 0, 'addManualColumn( を直接呼んではいけない（commitManualColumnAdd 経由）');
+  assert.equal(countOccurrences(stripped, 'REMOVE_FN_BY_MAP'), 0, 'REMOVE_FN_BY_MAP 経由の直接削除が残っている');
+  assert.equal(countOccurrences(stripped, '[removeFn]('), 0, '[removeFn]( の直接削除が残っている');
+  assert.equal(countOccurrences(stripped, 'g[removeFn]('), 0, 'g[removeFn]( の直接削除が残っている');
+  assert.equal(countOccurrences(stripped, 'function pushGraphUndo'), 0, 'pushGraphUndo は manualMemberCommit.js から import する（ファイル内定義を残さない）');
+  assert.equal(countWholeLines(stripped, "import { pushGraphUndo, commitManualColumnAdd, commitManualMemberRemoval } from './manualMemberCommit.js';"), 1, 'import 行');
+});
+
+test('【配線】MemberListTabはaddManualFooting/addManualBeamを各1回だけ、引数まで固定した形で呼ぶ', () => {
   assert.equal(countWholeLines(stripped, 'addManualFooting(graph, project, { kind: footingKind, vCL, hCL });'), 1, 'addManualFooting(graph, project, { kind: footingKind, vCL, hCL }); の行は1つのはず');
   assert.equal(countWholeLines(stripped, 'addManualBeam(graph, project, { axisCL, isVertical, clStart, clEnd });'), 1, 'addManualBeam(graph, project, { axisCL, isVertical, clStart, clEnd }); の行は1つのはず');
 });

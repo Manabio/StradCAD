@@ -10,7 +10,7 @@ import {
   deleteButtonStyle, cellInputStyle,
 } from '../ui/cardStyles.js';
 import {
-  MEMBER_GROUPS, REMOVE_FN_BY_MAP, FIELD_DEFS_BY_CATEGORY,
+  MEMBER_GROUPS, FIELD_DEFS_BY_CATEGORY,
   materialLabel, sectionAspectRatio, sectionIconShape, memberSymbol, memberSignature, memberSizeKey,
   FIGURE_FRAME_BY_MAP, DEFAULT_FIGURE_FRAME, UNNUMBERED_TAG, memberGroupKey, noJoinSignatureFor, joinSignatureFor,
   memberOrderKey, isIndividuallyNumbered, isMemberNumberLocked, woodBeamWidthNote,
@@ -18,7 +18,8 @@ import {
 import { showsWoodBeamDepthFields, woodBeamDepthOptions, woodBeamDepthFieldView } from './woodBeamDepthInput.js';
 import { alignToOuterFace, isRigidFrameStructure, beamAxisCenterLines,
   autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, autoFillColumnAxisOffsets, axisExteriorSign, resolveLowestGraph } from './structuralAutoFill.js';
-import { addManualColumn, addManualFooting, addManualBeam } from './manualMemberAdd.js';
+import { addManualFooting, addManualBeam } from './manualMemberAdd.js';
+import { pushGraphUndo, commitManualColumnAdd, commitManualMemberRemoval } from './manualMemberCommit.js';
 import { buildExteriorSide } from './wallGate.js';
 import { findSectionEntry, sectionList, SectionShape, WOOD_SQUARE_WIDTHS } from './sectionCatalog.js';
 import { renumberMembers, floorRankOf, previewSplitTag, floorSpanLabel, assignNumbers, standardBeamSectionFor } from './memberNumbering.js';
@@ -114,15 +115,6 @@ function buildFigureCtx(entity, mapName, graph, project, isRoof = false) {
   }
   // スラブ（既定分岐）。R階伏図ではスラブの図も FL→RFL（梁と揃える）。
   return { flLabel: isRoof ? 'RFL' : 'FL' };
-}
-
-// グラフ全体のスナップショットでUndoを記録する（CL削除等の既存パターンと同じ手法）。
-function pushGraphUndo(graph, before) {
-  const after = serializeGraph(graph);
-  undoManager.push(
-    () => restoreGraph(graph, before),
-    () => restoreGraph(graph, after),
-  );
 }
 
 // 部材1件分の主要寸法サマリー（カード折りたたみ時の1行表示用）
@@ -545,10 +537,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               // graph は setDeleteConfirm 時点のもの（QA修正: mapName から再解決すると、在来木造の柱
               // グループが自階柱□に切り替わった後は別階を掴んでしまう。ステップ3・2026-09-17裁定）。
               const g = deleteConfirm.graph;
-              const before = serializeGraph(g);
-              const removeFn = REMOVE_FN_BY_MAP[deleteConfirm.mapName];
-              for (const id of deleteConfirm.ids) g[removeFn](id);
-              pushGraphUndo(g, before);
+              commitManualMemberRemoval(g, project, deleteConfirm.mapName, deleteConfirm.ids);
             }
             setDeleteConfirm(null);
           }}
@@ -1902,19 +1891,20 @@ const NewIntersectionMemberSelector = observer(({ group, graph, project, structu
     const vCL = verticalOptions.find(cl => cl.id === vId);
     const hCL = horizontalOptions.find(cl => cl.id === hId);
     if (!vCL || !hCL) return;
-    const before = serializeGraph(graph);
-    runInAction(() => {
-      if (group.mapName === 'columnMap') {
-        // 手動追加はユーザーの明示なので、主構造を問わず固定（locked）にして撤去対象から外す
-        // （手動追加材サイレント撤去回避 ステップ1。dev直下 260929_手動追加材サイレント撤去回避.md）。
-        addManualColumn(graph, project, { vCL, hCL });
-      } else {
+    if (group.mapName === 'columnMap') {
+      // 手動追加はユーザーの明示なので、主構造を問わず固定（locked）にして撤去対象から外す
+      // （手動追加材サイレント撤去回避 ステップ1。dev直下 260929_手動追加材サイレント撤去回避.md）。
+      // 追加・採番・Undo は manualMemberCommit.js に一本化している。
+      commitManualColumnAdd(graph, project, { vCL, hCL });
+    } else {
+      const before = serializeGraph(graph);
+      runInAction(() => {
         // 基礎・柱脚は主構造に関わらず常にRC造（structuralAutoFill.js の autoFillFootings と同じ理由）。
         addManualFooting(graph, project, { kind: footingKind, vCL, hCL });
-      }
-      renumberMembers(graph, project, group.mapName);
-    });
-    pushGraphUndo(graph, before);
+        renumberMembers(graph, project, group.mapName);
+      });
+      pushGraphUndo(graph, before);
+    }
     setVId(''); setHId('');
   }
 
