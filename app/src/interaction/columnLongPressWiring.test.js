@@ -99,6 +99,16 @@ test('【配線】App.jsx: handleMenuSelect の柱の分岐は startDraw より�
   assert.equal(wholeLines(menuSelect, 'if (!result.ok) setToast({ msg: result.error, key: Date.now() });'), 1);
 });
 
+test('【配線】App.jsx: 柱の削除が成功したときだけ構造リストの展開カードを閉じる（追加では閉じない・失敗では閉じない）', () => {
+  const at = menuSelect.indexOf('if (!result.ok) setToast({ msg: result.error, key: Date.now() });');
+  assert.ok(at >= 0);
+  const branchEnd = menuSelect.indexOf('return;', at);
+  assert.ok(branchEnd > at);
+  const tail = menuSelect.slice(at, branchEnd);
+  assert.equal(wholeLines(tail, 'else if (item.id === ColumnMenuItemId.DEL) deselectStructuralMembers();'), 1, 'ok の else 側・DEL のときだけ');
+  assert.equal(count(menuSelect, 'deselectStructuralMembers('), 1, '柱の分岐以外で呼ばない');
+});
+
 test('【配線】App.jsx: 柱の追加・削除の確定は runColumnMenuAction に一本化（commit を直接呼ばない）・フックへ composition を渡す', () => {
   assert.equal(count(appSrc, 'commitManualColumnAdd('), 0);
   assert.equal(count(appSrc, 'commitManualMemberRemoval('), 0);

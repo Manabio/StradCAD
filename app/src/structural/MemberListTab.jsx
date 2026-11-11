@@ -538,6 +538,8 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               // グループが自階柱□に切り替わった後は別階を掴んでしまう。ステップ3・2026-09-17裁定）。
               const g = deleteConfirm.graph;
               commitManualMemberRemoval(g, project, deleteConfirm.mapName, deleteConfirm.ids);
+              // 削除後の採番で番号が詰まり、開いていたカードのタグが別グループを指すため閉じる。
+              setExpandedKey(null);
             }
             setDeleteConfirm(null);
           }}

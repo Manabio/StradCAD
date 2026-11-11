@@ -2605,6 +2605,7 @@ const App = observer(() => {
         project,
       });
       if (!result.ok) setToast({ msg: result.error, key: Date.now() });
+      else if (item.id === ColumnMenuItemId.DEL) deselectStructuralMembers();
       return;
     }
     if (item.id === 'cl-v' || item.id === 'cl-h') {

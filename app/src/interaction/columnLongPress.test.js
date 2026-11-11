@@ -24,6 +24,7 @@ import { resolveColumnEditTarget, resolveColumnSlot } from '../structural/column
 import { deleteCenterLineWithUndo } from '../transform/centerLineOps.js';
 import { recomputeStructuralForGraph } from '../structural/structuralRecompute.js';
 import { autoFillWallBeamAxes, selfWallSegments } from '../structural/wallBeamAxes.js';
+import { renumberMembers } from '../structural/memberNumbering.js';
 import { resolveColumnLongPress, runColumnMenuAction } from './columnLongPress.js';
 import { columnAtPoint, isInsideColumnRect } from './columnPick.js';
 
@@ -299,6 +300,47 @@ test('【確定・削除】成功: 柱が消え除外集合に入り、undo で�
   undoManager.undo();
   assert.equal(env.f1.graph.columnMap.has(c.id), true);
   assert.equal(env.f1.graph.excludedColumnSlots.has(key), false);
+});
+
+test('【確定・削除】削除後に残りの柱の番号が詰まる（undo で戻る）', () => {
+  const env = makeEnv();
+  const g = env.f1.graph;
+  const mk = (sec, vCL, hCL) => g.addColumn(StructuralMaterialType.RC, sec, vCL, hCL, {});
+  const cols = [mk('RC-300x300', env.gx[0], env.gy[0]), mk('RC-400x400', env.gx[1], env.gy[1]), mk('RC-500x500', env.gx[1], env.gy[0])];
+  renumberMembers(g, env.project, 'columnMap');
+  const noOf = c => g.columnMap.get(c.id).memberNo;
+  const victim = cols.find(c => noOf(c) === 'C1');
+  assert.ok(victim, '前提: C1 の柱がある');
+  const rest = cols.filter(c => c.id !== victim.id);
+  assert.equal(JSON.stringify(rest.map(noOf).sort()), JSON.stringify(['C2', 'C3']), '前提: 残りは C2・C3');
+  const res = runColumnMenuAction(ColumnMenuItemId.DEL, { columnEdit: { graph: g, column: victim, slot: null }, currentTarget: { graph: g }, project: env.project });
+  assert.equal(res.ok, true);
+  assert.equal(JSON.stringify(rest.map(noOf).sort()), JSON.stringify(['C1', 'C2']), '残りの番号が詰まっていない');
+  undoManager.undo();
+  assert.equal(JSON.stringify(cols.map(noOf).sort()), JSON.stringify(['C1', 'C2', 'C3']));
+  assert.equal(noOf(victim), 'C1');
+});
+
+test('【確定・削除】編集先がアクティブ階でない graph（1 階）でも、その graph を採番し、アクティブ階（2 階）の memberNo は変えない', () => {
+  const env = makeEnv();
+  const mk = (g, sec, vCL, hCL) => g.addColumn(StructuralMaterialType.RC, sec, vCL, hCL, {});
+  const secs = ['RC-300x300', 'RC-400x400', 'RC-500x500'];
+  const g1 = env.f1.graph, g2 = env.f2.graph;
+  const cols1 = [mk(g1, secs[0], env.gx[0], env.gy[0]), mk(g1, secs[1], env.gx[1], env.gy[1]), mk(g1, secs[2], env.gx[1], env.gy[0])];
+  secs.forEach((s, i) => mk(g2, s, env.gx[i % 2], env.gy[i === 1 ? 1 : 0]));
+  renumberMembers(g1, env.project, 'columnMap');
+  runInAction(() => { env.project.activePlaneId = env.f2.plane.id; });
+  assert.ok(env.project.activeGraph === g2, '前提: アクティブは 2 階');
+  for (const c of g2.columnMap.values()) c.setMemberNo('ZZ'); // 2 階を採番すると変わる状態
+  const nos2 = () => JSON.stringify([...g2.columnMap.values()].map(c => c.memberNo));
+  const stale2 = nos2();
+  const noOf = c => g1.columnMap.get(c.id).memberNo;
+  const victim = cols1.find(c => noOf(c) === 'C1');
+  const rest = cols1.filter(c => c.id !== victim.id);
+  const res = runColumnMenuAction(ColumnMenuItemId.DEL, { columnEdit: { graph: g1, column: victim, slot: null }, currentTarget: { graph: g1 }, project: env.project });
+  assert.equal(res.ok, true);
+  assert.equal(JSON.stringify(rest.map(noOf).sort()), JSON.stringify(['C1', 'C2']), '編集先（1 階）が採番されていない');
+  assert.equal(nos2(), stale2, '2 階の memberNo が変わった');
 });
 
 function expectAbort(env, graph, itemId, args, error) {

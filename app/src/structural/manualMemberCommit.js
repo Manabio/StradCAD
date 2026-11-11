@@ -7,7 +7,8 @@
 // 採番・Undo の取りこぼしが片方にだけ入るため、確定はここだけに置く。
 // addManualColumn（manualMemberAdd.js）は Undo を持たない層のまま残し、Undo はここで積む。
 //
-// 構造再計算は呼ばない（呼ぶかどうかは呼び元の責務。現行のリストタブ「＋追加」と同じ）。
+// 追加・削除とも、確定の直後に同じ mapName の採番（renumberMembers）までを 1 つの action で行う。
+// 構造再計算は呼ばない（呼ぶかどうかは呼び元の責務）。
 //
 // 純モジュール: react/.jsx/store.js/snap.js を静的 import しない。
 // ================================================================
@@ -56,9 +57,12 @@ function resolvedColumnKeyOf(graph, project, column) {
   return key === columnAnchorKey(column) ? null : key;
 }
 
-/** 部材を手動削除し、Undo を 1 件積む。mapName は REMOVE_FN_BY_MAP のキー（未知は例外）。
- *  graph の該当 map に実在しない id は無視する（実在 0 件なら Undo を積まない）。
- *  採番は呼ばない（現行のリストタブの削除と同じ。採番の扱いは別段で決める）。
+/** 部材を手動削除し、同じ mapName の残りを採番し直して（renumberMembers。project の台帳・採番索引を読む）、
+ *  Undo を 1 件積む。mapName は REMOVE_FN_BY_MAP のキー（未知は例外）。
+ *  graph の該当 map に実在しない id は無視する（実在 0 件なら採番も Undo も行わない）。
+ *  構造再計算は呼ばない。採番は conformToLedger を通るため、台帳への加入待ちの部材（他カテゴリを含む）の
+ *  numberGroupId 付与が次の反映より前倒しになる（最終状態は同じ）。採番はこの graph だけで、他階の memberNo は
+ *  次の全階反映まで古いまま（追加側と同じ）。
  *  柱（'columnMap'）は、素の CL の組で立っていて（袖柱・オフセット柱でない）自動補完が同じ位置に立てるアンカー
  *  （resolveManualColumnAnchors。在来木造は梁芯の組など）のキーが柱自身のキーと違うとき、そのキーも除外集合へ
  *  記録する——removeColumn が記録するのは柱自身のキー（中心線の組）だけで、梁芯が後から生えた位置では
@@ -73,8 +77,11 @@ export function commitManualMemberRemoval(graph, project, mapName, ids) {
   const before = serializeGraph(graph);
   // 削除前に解決後のキーを採る（柱が消えると CL の組が引けなくなる）。
   const resolvedKeys = mapName === 'columnMap' ? targets.map(id => resolvedColumnKeyOf(graph, project, graph.columnMap.get(id))).filter(k => k != null) : [];
-  for (const id of targets) graph[removeFn](id);
-  if (resolvedKeys.length > 0) runInAction(() => { for (const k of resolvedKeys) graph.excludedColumnSlots.add(k); });
+  runInAction(() => {
+    for (const id of targets) graph[removeFn](id);
+    for (const k of resolvedKeys) graph.excludedColumnSlots.add(k);
+    renumberMembers(graph, project, mapName);
+  });
   pushGraphUndo(graph, before);
   return targets.length;
 }

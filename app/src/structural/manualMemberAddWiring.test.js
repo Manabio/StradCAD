@@ -47,6 +47,17 @@ test('【配線】MemberListTabは柱の追加・部材の削除・Undo記録を
   assert.equal(countWholeLines(stripped, "import { pushGraphUndo, commitManualColumnAdd, commitManualMemberRemoval } from './manualMemberCommit.js';"), 1, 'import 行');
 });
 
+// 削除後の採番で番号が詰まり、展開中カードのキー（mapName:タグ）が別グループを指すため、削除確認の OK 分岐で閉じる。
+test('【配線】MemberListTab: 削除確認の OK 分岐で commitManualMemberRemoval の後に setExpandedKey(null) を呼ぶ', () => {
+  const commitLine = 'commitManualMemberRemoval(g, project, deleteConfirm.mapName, deleteConfirm.ids);';
+  const start = stripped.indexOf(commitLine);
+  assert.ok(start >= 0, '削除の呼び出し行が無い');
+  const end = stripped.indexOf('setDeleteConfirm(null);', start);
+  assert.ok(end > start, '削除の後の setDeleteConfirm(null) が無い');
+  const after = stripped.slice(start + commitLine.length, end);
+  assert.equal(countWholeLines(after, 'setExpandedKey(null);'), 1, '削除の後（確認ダイアログを閉じる前）に 1 行で呼ぶ');
+});
+
 test('【配線】MemberListTabはaddManualFooting/addManualBeamを各1回だけ、引数まで固定した形で呼ぶ', () => {
   assert.equal(countWholeLines(stripped, 'addManualFooting(graph, project, { kind: footingKind, vCL, hCL });'), 1, 'addManualFooting(graph, project, { kind: footingKind, vCL, hCL }); の行は1つのはず');
   assert.equal(countWholeLines(stripped, 'addManualBeam(graph, project, { axisCL, isVertical, clStart, clEnd });'), 1, 'addManualBeam(graph, project, { axisCL, isVertical, clStart, clEnd }); の行は1つのはず');
