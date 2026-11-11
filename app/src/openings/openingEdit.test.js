@@ -16,10 +16,10 @@ import {
   materialGlassAfterFixtureChange, validateOpeningEdit, noteAfterSubTypeChange, openDirForMechanism,
   defaultSwingSideFor, swingSideAfterSubTypeChange, flippedHingeSides, flippedSwingSide,
   fixtureTypeAfterSubTypeChange, fixtureSymbolOptions, resolveRefOffsetEdit, setOpeningGeometryListener,
-  beginOpeningFieldUndo, endOpeningFieldUndo, resolveWidthEdit,
+  beginOpeningFieldUndo, endOpeningFieldUndo, resolveWidthEdit, resolveDoorWidthEdit, resolveDoorWidthInput, doorWidthText,
 } from './openingEdit.js';
 import { closedAngleFor, leafOpenAngle, angleVectors } from './openingPlanSymbolGeometry.js';
-import { outsetSlideLayout } from './slideOutset.js';
+import { outsetSlideLayout, slideDoorWidth } from './slideOutset.js';
 import { exteriorSideDir } from './openingGeometry.js';
 
 function makePlaneGraph(planeId = 'p1') {
@@ -420,6 +420,78 @@ test('S3c: resolveWidthEdit は上限へ丸め、外付け引き戸の W が 50 
   assert.equal(validateOpeningEdit(opening, graph, { width: 51, refOffset: opening.refOffset }), null);
   runInAction(() => { opening.subType = 'singleSwing'; });
   assert.deepEqual(resolveWidthEdit(opening, graph, wall, 30), { value: 30, message: null }, '普通の建具に下限はない');
+});
+
+test('S8: resolveDoorWidthEdit は DW（扉幅）から W＝2DW−50 を作って間口編集の規則へ通し、上限の文言だけ DW で出す', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+  const { opening } = placeOpeningWithDefaults(graph, makeProject(), wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'sliding');
+  assert.deepEqual(resolveDoorWidthEdit(opening, graph, wall, 800), { value: 1550, message: null }, 'DW 800 → W 1550');
+  assert.equal(slideDoorWidth(1550), 800, '表示 800');
+  assert.deepEqual(resolveDoorWidthEdit(opening, graph, wall, 800.5), { value: 1551, message: null });
+  assert.equal(slideDoorWidth(1551), 800.5, 'W 1551 → 表示 800.5');
+  // 上限 W 2940 → DW 1495。超える DW は上限の W を保存し、文言は上限の W から換算した DW
+  assert.deepEqual(resolveDoorWidthEdit(opening, graph, wall, 5000), { value: 2940, message: '扉幅の上限 1495mm に丸めました' });
+  assert.deepEqual(resolveDoorWidthEdit(opening, graph, wall, 1495), { value: 2940, message: null });
+});
+
+test('【失敗系】S8: resolveDoorWidthEdit は DW 50 以下・0・非数を拒否し、上限が 50 以下（>0）なら丸めず拒否', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+  const { opening } = placeOpeningWithDefaults(graph, makeProject(), wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'sliding');
+  const bad = { value: null, message: ERR_SLIDE_WIDTH_TOO_SMALL };
+  assert.deepEqual(resolveDoorWidthEdit(opening, graph, wall, 50), bad, 'DW 50 → W 50');
+  assert.deepEqual(resolveDoorWidthEdit(opening, graph, wall, 30), bad, 'DW 30 → W 10');
+  assert.deepEqual(resolveDoorWidthEdit(opening, graph, wall, 0), bad);
+  assert.deepEqual(resolveDoorWidthEdit(opening, graph, wall, NaN), bad);
+  assert.deepEqual(resolveDoorWidthEdit(opening, graph, wall, Infinity), bad);
+  assert.deepEqual(resolveDoorWidthEdit(opening, graph, wall, 50.5), { value: 51, message: null }, 'W 51 は通る（下限は W 50 超）');
+  // 隣接開口で上限が 50 以下（間口編集の既存の失敗系と同じ構成）
+  const g2 = makeWallGraph(3000, { isExteriorWall: false });
+  g2.graph.addOpening(g2.wall.axisCL, 1, false, g2.wall.clStart, 722.5, 1445, OpeningCategory.FITTING, 'singleSwing', {});
+  g2.graph.addOpening(g2.wall.axisCL, 1, false, g2.wall.clStart, 2277.5, 1445, OpeningCategory.FITTING, 'singleSwing', {});
+  const slide = g2.graph.addOpening(g2.wall.axisCL, 1, false, g2.wall.clStart, 1500, 40, OpeningCategory.FITTING, 'sliding', { hingeSide: -1, swingSide: 1 });
+  assert.deepEqual(resolveDoorWidthEdit(slide, g2.graph, g2.wall, 500), { value: null, message: ERR_SLIDE_WIDTH_TOO_SMALL }, '上限 50 以下は丸めず拒否');
+});
+
+test('【失敗系】S8: resolveDoorWidthEdit は上限 0 以下なら壁の外＝ERR_OPENING_OUT_OF_WALL・隣接で埋まる＝ERR_OPENING_OVERLAP を value null で返す', () => {
+  const g1 = makeWallGraph(3000, { isExteriorWall: false });
+  const outside = g1.graph.addOpening(g1.wall.axisCL, 1, false, g1.wall.clStart, 3500, 800, OpeningCategory.FITTING, 'sliding', { hingeSide: -1, swingSide: 1 });
+  assert.deepEqual(resolveDoorWidthEdit(outside, g1.graph, g1.wall, 500), { value: null, message: ERR_OPENING_OUT_OF_WALL });
+  const g2 = makeWallGraph(3000, { isExteriorWall: false });
+  g2.graph.addOpening(g2.wall.axisCL, 1, false, g2.wall.clStart, 800, 1600, OpeningCategory.FITTING, 'singleSwing', {});
+  g2.graph.addOpening(g2.wall.axisCL, 1, false, g2.wall.clStart, 2200, 1600, OpeningCategory.FITTING, 'singleSwing', {});
+  const slide = g2.graph.addOpening(g2.wall.axisCL, 1, false, g2.wall.clStart, 1500, 800, OpeningCategory.FITTING, 'sliding', { hingeSide: -1, swingSide: 1 });
+  assert.deepEqual(resolveDoorWidthEdit(slide, g2.graph, g2.wall, 500), { value: null, message: ERR_OPENING_OVERLAP });
+});
+
+test('S8: doorWidthText は W→DW の表示文字列（整数はそのまま・非整数は小数 1 桁・W≤50 は空）', () => {
+  assert.equal(doorWidthText(1550), '800');
+  assert.equal(doorWidthText(1551), '800.5');
+  assert.equal(doorWidthText(1550.66), '800.3');
+  assert.equal(doorWidthText(50), '');
+});
+
+test('S8: resolveDoorWidthInput は DW を 0.5 刻みへ丸めて確定し、空欄・表示のままの文字は確定しない（undo エントリも積まない）', () => {
+  const { graph, wall } = makeWallGraph(3000, { isExteriorWall: false });
+  const project = makeProject();
+  const { opening } = placeOpeningWithDefaults(graph, project, wall, { x: 1500, y: 200 }, OpeningCategory.FITTING, 'sliding');
+  assert.deepEqual(resolveDoorWidthInput(opening, graph, wall, '800.33'), { value: 1551, message: null }, '800.33→800.5→W 1551');
+  runInAction(() => { opening.width = 1551; });
+  assert.equal(doorWidthText(opening.width), '800.5');
+  const none = { value: null, message: null };
+  assert.deepEqual(resolveDoorWidthInput(opening, graph, wall, ''), none, '空欄');
+  assert.deepEqual(resolveDoorWidthInput(opening, graph, wall, '800.5'), none, '表示のまま');
+  const before = undoManager.peekUndo();
+  beginOpeningFieldUndo(graph, project, opening);
+  const r = resolveDoorWidthInput(opening, graph, wall, '800.5');
+  if (r.value !== null) runInAction(() => { opening.width = r.value; });
+  endOpeningFieldUndo(graph, project, opening);
+  assert.equal(undoManager.peekUndo(), before, '同じ文字なら undo を積まない');
+  const w = resolveDoorWidthInput(opening, graph, wall, '900');
+  beginOpeningFieldUndo(graph, project, opening);
+  runInAction(() => { opening.width = w.value; });
+  endOpeningFieldUndo(graph, project, opening);
+  assert.notEqual(undoManager.peekUndo(), before, '変えれば積む（上の検査が空振りでない対）');
+  assert.deepEqual(resolveDoorWidthInput(opening, graph, wall, '30'), { value: null, message: ERR_SLIDE_WIDTH_TOO_SMALL }, '拒否は value null');
 });
 
 test('【失敗系】S3c: 間口編集の上限が 50 以下（隣との間が狭い）なら丸めず確定しない', () => {

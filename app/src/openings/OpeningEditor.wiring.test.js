@@ -69,6 +69,21 @@ test('【不変条件】S6a: 詳細図の select は openingDetailRefSelects の
   assert.ok(/opening\.detailRefs\s*=\s*next/.test(codeOnly), 'detailRefs へ代入していない');
 });
 
+test('【不変条件】S8: 扉幅欄は outsetSlideLayout 非 null（外付け引き戸）のときだけ出し、確定は resolveDoorWidthEdit 経由・undo は begin/end で括る。姿図の幅編集は resolveWidthEdit のまま', () => {
+  assert.ok(/const isOutsetSlide = !!wall && outsetSlideLayout\(opening, entry\?\.mechanism, wall\) !== null;/.test(codeOnly), '表示条件が outsetSlideLayout の非 null でない');
+  const block = codeOnly.match(/\{isOutsetSlide && \(([\s\S]*?)\n {6}\)\}/);
+  assert.ok(block, '扉幅欄が isOutsetSlide && ( ... ) のブロックに入っていない');
+  assert.ok(block[1].includes('扉幅(mm)') && block[1].includes('建具幅(mm)'), '2 行の見出しがブロックの内側に無い');
+  assert.equal((codeOnly.match(/扉幅\(mm\)/g) ?? []).length, 1, '扉幅欄がブロック外にもある');
+  assert.ok(/onFocus=\{\(\) => beginOpeningFieldUndo\(graph, project, opening\)\}/.test(block[1]), 'onFocus で beginOpeningFieldUndo していない');
+  assert.ok(/onBlur=\{onDoorWidthBlur\}/.test(block[1]), '扉幅の input（ブロックの内側）に onBlur={onDoorWidthBlur} が無い');
+  const blur = codeOnly.match(/const onDoorWidthBlur = \(e\) => \{([\s\S]*?)\n {2}\};/);
+  assert.ok(blur, 'onDoorWidthBlur が見つからない');
+  assert.ok(/openingTagOf\(opening, project\)[\s\S]*resolveDoorWidthInput\([\s\S]*endOpeningFieldUndo\(graph, project, opening\);[\s\S]*notifyIfTagChanged\(beforeTag\)/.test(blur[1]), '確定が openingTagOf→resolveDoorWidthInput→endOpeningFieldUndo→notifyIfTagChanged の順になっていない');
+  assert.ok(/e\.target\.value = doorWidthText\(opening\.width\)/.test(blur[1]), 'W が変わらなかったときの表示の書き戻しが無い');
+  assert.ok(/dim\.target === 'width' && wall\) \{\s*const r = resolveWidthEdit\(/.test(codeOnly), '姿図の幅編集が resolveWidthEdit（W）でなくなった');
+});
+
 test('【不変条件】S6a: R16 ボタンは commitEdit 経由で detailDimensionsToCopy の値を書き、値が無ければ disabled。自動の書き戻しは無い', () => {
   assert.ok(/onCopyDetailDimensions\s*=\s*\(\)\s*=>\s*\{[\s\S]*?commitEdit\(/.test(codeOnly), 'R16 が commitEdit を通っていない');
   assert.ok(/disabled=\{detailDimensions == null\}/.test(codeOnly), '値が無いときに disabled にしていない');

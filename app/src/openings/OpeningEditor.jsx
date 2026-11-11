@@ -12,8 +12,9 @@ import { AutoScaledFigure } from '../structural/sectionFigure/AutoScaledFigure.j
 import {
   beginOpeningFieldUndo, endOpeningFieldUndo, withOpeningUndo, resolveRefOffsetEdit, removeOpeningWithUndo,
   materialGlassAfterFixtureChange, noteAfterSubTypeChange, swingSideAfterSubTypeChange,
-  flippedHingeSides, flippedSwingSide, fixtureTypeAfterSubTypeChange, fixtureSymbolOptions, resolveWidthEdit,
+  flippedHingeSides, flippedSwingSide, fixtureTypeAfterSubTypeChange, fixtureSymbolOptions, resolveWidthEdit, resolveDoorWidthInput, doorWidthText,
 } from './openingEdit.js';
+import { outsetSlideLayout } from './slideOutset.js';
 import { openingTagOf, fixtureSymbolOf, effectiveFrameProjection } from './openingNumbering.js';
 import { openingDetailRefSelects, detailRefsAfterSelect, detailDimensionsToCopy, frameDetailSlotsFor } from './openingDetailRefsEdit.js';
 import { OPENING_DETAIL_REF_TEXT } from '../catalog/catalogMaintenance.js';
@@ -36,6 +37,7 @@ const readonlyStyle = { ...inputStyle, background: '#f1f5f9', color: '#475569' }
 
 // 建具モードパネル下段: 選択中建具の姿図＋建具表フォーム。StairPanel.jsx の構成を踏襲。
 // 幅・高さ・窓台高さは姿図中のクリック編集寸法（onEditDim）に一本化し、フォームには置かない。
+// 例外: 外付け引き戸だけは「扉幅」欄を置く（姿図の寸法は建具幅 W の線なので、DW は別欄で編集する）。
 export const OpeningEditor = observer(function OpeningEditor({ graph, project, opening, mode, onToast }) {
   const beforeOffsetRef = useRef(null);
 
@@ -195,6 +197,22 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
     notifyIfTagChanged(beforeTag);
   };
 
+  // 外付け引き戸（outsetSlideLayout 非 null＝ホストが外壁でない）だけ「扉幅」欄を出す。確定規則は openingEdit.js
+  // resolveDoorWidthInput（空欄・表示のままの文字は確定しない／DW を 0.5 刻みへ）→ resolveDoorWidthEdit（W＝2DW−50 を
+  // 間口編集と同じ判定へ）。姿図の寸法クリック編集（onEditDim）は W のまま。
+  const isOutsetSlide = !!wall && outsetSlideLayout(opening, entry?.mechanism, wall) !== null;
+  // 非制御 input（defaultValue）にする理由: onChange で W へ書くと入力途中（例 "8"）で W≤50 になり欄ごと消えるため、確定は blur だけ。
+  // その代わり W が変わらなかった blur（空欄・拒否・同値）では表示を実際の DW の文字へ書き戻す（key は W だけでは再初期化されない）。
+  const onDoorWidthBlur = (e) => {
+    const beforeTag = openingTagOf(opening, project);
+    const r = resolveDoorWidthInput(opening, graph, wall, e.target.value);
+    if (r.message) onToast?.(r.message);
+    if (r.value !== null && r.value !== opening.width) runInAction(() => { opening.width = r.value; });
+    e.target.value = doorWidthText(opening.width);
+    endOpeningFieldUndo(graph, project, opening);
+    notifyIfTagChanged(beforeTag);
+  };
+
   const fieldUndoProps = {
     onFocus: () => beginOpeningFieldUndo(graph, project, opening),
     onBlur:  endFieldWithToast,
@@ -233,6 +251,21 @@ export const OpeningEditor = observer(function OpeningEditor({ graph, project, o
           {fixtureSymbolOptions(opening.category, entry?.mechanism, fixtureSymbolOf(opening)).map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
         </select>
       </div>
+
+      {isOutsetSlide && (
+        <>
+          <div style={rowStyle}>
+            <span style={labelStyle}>扉幅(mm)</span>
+            <input type="number" style={inputStyle} key={`dw:${opening.id}:${opening.width}`}
+              defaultValue={doorWidthText(opening.width)}
+              onFocus={() => beginOpeningFieldUndo(graph, project, opening)} onBlur={onDoorWidthBlur} />
+          </div>
+          <div style={rowStyle}>
+            <span style={labelStyle}>建具幅(mm)</span>
+            <input type="text" readOnly style={readonlyStyle} value={String(opening.width)} />
+          </div>
+        </>
+      )}
 
       <div style={rowStyle}>
         <span style={labelStyle}>種別</span>

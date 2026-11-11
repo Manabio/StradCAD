@@ -24,7 +24,7 @@ import {
 import { findHostWall, validateOpeningPlacement, maxOpeningWidthAt, findOpeningsOnWall, swingSideTowardPerp, exteriorSideDir } from './openingGeometry.js';
 import { renumberOpenings } from './openingNumbering.js';
 import { openingRefOffsetRange, clampRefOffset } from './openingMove.js';
-import { footprintResolver, openingFootprintExtraHalf, openingEditExtraHalfOf, openingMinWidthOf } from './slideOutset.js';
+import { footprintResolver, openingFootprintExtraHalf, openingEditExtraHalfOf, openingMinWidthOf, slideDoorWidth } from './slideOutset.js';
 import { SLIDE_OUTSET_WIDTH_DEDUCT_MM } from '../core/constants.js';
 import { ERR_OPENING_OUT_OF_WALL, ERR_OPENING_OVERLAP, ERR_SLIDE_WIDTH_TOO_SMALL } from '../error.js';
 
@@ -341,6 +341,38 @@ export function resolveWidthEdit(opening, graph, wall, v) {
   if (Math.min(v, maxWidth) <= openingMinWidthOf(opening, wall)) return { value: null, message: ERR_SLIDE_WIDTH_TOO_SMALL };
   if (v > maxWidth) return { value: maxWidth, message: `間口の上限 ${maxWidth}mm に丸めました` };
   return { value: v, message: null };
+}
+
+/**
+ * 外付け引き戸の「扉幅」欄（DW）の確定規則。W＝2·DW−SLIDE_OUTSET_WIDTH_DEDUCT_MM を resolveWidthEdit に渡す
+ * （上限・下限・重なりの判定は 1 か所のまま）。value は代入する建具幅 W（DW ではない）。上限で丸めたときの
+ * 文言だけ、丸め後の W を DW へ換算して出す（W の整数化により DW は x.5 になりうる＝そのまま保存）。
+ * 非数・0 以下は拒否（ERR_SLIDE_WIDTH_TOO_SMALL）。
+ * @returns {{ value:number|null, message:string|null }}
+ */
+export function resolveDoorWidthEdit(opening, graph, wall, dw) {
+  if (!Number.isFinite(dw) || dw <= 0) return { value: null, message: ERR_SLIDE_WIDTH_TOO_SMALL };
+  const r = resolveWidthEdit(opening, graph, wall, 2 * dw - SLIDE_OUTSET_WIDTH_DEDUCT_MM);
+  if (r.value === null || r.message === null) return r;
+  return { value: r.value, message: `扉幅の上限 ${(r.value + SLIDE_OUTSET_WIDTH_DEDUCT_MM) / 2}mm に丸めました` };
+}
+
+/** 扉幅欄の表示文字列（建具幅 W から。整数はそのまま・非整数は小数 1 桁）。DW が引けない（W≤50）ときは空文字。 */
+export function doorWidthText(width) {
+  const dw = slideDoorWidth(width);
+  if (dw === null) return '';
+  return Number.isInteger(dw) ? String(dw) : dw.toFixed(1);
+}
+
+/**
+ * 扉幅欄に入力された文字の確定規則。空欄・表示していた文字のままは確定しない（value null・message null）。
+ * 違えば DW を 0.5 刻みに丸めてから resolveDoorWidthEdit へ（W の 0.5 刻みと整合。800.33→800.5→W 1551）。
+ * @returns {{ value:number|null, message:string|null }}
+ */
+export function resolveDoorWidthInput(opening, graph, wall, raw) {
+  if (raw === '' || raw === doorWidthText(opening.width)) return { value: null, message: null };
+  const dw = Math.abs(Number(raw)) || 0; // 数値入力は絶対値化（幅・高さ・位置の統一規約）
+  return resolveDoorWidthEdit(opening, graph, wall, Math.round(dw * 2) / 2);
 }
 
 /**
