@@ -32,7 +32,7 @@ import {
 import {
   isFittingDoc, isPartlessFittingDoc, docOfLibraryEntry, fittingEntryOf, selectFittingPart, addFittingPart, removeFittingPart, setFittingLabel,
   availableFittingRoles, switchToFitting, duplicateFittingDoc, isDocDirty, afterSaveFittingDoc, fittingValidation, fittingSetErrorTexts,
-  fittingPartRows, fittingSaveBlockers,
+  fittingPartRows, fittingSaveBlockers, setFittingProvenanceField, fittingAssemblyPrimitives, assemblyFitDims, ASSEMBLY_FIT_FORM, ASSEMBLY_VIEW, importIntoPart,
 } from './detailHelperFitting.js';
 import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
 import { isPdfBytes } from '../detail/pdf/pdfImport.js';
@@ -461,7 +461,10 @@ export function DetailHelperPanel({ onClose }) {
   const { form, history, prevEntry, set: fittingSet, partIndex } = doc;
   const fitting = isFittingDoc(doc);
   const partless = isPartlessFittingDoc(doc); // 一式で部品が 0 個（部品の編集は受けない）
-  const importCopyNotice = fitting ? DETAIL_HELPER_MESSAGES.fittingNoImportCopy : null; // 一式のとき DXF／PDF は部品へ写せない（写し先は C8）
+  // 一式のとき DXF／PDF の写し先は選んでいる部品（C8）。部品が無い・読み取り専用の間は写せない
+  const importCopyNotice = !fitting ? null : partless ? DETAIL_HELPER_MESSAGES.fittingSelectPart : doc.readOnly ? DETAIL_HELPER_TEXT.builtinReadOnly : null;
+  const [assemblyOn, setAssemblyOn] = useState(false); // 一式の中央ペイン: false＝選んでいる部品・true＝全体（C8）
+  const [assemblyView, setAssemblyView] = useState(ASSEMBLY_VIEW.PLAN);
   const penError = doc.penError ?? null;
   const rootRef = useRef(null);
   const [penText, setPenText] = useState('');
@@ -503,11 +506,22 @@ export function DetailHelperPanel({ onClose }) {
   const showDxf = leftTab === DETAIL_HELPER_TABS.DXF;
   const imported = pdf ?? dxf;
   const dxfPrims = useMemo(() => (imported?.scene ? dxfPreviewPrimitives(imported) : []), [imported]);
-  const shownPrims = showDxf ? dxfPrims : primitives;
+  // 一式の全体プレビュー（C8）。試し込みの寸法は外付け引き戸の部品と同じ欄（選んでいる部品の分類に依らない）
+  const wholeOn = fitting && assemblyOn && !showDxf;
+  const assemblyDims = useMemo(
+    () => ({ ...assemblyFitDims(previewWallThicknessFor(null, materialList)), ...fitOverrides }),
+    [materialList, fitOverrides],
+  );
+  const assembly = useMemo(
+    () => (wholeOn ? fittingAssemblyPrimitives({ form, set: fittingSet, partIndex }, assemblyDims, { view: assemblyView }) : null),
+    [wholeOn, form, fittingSet, partIndex, assemblyDims, assemblyView],
+  );
+  const shownPrims = showDxf ? dxfPrims : wholeOn ? assembly.primitives : primitives;
   // プレビューのズーム／パン（null＝全体）。図読込みは scene、ペン入力は下書きの key に結び付き、単位変更・再抽出・別の下書きで全体へ戻る。
   // 図読込みの鍵は読込みごとのトークン viewEpoch（単位変更・読み直しで変わり、レイヤ切替では保つ。PDF は scene）。
   // レイヤ切替で図の範囲と全体の縮尺が変わるので、残した view は reconcileView で新しい図に合わせる。
-  const viewOwner = showDxf ? (imported?.viewEpoch ?? imported?.scene) : form.key;
+  // 一式の全体は一式のキー＋向きに結び付く（部品を切り替えても全体の view を保つ）
+  const viewOwner = showDxf ? (imported?.viewEpoch ?? imported?.scene) : wholeOn ? `${fittingSet.key}:${assemblyView}` : form.key;
   // プレビューの枠＝中央ペインの描画域の内寸（ResizeObserver で測る）。測定前・0 以下の軸は既定の枠。枠が変わっても view は保ち、
   // 全体の縮尺が変わるので reconcileView が全体以下なら全体へ・範囲外なら寄せる。
   const previewRef = useRef(null);
@@ -532,7 +546,7 @@ export function DetailHelperPanel({ onClose }) {
   const setShownView = next => (showDxf ? setImportView(bindView(viewOwner, next)) : setDraftView(bindView(viewOwner, next)));
   const figureSvgRef = useRef(null);
   // 基準点を指す（ペン入力タブだけ。試し込み中・読み取り専用・忙しいときは使えない＝モードも解く）
-  const canBasePoint = !showDxf && !fitOn && !doc.readOnly && !busy && shownPrims.length > 0;
+  const canBasePoint = !showDxf && !wholeOn && !fitOn && !doc.readOnly && !busy && shownPrims.length > 0;
   // モードは下書きの key に結び付く（別の下書きへ移ると解ける）。使えない状態の間は off として扱う。
   const basePointMode = basePointFor === form.key && canBasePoint;
   const setBasePointMode = on => setBasePointFor(on ? form.key : null);
@@ -552,7 +566,9 @@ export function DetailHelperPanel({ onClose }) {
   }
   const pickRectNow = showDxf ? activePickRect(imported) : null;
   const canFitRect = !busy && !!pickRectNow && shownPrims.length > 0;
-  const provenanceNotice = provenanceNoticeOf(form);
+  // 出所は一式では最上位（fittingSet.provenance。部品の本体は出所を持てない＝R10）を表示・編集する
+  const shownProvenance = fitting ? fittingSet.provenance : form.extra?.provenance;
+  const provenanceNotice = provenanceNoticeOf({ extra: { provenance: shownProvenance } });
   // 一式は一式全体を検証する（選んでいる部品の編集を含む）。部品のエラーは行のバッジ、一式全体のエラーは一覧の上へ振り分ける。
   const result = useMemo(
     () => (fittingSet ? fittingValidation({ form, set: fittingSet, partIndex }) : validation(form)),
@@ -611,16 +627,18 @@ export function DetailHelperPanel({ onClose }) {
   }
 
   // ---- 建具一式の部品（判断は ui/detailHelperFitting.js） ----
+  // 部品を切り替えると試し込みの寸法は既定へ戻す（部品ごとの欄が違うため）。全体表示中は寸法が部品に依らないので保つ（ズームと同じ）
+  const resetFitOverrides = () => { if (!wholeOn) setFitOverrides({}); };
   function handleSelectPart(index) {
     setDoc(d => clearPenError(selectFittingPart(d, index)));
-    setFitOverrides({});
+    resetFitOverrides();
   }
   function handleAddPart(role) {
     if (!role || readOnly) return;
     const { error } = addFittingPart(doc, role); // エラー表示だけ今の doc で判定し、状態の更新は関数形（連打でも取りこぼさない）
     if (error) { setMessage({ text: error, isError: true }); return; }
     setDoc(d => (d.readOnly || !d.set ? d : (addFittingPart(d, role).doc ?? d)));
-    setFitOverrides({});
+    resetFitOverrides();
     setMessage(null);
   }
   // 部品の削除は確認してから（部品の図が丸ごと消える）。確認を出している間の編集を取り込まないよう、実行時の doc で作り直す。
@@ -632,7 +650,7 @@ export function DetailHelperPanel({ onClose }) {
         { label: DETAIL_HELPER_MESSAGES.confirmDeleteButton, value: 'ok', primary: true, danger: true },
         { label: DETAIL_HELPER_MESSAGES.cancelButton, value: 'cancel' },
       ],
-      onSelect: v => { setConfirm(null); if (v === 'ok') { setDoc(d => removeFittingPart(d, index)); setFitOverrides({}); } },
+      onSelect: v => { setConfirm(null); if (v === 'ok') { setDoc(d => removeFittingPart(d, index)); resetFitOverrides(); } },
     });
   }
   // 分類の「分類」select。建具一式は新規の空の下書きからだけ選べる（Q-C5b）。一式の doc の分類は変えられない。
@@ -729,9 +747,23 @@ export function DetailHelperPanel({ onClose }) {
   }
   // 選んだ成分を新規下書きへ写す（未保存の下書きがあれば破棄の確認を通す）。DXF・PDF 共通。
   function handleDxfCopy() {
-    if (fitting) return;
     const r = draftFromDxf({ dxf: imported, idFactory: newKeyPart });
     if (r.error) { setDxfMessage({ text: r.error, isError: true }); return; }
+    if (fitting) {
+      // 一式: 写し先は選んでいる部品（分類は役割の分類・キーは合成キーのまま）。未保存の編集があれば破棄の確認を通す
+      const into = importIntoPart(doc, r.form);
+      if (into.error) { setDxfMessage({ text: into.error, isError: true }); return; }
+      guardDiscard(() => {
+        setDoc(into.doc);
+        setAssemblyOn(false); // 写した結果（選んだ部品）はペンタブの部品表示で見せる
+        const { basePoint } = r;
+        setDraftView(bindView(into.doc.form.key, draftViewOfImport(shownView, basePoint)));
+        setLeftTab(DETAIL_HELPER_TABS.PEN);
+        setDxfMessage(null);
+        setMessage(null);
+      });
+      return;
+    }
     guardDiscard(() => {
       replaceDoc(draftDocOf(r.form));
       // 拡大した場所のまま開く: 下書きの座標は基準点 P が原点（offsetMm＝start−P）なので、view の中心から P を引く
@@ -1027,7 +1059,20 @@ export function DetailHelperPanel({ onClose }) {
         {/* 中央: プレビューと試し込み */}
         <section className="dthlp-pane dthlp-center">
           <div className="dthlp-toolbar">
-            {!showDxf && (<>
+            {!showDxf && fitting && (<>
+              <button className={`dthlp-btn${wholeOn ? '' : ' dthlp-btn--active'}`} onClick={() => setAssemblyOn(false)}>{DETAIL_HELPER_TEXT.assemblyPart}</button>
+              <button className={`dthlp-btn${wholeOn ? ' dthlp-btn--active' : ''}`} onClick={() => setAssemblyOn(true)}>{DETAIL_HELPER_TEXT.assemblyWhole}</button>
+            </>)}
+            {wholeOn && (<>
+              <button className={`dthlp-btn${assemblyView === ASSEMBLY_VIEW.PLAN ? ' dthlp-btn--active' : ''}`} onClick={() => setAssemblyView(ASSEMBLY_VIEW.PLAN)}>{DETAIL_HELPER_TEXT.assemblyPlan}</button>
+              <button className={`dthlp-btn${assemblyView === ASSEMBLY_VIEW.UP ? ' dthlp-btn--active' : ''}`} onClick={() => setAssemblyView(ASSEMBLY_VIEW.UP)}>{DETAIL_HELPER_TEXT.assemblyUp}</button>
+              {fitDimFieldsFor(ASSEMBLY_FIT_FORM).map(({ field, label }) => (
+                <button key={field} className="dthlp-btn dthlp-btn--small" onClick={() => openNumpad({ kind: 'fit', field }, assemblyDims[field], label)}>
+                  {fitDimButtonLabel(label, assemblyDims[field])}
+                </button>
+              ))}
+            </>)}
+            {!showDxf && !wholeOn && (<>
               <button className={`dthlp-btn${fitOn ? '' : ' dthlp-btn--active'}`} onClick={() => setFitOn(false)}>{DETAIL_HELPER_TEXT.fitOff}</button>
               <button className={`dthlp-btn${fitOn ? ' dthlp-btn--active' : ''}`} onClick={() => { setFitOn(true); setBasePointFor(null); }}>{DETAIL_HELPER_TEXT.fitOn}</button>
               {fitOn && fitFields.map(({ field, label }) => (
@@ -1052,8 +1097,9 @@ export function DetailHelperPanel({ onClose }) {
             <span className="dthlp-hint">{showDxf ? DETAIL_HELPER_TEXT.gestureHint : DETAIL_HELPER_TEXT.gestureHintPen}</span>
             {basePointMode && <span className="dthlp-hint">{basePointMiss ? DETAIL_HELPER_TEXT.basePointMiss : DETAIL_HELPER_TEXT.basePointHint}</span>}
           </div>
-          {!showDxf && fitOn && wallNotice && <div className="dthlp-error">{wallNotice}</div>}
-          {!showDxf && fitted?.error && <div className="dthlp-error">{fitted.error.message}</div>}
+          {!showDxf && (fitOn || wholeOn) && wallNotice && <div className="dthlp-error">{wallNotice}</div>}
+          {!showDxf && !wholeOn && fitted?.error && <div className="dthlp-error">{fitted.error.message}</div>}
+          {wholeOn && assembly.failures.map(f => <div key={f.role} className="dthlp-error">{f.text}</div>)}
           <div className="dthlp-preview" ref={previewRef}>
             {shownPrims.length === 0 ? (
               <div className="dthlp-empty">{showDxf ? DETAIL_HELPER_TEXT.dxfEmptyPreview : DETAIL_HELPER_MESSAGES.emptyPreview}</div>
@@ -1063,7 +1109,7 @@ export function DetailHelperPanel({ onClose }) {
                 maxWidth={frame.width}
                 maxHeight={frame.height}
                 fill
-                onEditDim={showDxf || fitOn || readOnly ? undefined : (dim, v) => edit(f => setMoveLen(f, dim.editKey, String(v)))}
+                onEditDim={showDxf || wholeOn || fitOn || readOnly ? undefined : (dim, v) => edit(f => setMoveLen(f, dim.editKey, String(v)))}
                 view={shownView}
                 svgRef={figureSvgRef}
                 overlay={(t, info) => (
@@ -1151,8 +1197,10 @@ export function DetailHelperPanel({ onClose }) {
                 [DXF_PROVENANCE_FIELDS.LICENSE_NOTE, DETAIL_HELPER_TEXT.dxfLicense],
               ].map(([field, label]) => (
                 <label key={field} className="dthlp-row">{label}
-                  <input className="dthlp-input" value={form.extra.provenance[field] ?? ''}
-                    onChange={e => edit(f => setProvenanceField(f, field, e.target.value), { track: false })} />
+                  <input className="dthlp-input" value={shownProvenance[field] ?? ''}
+                    onChange={e => (fitting
+                      ? setDoc(d => (d.readOnly ? d : setFittingProvenanceField(d, field, e.target.value)))
+                      : edit(f => setProvenanceField(f, field, e.target.value), { track: false }))} />
                 </label>
               ))}
             </div>

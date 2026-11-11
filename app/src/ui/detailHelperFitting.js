@@ -13,16 +13,21 @@
 
 import {
   DetailCategory, DetailSlot, DETAIL_SLOT_TARGETS, DETAIL_FIGURE_KEY_PREFIX, DETAIL_FIGURE_VERSION, DetailProvenanceSource,
-  FITTING_PART_TARGETS,
+  FITTING_PART_TARGETS, FittingPartRole, DetailDatumRole, DetailDatumKind, DetailAxis, DetailDash, DXF_PREVIEW_STYLE,
+  SLIDE_OUTSET_RECESS_DEPTH_MM,
 } from '../core/constants.js';
 import { validateDetailFigure, DetailValidationError, fittingPartFigure } from '../detail/detailModel.js';
 import {
   FITTING_PART_ROLE_TEXT, formatCategoryLabel, formatDetailViewLabel, formatDetailSubjectLabel,
 } from '../catalog/catalogMaintenance.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
+import { datumGuidePrimitives, previewDimGap, PREVIEW_DIM_GAP_MM } from '../detail/detailPreview.js';
+import { placeDetailSide, placeSlidePart } from '../openings/openingDetailFrame.js';
+import { polyline } from '../structural/sectionFigure/svgFigurePrimitives.js';
 import {
+  tryFit, parseNumberText, pushHistory, defaultFitDimsFor, DETAIL_ROLE_LABELS,
   formFromEntry, entryFromForm, newDraft, setClassification, isDraftDirty, duplicateForm, describeError, saveBlockers,
-  docForLibraryEntry, LIBRARY_ORIGIN, DETAIL_HELPER_MESSAGES,
+  docForLibraryEntry, LIBRARY_ORIGIN, DETAIL_HELPER_MESSAGES, DETAIL_HELPER_TEXT, isImportedProvenance, normalizedProvenance, setProvenanceField,
 } from './detailHelperForm.js';
 
 /** 一式のとき部品の本体として持たない項目（合成図が作り直す・部品には持たせない）。 */
@@ -86,7 +91,11 @@ export function commitPartForm(doc) {
 }
 
 /** 保存・検証用の一式エントリ（選んでいる部品の編集を含む）。 */
-export const fittingEntryOf = doc => commitPartForm(doc).set;
+export function fittingEntryOf(doc) {
+  const set = commitPartForm(doc).set;
+  // 読み込み由来の出所は編集中の生の入力を保存形（trim 済み）へ揃える（単一図の entryFromForm と同じ）
+  return isImportedProvenance(set.provenance) ? { ...set, provenance: normalizedProvenance(set.provenance) } : set;
+}
 
 /** 部品を切り替える。今の部品を書き戻してから切替え、手戻しの履歴は空にする（Q-C5a）。範囲外・同じ部品は同一参照。 */
 export function selectFittingPart(doc, index) {
@@ -214,4 +223,130 @@ export function fittingSaveBlockers(doc, validationResult) {
     reasons.push(`${FITTING_PART_ROLE_TEXT[role] ?? role}: ${describeError(inner)}`);
   }
   return reasons;
+}
+
+// ---- 全体プレビュー（C8） ----
+// 一式の部品を試し込みの寸法で fit し、置き場の値で局所 (s,t)（s＝戸先端から戸尻へ・t＝走る面から壁の中へ）に 1 枚へ並べる。
+// 引き戸の部品の置き場は C4（openings/openingPlanSymbol.js slideFittingPrimitives）と同じ＝戸先側 0・戸尻側の短い縦枠＝穴の幅・端材と開けた扉＝建具幅 W
+// （sx＝+1・ty＝+1・facePerp＝0。placeSlidePart）。方立（開き戸の一式）は s＝0 の開口端（吊元端＝jambHinge）と s＝W の開口端（戸先端＝jambLatch。
+// 引き戸の戸先端 A＝0 とは別の座標）へ placeDetailSide（jamb は両側）。
+// 上枠・下枠・姿図は平面の全体図に出さない（断面・立面の部品）。頂点番号・寸法は出さない。previewPrimitivesOf は触らない。
+
+/** 全体プレビューの見る向き（平面／見上げ）。見上げは *Up の部品を先に探し、無ければ平面の部品（C4 と同じ）。 */
+export const ASSEMBLY_VIEW = Object.freeze({ PLAN: 'plan', UP: 'up' });
+
+const R = FittingPartRole;
+// 引き戸の部品: [平面の役割, 見上げの役割, 置き場（'clear'＝穴の幅・'width'＝建具幅・null＝0）]
+const ASSEMBLY_SLIDE_PARTS = Object.freeze([
+  [R.SLIDE_LATCH, R.SLIDE_LATCH_UP, null],
+  [R.SLIDE_INNER, R.SLIDE_INNER_UP, 'clear'],
+  [R.SLIDE_TAIL, R.SLIDE_TAIL_UP, 'width'],
+]);
+
+/** 全体プレビューの試し込みの寸法の欄・既定を決める分類（外付け引き戸の部品。選んでいる部品の分類に依らない）。 */
+export const ASSEMBLY_FIT_FORM = Object.freeze({ ...FITTING_PART_TARGETS[R.SLIDE_LATCH] });
+/** 全体プレビューの試し込みの既定の寸法（外付け引き戸の部品と同じ欄・既定）。 */
+export const assemblyFitDims = wallThickness => defaultFitDimsFor(ASSEMBLY_FIT_FORM, wallThickness);
+
+const failure = (role, message) => ({ role, text: DETAIL_HELPER_MESSAGES.fittingAssemblyFailed(FITTING_PART_ROLE_TEXT[role] ?? role, message) });
+
+/**
+ * 一式の全体プレビューのプリミティブ列。選んでいる部品は強調（太・青）、他は細線（淡色）。fit できない部品はその部品だけ描かず failures へ。
+ * @param {object} doc 一式の doc（isFittingDoc）。未保存の部品の編集も含める（fittingEntryOf）
+ * @param {object} dims 試し込みの寸法（文字列か数値。wallThickness・faceWidth・projection・width・doorWidth・clearWidth）
+ * @param {{view?: 'plan'|'up'}} [opts]
+ * @returns {{primitives: object[], failures: {role:string, text:string}[]}}
+ */
+export function fittingAssemblyPrimitives(doc, dims, { view = ASSEMBLY_VIEW.PLAN } = {}) {
+  if (!isFittingDoc(doc)) return { primitives: [], failures: [] };
+  const set = fittingEntryOf(doc);
+  const selectedRole = doc.partIndex == null ? null : set.parts[doc.partIndex]?.role ?? null;
+  const has = role => set.parts.some(p => p.role === role);
+  const wallThickness = parseNumberText(dims.wallThickness);
+  const width = parseNumberText(dims.width);
+  const clearWidth = parseNumberText(dims.clearWidth);
+  const faceWidth = parseNumberText(dims.faceWidth);
+  const up = view === ASSEMBLY_VIEW.UP;
+  const failures = [];
+  const placed = []; // { role, strokes: [{ points:[[s,t]], closed, dashed }] }
+  const strokesOf = (fitted, points) => points.map((st, i) => ({ points: st.points, closed: st.closed, dashed: fitted.strokes[i]?.line?.dashRole === DetailDash.DASHED }));
+  const fitPart = role => tryFit(formFromEntry(fittingPartFigure(set, role)), dims);
+
+  for (const [plainRole, upRole, at] of ASSEMBLY_SLIDE_PARTS) {
+    const role = up && has(upRole) ? upRole : plainRole;
+    if (!has(role)) continue;
+    const fitted = fitPart(role);
+    if (fitted.error) { failures.push(failure(role, fitted.error.message)); continue; }
+    const refAlong = at === 'clear' ? clearWidth : at === 'width' ? width : 0;
+    placed.push({ role, strokes: strokesOf(fitted, placeSlidePart(fitted, { refAlong, sx: 1, facePerp: 0, ty: 1, isVertical: false })) });
+  }
+  // 方立: 吊元側（s＝0）は jambHinge ＞ jamb、戸先側（s＝W）は jambLatch ＞ jamb。jamb は両側へ置く。
+  for (const [own, along, sx] of [[R.JAMB_HINGE, 0, 1], [R.JAMB_LATCH, width, -1]]) {
+    const role = has(own) ? own : has(R.JAMB) ? R.JAMB : null;
+    if (role === null) continue;
+    if (!(width > 0)) { if (!failures.some(f => f.role === role)) failures.push(failure(role, DETAIL_HELPER_MESSAGES.fittingAssemblyBadWidth)); continue; }
+    const fitted = fitPart(role);
+    if (fitted.error) { if (!failures.some(f => f.role === role)) failures.push(failure(role, fitted.error.message)); continue; }
+    const sides = placeDetailSide(fitted, { along, sx, faceMin: 0, faceMax: wallThickness, tSign: 1 });
+    placed.push({ role, strokes: strokesOf(fitted, sides.map(st => ({ points: st.points.map(p => [p.along, p.perp]), closed: st.closed }))) });
+  }
+
+  // 他は細線（先）・選んでいる部品は強調（後＝上に重ねる）
+  const prims = [];
+  for (const isSelected of [false, true]) {
+    for (const p of placed.filter(q => (q.role === selectedRole) === isSelected)) {
+      for (const st of p.strokes) {
+        prims.push(polyline(st.points, {
+          ...DXF_PREVIEW_STYLE[isSelected ? 'selected' : 'faint'],
+          ...(st.closed ? { closed: true } : {}),
+          ...(st.dashed ? { dash: DetailDash.DASHED } : {}),
+        }));
+      }
+    }
+  }
+  const pts = placed.flatMap(p => p.strokes.flatMap(st => st.points.map(([s, t]) => ({ s, t }))));
+  if (pts.length > 0) {
+    const gap = previewDimGap(PREVIEW_DIM_GAP_MM, pts);
+    // 壁の面（走る面 t＝0・反対面 t＝壁厚）
+    const faces = [0, wallThickness].filter(Number.isFinite)
+      .map(offsetMm => ({ role: DetailDatumRole.WALL_FINISH_FACE, offsetMm, kind: DetailDatumKind.ORIGIN, axis: DetailAxis.T }));
+    const guides = datumGuidePrimitives(faces, pts, { gap, labelOf: role => DETAIL_ROLE_LABELS[role] ?? role });
+    // 欠き込みの底（走る面から SLIDE_OUTSET_RECESS_DEPTH_MM）: 短い縦枠の外から端材の外まで（引き戸の部品があるときだけ）
+    const hasSlide = placed.some(p => ASSEMBLY_SLIDE_PARTS.some(([a, b]) => p.role === a || p.role === b));
+    const from = clearWidth + faceWidth;
+    const to = width + faceWidth;
+    if (hasSlide && from < to) {
+      guides.push(polyline([[from, SLIDE_OUTSET_RECESS_DEPTH_MM], [to, SLIDE_OUTSET_RECESS_DEPTH_MM]], { dash: DetailDash.DASHED, guide: true }));
+    }
+    prims.unshift(...guides);
+  }
+  return { primitives: prims, failures };
+}
+
+// ---- DXF／PDF の写し先（C8） ----
+
+/**
+ * 図読込みから作った下書きの form を、選んでいる部品へ写した doc にする。部品の key・呼称は今のまま（合成キー）、分類は役割の分類
+ * （FITTING_PART_TARGETS[役割]）で上書きする（category→view→subject の 3 回）。手戻しは今の form を積む。
+ * 一式でない・部品が無い・読み取り専用は { error }（呼び出し側が文言を出す）。
+ * 出所（R10）: 部品の本体は provenance を持てないので、読み込んだ出所（DXF・PDF）は一式の最上位 provenance へ移す
+ * （一式が既に読み込み由来なら保持）。これで isImportedFigure が真になり、一式ごと文書へ同梱されない。
+ * @returns {{doc: object} | {error: string}}
+ */
+export function importIntoPart(doc, importedForm) {
+  if (!isFittingDoc(doc) || doc.partIndex == null) return { error: DETAIL_HELPER_MESSAGES.fittingSelectPart };
+  if (doc.readOnly) return { error: DETAIL_HELPER_TEXT.builtinReadOnly };
+  const target = FITTING_PART_TARGETS[doc.set.parts[doc.partIndex].role];
+  let form = { ...importedForm, key: doc.form.key, label: doc.form.label };
+  for (const field of ['category', 'view', 'subject']) form = setClassification(form, field, target[field]);
+  const prov = importedForm.extra?.provenance;
+  const set = isImportedProvenance(prov) && !isImportedProvenance(doc.set.provenance) ? { ...doc.set, provenance: prov } : doc.set;
+  return { doc: { ...doc, set, form, history: pushHistory(doc.history, doc.form) } };
+}
+
+/** 一式の出所（読み込み由来のときだけ）のメーカー・シリーズ・ライセンス注記を編集する。一式でない・読み込み由来でない・未知の項目は同じ doc。 */
+export function setFittingProvenanceField(doc, field, value) {
+  if (!isFittingDoc(doc)) return doc;
+  const next = setProvenanceField({ extra: { provenance: doc.set.provenance } }, field, value);
+  return next.extra.provenance === doc.set.provenance ? doc : { ...doc, set: { ...doc.set, provenance: next.extra.provenance } };
 }

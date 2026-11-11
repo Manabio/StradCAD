@@ -127,7 +127,7 @@ const contextMenuSuppressed = body => !!body && /onContextMenu=\{e => \{ e\.prev
 // 確定で親が描き直したら CSS の仮の動きを外す。
 const clearsDragStyleOnRender = body => !!body && /useLayoutEffect\(\(\) => \{ endDragStyle\(view, t\); \}, \[t, view, endDragStyle\]\);/.test(body);
 // 状態の結び付き: 図読込みは読込みごとのトークン viewEpoch（無ければ scene）・ペン入力は下書きの key。レイヤ切替後の図に reconcileView で合わせる。
-const viewBoundToOwner = src => /const viewOwner = showDxf \? \(imported\?\.viewEpoch \?\? imported\?\.scene\) : form\.key;/.test(src)
+const viewBoundToOwner = src => /const viewOwner = showDxf \? \(imported\?\.viewEpoch \?\? imported\?\.scene\) : wholeOn \? `\$\{fittingSet\.key\}:\$\{assemblyView\}` : form\.key;/.test(src)
   && /const keptView = activeView\(showDxf \? importView : draftView, viewOwner\);/.test(src)
   && /reconcileView\(keptView, figureMetrics\.autoScale, figureMetrics\.contentBounds\)/.test(src)
   && /bindView\(viewOwner, next\)/.test(src);
@@ -289,7 +289,7 @@ test('【検出力】判定は壊れた配線を落とす', () => {
   assert.equal(clearsDragStyleOnRender('useLayoutEffect(() => { endDragStyle(view, t); }, [t, view, endDragStyle]);'), true);
   assert.equal(clearsDragStyleOnRender('useLayoutEffect(() => { endDragStyle(view, t); }, []);'), false);
 
-  const ownerOk = 'const viewOwner = showDxf ? (imported?.viewEpoch ?? imported?.scene) : form.key;\nconst keptView = activeView(showDxf ? importView : draftView, viewOwner);\n'
+  const ownerOk = 'const viewOwner = showDxf ? (imported?.viewEpoch ?? imported?.scene) : wholeOn ? `${fittingSet.key}:${assemblyView}` : form.key;\nconst keptView = activeView(showDxf ? importView : draftView, viewOwner);\n'
     + 'reconcileView(keptView, figureMetrics.autoScale, figureMetrics.contentBounds)\nbindView(viewOwner, next)';
   assert.equal(viewBoundToOwner(ownerOk), true);
   assert.equal(viewBoundToOwner(ownerOk.replace('imported?.viewEpoch ?? ', '')), false); // レイヤ切替でズームが解ける

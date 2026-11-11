@@ -154,7 +154,7 @@ const readOnlyHandlersGuarded = src => {
   return !!pen && !!undo && /d\.readOnly \|\| isPartlessFittingDoc\(d\) \? d : penStep\(/.test(pen) && /d\.readOnly \? null : undoDraft\(/.test(undo)
     && /const canSave = \(fitting \? result\.ok && blockers\.length === 0 : saveEnabled\(form, result\)\) && !busy && !readOnly;/.test(src)
     && /const inertWhenNoPart = readOnly \|\| partless \|\| undefined;/.test(src)
-    && /onEditDim=\{showDxf \|\| fitOn \|\| readOnly \? undefined :/.test(src);
+    && /onEditDim=\{showDxf \|\| wholeOn \|\| fitOn \|\| readOnly \? undefined :/.test(src);
 };
 // 編集の入口の inert（ペン・手の一覧・基準の 3 つは一式で部品なしのときも塞ぐ inertWhenNoPart、右の呼称・分類は inertWhenReadOnly）。別々に数える。
 const inertNoPartCount = src => (src.match(/inert=\{inertWhenNoPart\}/g) ?? []).length;
@@ -330,13 +330,44 @@ test('【配線】detailHelperForm.js: tryFit・defaultFitDimsFor・fitDimFields
   assert.ok(fittingFormWired(stripComments(readSrc('ui/detailHelperForm.js'))));
 });
 
-test('【配線】DetailHelperPanel.jsx: 一式のとき DXF／PDF の「下書きへ写す」は disabled で文言を出し、handleDxfCopy も弾く', () => {
+test('【配線】DetailHelperPanel.jsx: 一式のとき DXF／PDF の写し先は選んでいる部品（importIntoPart）・部品なし／読み取り専用は copyNotice で disabled', () => {
   const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
-  assert.ok(/const importCopyNotice = fitting \? DETAIL_HELPER_MESSAGES\.fittingNoImportCopy : null;/.test(src));
+  assert.ok(/const importCopyNotice = !fitting \? null : partless \? DETAIL_HELPER_MESSAGES\.fittingSelectPart : doc\.readOnly \? DETAIL_HELPER_TEXT\.builtinReadOnly : null;/.test(src));
+  // 写した後はペンタブの部品表示（全体表示のまま写すと PEN タブで全体が初期表示になる）
+  assert.ok(/setDoc\(into\.doc\);\s*setAssemblyOn\(false\);/.test(src));
+  // 出所の表示・編集は一式では最上位（fittingSet.provenance）。部品の本体は出所を持てない（R10）
+  assert.ok(/const shownProvenance = fitting \? fittingSet\.provenance : form\.extra\?\.provenance;/.test(src));
+  assert.ok(/fitting\s*\? setDoc\(d => \(d\.readOnly \? d : setFittingProvenanceField\(d, field, e\.target\.value\)\)\)/.test(src));
+  // 全体表示中は試し込み寸法を既定へ戻さない・壁厚の注意は全体でも出す
+  assert.ok(/const resetFitOverrides = \(\) => \{ if \(!wholeOn\) setFitOverrides\(\{\}\); \};/.test(src));
+  assert.equal((src.match(/setFitOverrides\(\{\}\)/g) ?? []).length, 1, '直接の全消去は resetFitOverrides の 1 か所だけ');
+  assert.ok(/\(fitOn \|\| wholeOn\) && wallNotice/.test(src));
   assert.ok(/disabled=\{busy \|\| !canCopy \|\| !!copyNotice\} onClick=\{onCopy\}/.test(src));
   assert.equal((src.match(/copyNotice=\{importCopyNotice\}/g) ?? []).length, 2, 'DXF・PDF の両方へ渡す');
-  assert.ok(/function handleDxfCopy\(\) \{\s*if \(fitting\) return;/.test(src));
-  assert.equal(readSrc('ui/detailHelperForm.js').includes('建具一式の部品へは写せません'), true);
+  // 一式の分岐: importIntoPart の結果を破棄の確認（guardDiscard）の中で doc へ。単一図の分岐（draftDocOf）の手前で return する
+  assert.ok(/if \(fitting\) \{[^}]*?const into = importIntoPart\(doc, r\.form\);[\s\S]*?guardDiscard\(\(\) => \{\s*setDoc\(into\.doc\);[\s\S]*?return;\s*\}\s*guardDiscard\(\(\) => \{\s*replaceDoc\(draftDocOf\(r\.form\)\);/.test(src));
+  assert.equal(readSrc('ui/detailHelperForm.js').includes('建具一式の部品へは写せません'), false, '旧防護の文言は残さない');
+  assert.equal(readSrc('ui/detailHelperForm.js').includes('部品を選んでください'), true);
+});
+
+// ---- 一式の全体プレビュー（C8）の配線 ----
+const assemblyWired = src => /const wholeOn = fitting && assemblyOn && !showDxf;/.test(src)
+  && /const shownPrims = showDxf \? dxfPrims : wholeOn \? assembly\.primitives : primitives;/.test(src)
+  && /\{!showDxf && fitting && \(<>\s*<button[^>]*onClick=\{\(\) => setAssemblyOn\(false\)\}>\{DETAIL_HELPER_TEXT\.assemblyPart\}/.test(src)
+  && /\{wholeOn && \(<>\s*<button[\s\S]*?setAssemblyView\(ASSEMBLY_VIEW\.PLAN\)[\s\S]*?setAssemblyView\(ASSEMBLY_VIEW\.UP\)/.test(src)
+  && /fittingAssemblyPrimitives\(\{ form, set: fittingSet, partIndex \}, assemblyDims, \{ view: assemblyView \}\)/.test(src)
+  && /wholeOn && assembly\.failures\.map/.test(src);
+
+test('【配線】DetailHelperPanel.jsx: 全体プレビューは一式のときだけ切替を出し、既存の AutoScaledFigure（ズーム・パン）へ載せる', () => {
+  const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
+  assert.ok(assemblyWired(src));
+  assert.equal((src.match(/<AutoScaledFigure/g) ?? []).length, 1, '描画域は 1 つだけ（全体も同じ AutoScaledFigure）');
+  assert.ok(/primitives=\{shownPrims\}/.test(src));
+  assert.ok(/const canBasePoint = !showDxf && !wholeOn/.test(src), '全体では基準点を指せない');
+  assert.ok(/onEditDim=\{showDxf \|\| wholeOn \|\|/.test(src), '全体では寸法を編集しない');
+  // 検出力
+  assert.ok(!assemblyWired(src.replace('{!showDxf && fitting && (<>', '{!showDxf && (<>')));
+  assert.ok(!assemblyWired(src.replace('wholeOn ? assembly.primitives : primitives', 'primitives')));
 });
 
 test('【検出力】建具一式の配線を壊すと判定が落ちる', () => {

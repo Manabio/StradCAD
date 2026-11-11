@@ -123,6 +123,7 @@ test('【不変条件】detailHelperPick.js の直接 import は許可表の 4 �
 // 建具一式モードの純ロジック（detailHelperFitting.js。C5）。detailHelperForm.js は引くが、逆に form から引かれない（循環回避）。
 const FITTING_LOGIC_ALLOWED = new Set([
   'core/constants.js', 'detail/detailModel.js', 'catalog/catalogMaintenance.js', 'catalog/catalogKinds.js', 'ui/detailHelperForm.js',
+  'detail/detailPreview.js', 'openings/openingDetailFrame.js', 'structural/sectionFigure/svgFigurePrimitives.js', // 全体プレビュー（C8）。form がすでに引く先
 ]);
 test('【不変条件】detailHelperFitting.js の直接 import は許可表の内側だけで、推移的にも store.js・snap.js・.jsx・react を静的に引かない', () => {
   const fittingTarget = path.join(srcDir, 'ui', 'detailHelperFitting.js');

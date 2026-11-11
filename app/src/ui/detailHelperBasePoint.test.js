@@ -242,7 +242,7 @@ const panelSrc = () => readSrc('ui/DetailHelperPanel.jsx').replace(/\r\n/g, '\n'
 
 const baseButton = src => /\{!showDxf && \(\s*<button className=\{`dthlp-btn\$\{basePointMode \? ' dthlp-btn--active' : ''\}`\} aria-pressed=\{basePointMode\} disabled=\{!basePointMode && !canBasePoint\}/.test(src)
   && /\{DETAIL_HELPER_TEXT\.basePoint\}/.test(src);
-const canBasePointCond = src => /const canBasePoint = !showDxf && !fitOn && !doc\.readOnly && !busy && shownPrims\.length > 0;/.test(src)
+const canBasePointCond = src => /const canBasePoint = !showDxf && !wholeOn && !fitOn && !doc\.readOnly && !busy && shownPrims\.length > 0;/.test(src)
   && /const basePointMode = basePointFor === form\.key && canBasePoint;/.test(src);
 const tapHandlerViaEdit = src => /function handleBasePoint\(p\) \{\s*if \(!p\) \{ setBasePointMiss\(true\); return; \}\s*const point = \{ s: p\.x, t: p\.y \};\s*edit\(f => rebaseOrigin\(f, point\)\);/.test(src)
   && /const delta = rebaseDelta\(form, point\);\s*setShownView\(\{ \.\.\.shownView, cx: shownView\.cx \+ \(delta\.s \?\? 0\), cy: shownView\.cy \+ \(delta\.t \?\? 0\) \}\);/.test(src);

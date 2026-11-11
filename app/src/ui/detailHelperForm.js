@@ -157,6 +157,8 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   fittingRowLabel: n => `建具一式（部品 ${n}）`,
   partErrorBadge: n => `エラー ${n}`,
   deletePartConfirm: roleLabel => `部品「${roleLabel}」を削除します。`,
+  // 一式の全体プレビュー（C8）。中央ペインの［部品／全体］と全体のときの［平面／見上げ］
+  assemblyPart: '部品', assemblyWhole: '全体', assemblyPlan: '平面', assemblyUp: '見上げ',
 });
 export { DETAIL_PLACEMENT_VIEW_LABELS };
 /** ストロークの線の役割（Line.dashRole）の表示名。 */
@@ -282,6 +284,8 @@ export const fitDimFieldsFor = form => (isPlacementFigure(form) ? PLACEMENT_FIT_
   : isFloorStepForm(form) || isCeilingStepForm(form) ? FLOOR_STEP_FIT_DIM_FIELDS
     : usesBaseboardHeightParam(form) ? BASEBOARD_FIT_DIM_FIELDS
       : junctionSlotOf(form) || partSlotOf(form) ? JUNCTION_FIT_DIM_FIELDS : FIT_DIM_FIELDS);
+// 試し込みの「幅」が不正なときの文言（姿図・引き戸の部品の試し込みと、一式の全体プレビューで共通）
+const FIT_BAD_WIDTH_TEXT = '幅は正の数で入力してください';
 /** 保存・破棄・削除の確認の文言。 */
 export const DETAIL_HELPER_MESSAGES = Object.freeze({
   saved: '保存しました',
@@ -295,7 +299,9 @@ export const DETAIL_HELPER_MESSAGES = Object.freeze({
   fittingRoleExists: 'この役割の部品は既にあります',
   fittingNoParts: '部品がありません',
   fittingUnknownRole: '未知の部品の役割です',
-  fittingNoImportCopy: '建具一式の部品へは写せません', // DXF／PDF の「下書きへ写す」（写し先は C8）
+  fittingSelectPart: '部品を選んでください', // 一式で DXF／PDF を写す先の部品が無い（写し先＝選んでいる部品。C8）
+  fittingAssemblyFailed: (roleLabel, message) => `${roleLabel}: ${message}（全体では描きません）`, // 全体プレビューで fit できない部品
+  fittingAssemblyBadWidth: FIT_BAD_WIDTH_TEXT,
   discard: '保存していない変更があります。破棄して続けますか？',
   discardButton: '破棄して続ける',
   cancelButton: 'キャンセル',
@@ -1086,7 +1092,7 @@ function tryFitElevation(form, dims) {
   const width = parseNumberText(dims.width);
   const height = parseNumberText(dims.height);
   const sill = parseNumberText(dims.sill);
-  if (!Number.isFinite(width) || width <= 0) return badFitDim('幅は正の数で入力してください');
+  if (!Number.isFinite(width) || width <= 0) return badFitDim(FIT_BAD_WIDTH_TEXT);
   if (!Number.isFinite(height) || height <= 0) return badFitDim('高さは正の数で入力してください');
   if (!Number.isFinite(sill) || sill < 0) return badFitDim('窓台は 0 以上の数で入力してください');
   const fig = entryFromForm(form);
@@ -1144,7 +1150,7 @@ function tryFitSlidePart(form, dims) {
   if (!Number.isFinite(wallThickness) || wallThickness <= 0) return badFitDim('壁厚は正の数で入力してください');
   if (!Number.isFinite(faceWidth) || faceWidth <= 0) return badFitDim('見付は正の数で入力してください');
   if (!Number.isFinite(projection) || projection < 0) return badFitDim('出幅は 0 以上の数で入力してください');
-  if (!Number.isFinite(width) || width <= 0) return badFitDim('幅は正の数で入力してください');
+  if (!Number.isFinite(width) || width <= 0) return badFitDim(FIT_BAD_WIDTH_TEXT);
   if (!Number.isFinite(doorWidth) || doorWidth <= 0) return badFitDim('扉幅は正の数で入力してください');
   if (!Number.isFinite(clearWidth) || clearWidth <= 0) return badFitDim('穴の幅は正の数で入力してください');
   const fig = entryFromForm(form);
@@ -1355,11 +1361,11 @@ export function setDxfProvenanceField(dxf, field, value) {
 const DXF_PROVENANCE_FIELD_SET = new Set(Object.values(DXF_PROVENANCE_FIELDS));
 
 /** 出所が外部ファイル（DXF・PDF）由来か。 */
-function isImportedProvenance(prov) {
+export function isImportedProvenance(prov) {
   return IMPORTED_SOURCES.includes(prov?.source);
 }
 /** 出所（DXF・PDF）の保存形（trim 済み）。それぞれの出所の builder を通す。 */
-function normalizedProvenance(prov) {
+export function normalizedProvenance(prov) {
   return prov.source === DetailProvenanceSource.PDF ? buildPdfProvenance(prov).provenance : buildDxfProvenance(prov).provenance;
 }
 
