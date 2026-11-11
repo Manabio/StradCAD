@@ -378,7 +378,8 @@ export function fixedBeamGuardHonored(role, rules) {
 const SPAN_EPS = 0.5;
 
 /** 階固有の梁芯CL（centerLineKind==='beam'）を列挙する。core/centerLineKindPolicy.js
- *  beamAxisCenterLinesへ委譲する再export——既存のexport名はstructural/MemberListTab.jsxが直接importしている。 */
+ *  beamAxisCenterLinesへ委譲する再export——既存のexport名は維持する（同ファイル内の梁芯割付けが使い、構造リスト
+ *  選択肢の旧式との一致テスト manualColumnAnchorLines.test.js が import する。MemberListTab.jsx は使わなくなった）。 */
 export function beamAxisCenterLines(graph) {
   return policyBeamAxisCenterLines(graph);
 }

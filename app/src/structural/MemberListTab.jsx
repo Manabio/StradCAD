@@ -1,7 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import { runInAction } from 'mobx';
 import { useState, useEffect, useRef } from 'react';
-import { CenterLineType } from '../core.js';
+import { intersectionMemberOptions } from './columnEditTarget.js';
 import { ConfirmDialog } from '../ui/ConfirmDialog.jsx';
 import { useScrollIntoViewWhenActive } from '../ui/useScrollIntoViewWhenActive.js';
 import {
@@ -16,7 +16,7 @@ import {
   memberOrderKey, isIndividuallyNumbered, isMemberNumberLocked, woodBeamWidthNote,
 } from './memberCatalog.js';
 import { showsWoodBeamDepthFields, woodBeamDepthOptions, woodBeamDepthFieldView } from './woodBeamDepthInput.js';
-import { alignToOuterFace, isRigidFrameStructure, beamAxisCenterLines,
+import { alignToOuterFace, isRigidFrameStructure,
   autoFillBeamEccentricity, autoBeamEccentricity, faceGapForEccentricity, autoFillColumnAxisOffsets, axisExteriorSign, resolveLowestGraph } from './structuralAutoFill.js';
 import { addManualFooting, addManualBeam } from './manualMemberAdd.js';
 import { pushGraphUndo, commitManualColumnAdd, commitManualMemberRemoval } from './manualMemberCommit.js';
@@ -1878,14 +1878,10 @@ const NewIntersectionMemberSelector = observer(({ group, graph, project, structu
   // 柱脚が「×」の構造では追加候補から外す（「×はカテゴリ自体表示しない」）。
   const allowColumnBase = structureHasMemberKind(MEMBER_KIND.COLUMN_BASE, structure);
 
-  // 柱は自階の実効主構造を材質・既定断面に使う（柱は各階が自階graphに持つ）。基礎・柱脚は常にRC固定。
-  const rules = rulesFor(effectiveStructure(graph, project));
-  // 在来木造（壁交点方式）の柱は壁由来の梁芯CL上にも立つため、選択肢に梁芯CLを含める。基礎・柱脚は通り芯のみ。
-  const wallColumns = group.mapName === 'columnMap' && rules.columnPlacement === 'wallIntersections';
-  const beamAxes = wallColumns ? beamAxisCenterLines(graph) : [];
+  // 交点の選択肢は structural/columnEditTarget.js intersectionMemberOptions から引く（長クリックの柱追加と同じ集合。
+  // 在来木造（壁交点方式）の柱は壁由来の梁芯CL上にも立つため梁芯を含め、基礎・柱脚は通り芯のみ）。
+  const { verticals: verticalOptions, horizontals: horizontalOptions } = intersectionMemberOptions(group.mapName, graph, project);
   const axisLabel = cl => cl.label ?? `梁芯 ${Math.round(cl.effectiveValue)}`;
-  const verticalOptions = [...graph.gridXs, ...beamAxes.filter(cl => cl.centerLineType === CenterLineType.VERTICAL)];
-  const horizontalOptions = [...graph.gridYs, ...beamAxes.filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL)];
 
   async function handleAdd() {
     const vCL = verticalOptions.find(cl => cl.id === vId);

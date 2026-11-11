@@ -404,6 +404,17 @@ export const BEAM_AXIS_KINDS = Object.freeze(['beam']);
 // belowを本表の後に足したもの）はこの並びから導出される——構造側にこの並びを重複して書かない。
 export const SUPPORT_SPAN_COLUMN_KINDS = Object.freeze(['struct', 'center']);
 
+// ---- 原始事実12b: 柱の手動追加の位置になれる線の種別表（通り芯 struct は表に入れず常に候補） ----
+// 平面・構造モードの長クリック（意匠CL・梁芯の交点）と、構造リストの柱「＋追加」が同じ線の集合を使うための単一の表。
+// 平面は通り芯＋中心線（補助線・天井芯は柱を立てる基準にしない）、構造は通り芯＋梁芯。梁芯は在来木造
+// （壁交点方式）だけが柱を立てる位置として許すため、呼び出し側が主構造から決めて manualColumnAnchorLines
+// の beamAxesAllowed で渡す（ポリシーは主構造を知らない。表の種別が BEAM_AXIS_KINDS に入るモードでだけ必須）。
+// 読むのは manualColumnAnchorLines だけ。
+export const MANUAL_COLUMN_ANCHOR_KINDS_BY_MODE = Object.freeze({
+  floorplan: Object.freeze(['center']),
+  structure: Object.freeze(['beam']),
+});
+
 // ---- 原始事実13: 全階共有種別 ----
 // 通り芯（struct）は project.structGraph に置かれ全階で共有される唯一の種別——中心線・補助線・梁芯は
 // いずれも階固有の実体（PlanGraph.shapeMap）。下記 structuralSyncScopeOfKind（本ファイル）が
@@ -1300,7 +1311,8 @@ export function beamAxisAt(graph, opts) {
 
 /**
  * graph.centerLines から梁芯CL（BEAM_AXIS_KINDS）を列挙する走査API（structural/structuralAutoFill.js
- * beamAxisCenterLinesが使う。同ファイルの再export経由でstructural/MemberListTab.jsxが使う）。
+ * beamAxisCenterLinesが使う。同ファイルの再exportは同ファイル内の梁芯割付けと、構造リスト選択肢の旧式との
+ * 一致を確かめるテストが使う。MemberListTab.jsx は structural/columnEditTarget.js 経由に移った）。
  * centerLineType を渡せばその軸だけに絞る（省略時=nullは全軸）。
  * @param {{centerLines: Array}} graph
  * @param {{centerLineType?: string|null}} [opts]
@@ -1310,6 +1322,33 @@ export function beamAxisCenterLines(graph, { centerLineType = null } = {}) {
   return graph.centerLines.filter(cl =>
     (centerLineType == null || cl.centerLineType === centerLineType) &&
     BEAM_AXIS_KINDS.includes(centerLineKind(cl)));
+}
+
+/**
+ * 柱を手動で立てられる線を向き別に列挙する走査API（MANUAL_COLUMN_ANCHOR_KINDS_BY_MODE の消費先。
+ * 構造リストの柱「＋追加」の選択肢と、長クリックの交点判定 snapGeometry.findCLCrossing の入力が共有する）。
+ * 並び＝通り芯（graph.gridXs/gridYs。構造リストが従来使っていた列挙そのもの）→ 表の種別の線（graph.centerLines の順）。
+ * 梁芯は beamAxisCenterLines と同じ集合・同じ順序（同じ BEAM_AXIS_KINDS を graph.centerLines の順に拾う）。
+ * 通り芯と表の種別の線の重複は除かない（旧式の構造リスト選択肢と同じ。legacy の labeled な中心線は両方に入りうる）。
+ * @param {object} graph
+ * @param {string} appMode MANUAL_COLUMN_ANCHOR_KINDS_BY_MODE のキー（それ以外は例外）
+ * @param {{beamAxesAllowed?: boolean}} [opts] 表の種別に梁芯を含むモードでは必須（偽なら梁芯を含めない。省略は例外）
+ * @returns {{verticals: Array, horizontals: Array}}
+ */
+export function manualColumnAnchorLines(graph, appMode, { beamAxesAllowed } = {}) {
+  if (!Object.hasOwn(MANUAL_COLUMN_ANCHOR_KINDS_BY_MODE, appMode)) {
+    throw new Error(`manualColumnAnchorLines: 未対応のappMode: ${appMode}`);
+  }
+  const tableKinds = MANUAL_COLUMN_ANCHOR_KINDS_BY_MODE[appMode];
+  if (tableKinds.some(k => BEAM_AXIS_KINDS.includes(k)) && typeof beamAxesAllowed !== 'boolean') {
+    throw new Error(`manualColumnAnchorLines: ${appMode} では beamAxesAllowed（真偽値）が必須です（実際: ${beamAxesAllowed}）`);
+  }
+  const kinds = tableKinds.filter(k => beamAxesAllowed === true || !BEAM_AXIS_KINDS.includes(k));
+  const extra = graph.centerLines.filter(cl => kinds.includes(centerLineKind(cl)));
+  return {
+    verticals:   [...graph.gridXs, ...extra.filter(cl => cl.centerLineType === CenterLineType.VERTICAL)],
+    horizontals: [...graph.gridYs, ...extra.filter(cl => cl.centerLineType === CenterLineType.HORIZONTAL)],
+  };
 }
 
 /**

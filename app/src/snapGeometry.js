@@ -6,6 +6,7 @@
 // 既存の import 元（App.jsx・CenterLinesLayer.jsx 等）を壊さない。
 import { CenterLineType, DimensionKind, DimensionSide, centerLineKind, isGridCenterLine } from './core.js';
 import { isMoveSnapTarget, sameDirectionObstacles, spansEntireAxis, gridCenterLinesOnAxis, hitTestKinds } from './core/centerLineKindPolicy.js';
+import { CL_OVERLAP_TOL_MM } from './core/constants.js';
 
 // ----------------------------------------------------------------
 // ポインタ位置の候補解決（snap.js resolvePointerTargets）が appMode ごとに持つ判断。spatialIndex に依存しない
@@ -190,6 +191,38 @@ export function findNearestCenterLine(graph, wx, wy, thresholdPx, scaleX, scaleY
     nearest = cl;
   }
   return nearest;
+}
+
+// findCLCrossing 用: 線 cl が沿線座標 along を実範囲に含むか。通り芯（全軸に及ぶ種別）・範囲未確定の線は常に真。
+// 範囲は [extentLo, extentHi] に CL_OVERLAP_TOL_MM の許容を足したもの。はね出し（描画の延長部分）は含めない。
+function clCoversAlong(cl, along) {
+  if (spansEntireAxis(centerLineKind(cl)) || cl.extentLo == null || cl.extentHi == null) return true;
+  return along >= cl.extentLo - CL_OVERLAP_TOL_MM && along <= cl.extentHi + CL_OVERLAP_TOL_MM;
+}
+
+/**
+ * 縦線・横線の交点のうち、押した点（wx, wy）が両線から画面距離 thresholdPx 未満（findNearestCenterLine と同じ
+ * `<`）にあり、交点が両線の実範囲に入っているものを返す（長クリックの柱追加。柱を立てる線の候補は
+ * centerLineKindPolicy.manualColumnAnchorLines が決め、本関数は幾何だけを見る）。
+ * 線の座標は findNearestCenterLine と同じ cl.value（画面に描かれている位置）。複数あれば交点までの画面距離が最小の組。
+ * wx/wy/scale が非有限なら（比較が偽になり）null を返す——findNearestCenterLine と同じ流儀で throw しない。
+ * @returns {{vCL, hCL, x:number, y:number}|null}
+ */
+export function findCLCrossing(verticals, horizontals, wx, wy, thresholdPx, scaleX, scaleY) {
+  let best = null, minDist = Infinity;
+  for (const vCL of verticals) {
+    const dx = Math.abs(vCL.value - wx) * scaleX;
+    if (dx >= thresholdPx) continue;
+    for (const hCL of horizontals) {
+      const dy = Math.abs(hCL.value - wy) * scaleY;
+      if (dy >= thresholdPx) continue;
+      const x = vCL.value, y = hCL.value;
+      if (!clCoversAlong(vCL, y) || !clCoversAlong(hCL, x)) continue;
+      const dist = Math.hypot(dx, dy);
+      if (dist < minDist) { minDist = dist; best = { vCL, hCL, x, y }; }
+    }
+  }
+  return best;
 }
 
 /**
