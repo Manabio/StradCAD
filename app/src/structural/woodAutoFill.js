@@ -807,8 +807,22 @@ export function autoFillWoodColumns(graph, project, wallGate = null, aboveColumn
 
   const existing = new Set(graph.columns.map(c => columnAnchorKey(c)));
   const created = [];
+  // 案A（ユーザー承認 2026-11-11）: 同じ AXIS 位置に auto でない柱（手動・固定・calculated）が既にあるスロットは作らない
+  // ——dedupeColumnsByAxis の Q1 裁定（2026-09-25。non-auto がいれば auto を全撤去）を「作ってから消す」から
+  // 「作らない」へ前倒しするだけで、再計算後の最終状態は同じ。手動柱を先に足し（中心線の組のキー）、後から梁芯が
+  // 生える順序では、自動補完が梁芯の組のキーで同じ位置の auto 柱を作っては同じ回の後始末が消す、を毎回繰り返して
+  // created/removed/changed に一時的な柱が載り続けた。母集団と位置の一致は dedupeColumnsByAxis と共有
+  // （isDedupeColumn・isUserFixedColumn・isSameAxisPosition）。袖柱のスロットは dedupe が袖柱を母集団から外すのと同じく対象外。
+  // 限界（受容 2026-11-11）: 1mm 未満の間隔で連なる手動・固定の柱どうし（例: x+0.6mm と x+0.4mm）の配置では、dedupe の
+  // グループ（先頭の柱の位置が起点）と本抑止（スロット位置×すべての auto でない柱）で結果が違いうる——従来は x の auto 柱が
+  // 残り、抑止ありは作らない（手動柱の 0.4mm 隣に auto 柱を残さない側）。それ以外の構成は最終状態が一致する。
+  const userFixedPoints = graph.columns.filter(c => isDedupeColumn(c) && isUserFixedColumn(c)).map(c => ({ x: c.axisX, y: c.axisY }));
   for (const [key, { verticalCL, horizontalCL, woodJambRef, woodAxisOffset, origins }] of slots) {
     if (existing.has(key) || graph.excludedColumnSlots.has(key)) continue;
+    if (!woodJambRef && userFixedPoints.length > 0) {
+      const at = columnSlotAxisPoint(graph, { verticalCL, horizontalCL, woodAxisOffset });
+      if (userFixedPoints.some(p => isSameAxisPosition(p.x, p.y, at.x, at.y))) continue;
+    }
     // 袖柱は自階の下地オーナー壁の中に立つ＝フットプリント内が保証されるためwallGateを掛けない
     // （オフセットアンカー柱＝3h-2由来は3bと同じくwallGateを掛ける）。ゲート判定は実位置（AXIS）で
     // 行う——verticalCL/horizontalCLをそのまま渡すと、オフセット側は走行方向の実位置からずれた
@@ -914,6 +928,25 @@ function pickSurvivor(graph, slots, columns) {
   return [...pool].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
 }
 
+// 「同じ AXIS 位置」の重複判定（dedupeColumnsByAxis の後始末と、autoFillWoodColumns の作成段の抑止＝案A）が共有する
+// 単一の定義。母集団＝基礎（role:'foundation'）・袖柱（woodJambRef）を除いた柱。位置の一致＝axisX・axisY とも
+// CL_OVERLAP_TOL_MM 未満。auto でない柱（dimensionStatus!=='auto'＝手動・locked・calculated）はユーザー確定値。
+function isDedupeColumn(c) { return c.role !== 'foundation' && !c.woodJambRef; }
+function isUserFixedColumn(c) { return c.dimensionStatus !== 'auto'; }
+function isSameAxisPosition(ax, ay, bx, by) {
+  return Math.abs(ax - bx) < CL_OVERLAP_TOL_MM && Math.abs(ay - by) < CL_OVERLAP_TOL_MM;
+}
+// 作られる柱（袖柱でない）の axisX/axisY と同じ値（structuralEntities.js _axisX/_axisY の袖柱でない側と同式。
+// woodAxisOffset 側は CL の effectiveValue＋offset、もう一方は effectiveValue＋柱芯オフセット columnAxisOffsets）。
+// woodManualColumnSuppress.test.js が柱芯オフセット・オフセット柱を含めて作られる柱の axisX/axisY との一致を固定する。
+function columnSlotAxisPoint(graph, { verticalCL, horizontalCL, woodAxisOffset }) {
+  const axisOffsetOf = (cl) => graph.columnAxisOffsets.get(cl.id) ?? 0;
+  return {
+    x: woodAxisOffset?.isVertical ? verticalCL.effectiveValue + woodAxisOffset.offset : verticalCL.effectiveValue + axisOffsetOf(verticalCL),
+    y: woodAxisOffset && !woodAxisOffset.isVertical ? horizontalCL.effectiveValue + woodAxisOffset.offset : horizontalCL.effectiveValue + axisOffsetOf(horizontalCL),
+  };
+}
+
 /**
  * 撤去段（autoFillWoodColumnsの撤去ループ）の直後に呼ぶ後始末: 同じAXIS座標（CL_OVERLAP_TOL_MM）に
  * 複数の柱が残っていたら1本だけ残す（ユーザー承認済み一般則・2026-09-25。案(a)）。
@@ -932,10 +965,10 @@ function pickSurvivor(graph, slots, columns) {
  * @returns {string[]} 撤去した柱id配列
  */
 export function dedupeColumnsByAxis(graph, slots) {
-  const candidates = graph.columns.filter(c => c.role !== 'foundation' && !c.woodJambRef);
+  const candidates = graph.columns.filter(isDedupeColumn);
   const groups = [];
   for (const c of candidates) {
-    let group = groups.find(g => Math.abs(g.axisX - c.axisX) < CL_OVERLAP_TOL_MM && Math.abs(g.axisY - c.axisY) < CL_OVERLAP_TOL_MM);
+    let group = groups.find(g => isSameAxisPosition(g.axisX, g.axisY, c.axisX, c.axisY));
     if (!group) { group = { axisX: c.axisX, axisY: c.axisY, columns: [] }; groups.push(group); }
     group.columns.push(c);
   }
@@ -943,7 +976,7 @@ export function dedupeColumnsByAxis(graph, slots) {
   const removed = [];
   for (const group of groups) {
     if (group.columns.length < 2) continue;
-    const nonAuto = group.columns.filter(c => c.dimensionStatus !== 'auto');
+    const nonAuto = group.columns.filter(isUserFixedColumn);
     const autoCols = group.columns.filter(c => c.dimensionStatus === 'auto');
     if (nonAuto.length > 0) {
       for (const c of autoCols) { graph.columnMap.delete(c.id); removed.push(c.id); }

@@ -14,6 +14,7 @@
 import { runInAction } from 'mobx';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { undoManager } from '../undoManager.js';
+import { columnSlotKey, columnAnchorKey } from '../core.js';
 import { addManualColumn, resolveManualColumnAnchors } from './manualMemberAdd.js';
 import { renumberMembers } from './memberNumbering.js';
 import { REMOVE_FN_BY_MAP } from './memberCatalog.js';
@@ -46,10 +47,23 @@ export function commitManualColumnAdd(graph, project, { vCL, hCL }) {
   return column;
 }
 
+// 素の CL の組で立つ柱（袖柱 woodJambRef・オフセット柱 woodAxisOffset でない）の、自動補完が同じ位置に立てる
+// アンカーのスロットキー。柱自身のキーと同じなら null（removeColumn が記録するキーと同じで足すものが無い）。
+function resolvedColumnKeyOf(graph, project, column) {
+  if (column.woodJambRef || column.woodAxisOffset) return null;
+  const { vCL, hCL } = resolveManualColumnAnchors(graph, project, { vCL: column.verticalCL, hCL: column.horizontalCL });
+  const key = columnSlotKey(vCL, hCL);
+  return key === columnAnchorKey(column) ? null : key;
+}
+
 /** 部材を手動削除し、Undo を 1 件積む。mapName は REMOVE_FN_BY_MAP のキー（未知は例外）。
  *  graph の該当 map に実在しない id は無視する（実在 0 件なら Undo を積まない）。
  *  採番は呼ばない（現行のリストタブの削除と同じ。採番の扱いは別段で決める）。
- *  project は現状未使用。削除後の採番（別段）で使うため署名に置く。
+ *  柱（'columnMap'）は、素の CL の組で立っていて（袖柱・オフセット柱でない）自動補完が同じ位置に立てるアンカー
+ *  （resolveManualColumnAnchors。在来木造は梁芯の組など）のキーが柱自身のキーと違うとき、そのキーも除外集合へ
+ *  記録する——removeColumn が記録するのは柱自身のキー（中心線の組）だけで、梁芯が後から生えた位置では
+ *  梁芯の組のキーの auto 柱が次の再計算で復活するため（実測）。非在来は解決が恒等なので何も足さない。
+ *  除外集合は before の後に書くので Undo で柱とともに戻る。
  *  @returns 消した本数 */
 export function commitManualMemberRemoval(graph, project, mapName, ids) {
   const removeFn = REMOVE_FN_BY_MAP[mapName];
@@ -57,7 +71,10 @@ export function commitManualMemberRemoval(graph, project, mapName, ids) {
   const targets = [...new Set(ids)].filter(id => graph[mapName].has(id));
   if (targets.length === 0) return 0;
   const before = serializeGraph(graph);
+  // 削除前に解決後のキーを採る（柱が消えると CL の組が引けなくなる）。
+  const resolvedKeys = mapName === 'columnMap' ? targets.map(id => resolvedColumnKeyOf(graph, project, graph.columnMap.get(id))).filter(k => k != null) : [];
   for (const id of targets) graph[removeFn](id);
+  if (resolvedKeys.length > 0) runInAction(() => { for (const k of resolvedKeys) graph.excludedColumnSlots.add(k); });
   pushGraphUndo(graph, before);
   return targets.length;
 }
