@@ -26,7 +26,7 @@ import {
   swingOpenPerpDir, frameOnlyPerpRange, frameOnlyJambProfiles, clampFrameFaceWidth,
   trackPerp, trackOf, resolveSlideLayoutPanels,
 } from './openingPlanSymbolGeometry.js';
-import { resolveDetailFrame, resolveSwingDoorFrame, frameDefaultKey } from './openingDetailFit.js';
+import { resolveDetailFrame, resolveSwingDoorFrame, frameDefaultKey, fittingKeyOf } from './openingDetailFit.js';
 
 // 従来の断面帯（枠40＋扉40＋枠40）。描き方の指定が無い建具はこのまま。
 const LEGACY_FRAME_W = 40;
@@ -244,7 +244,7 @@ function sectionFramePrimitives(o, { slot, fw, defaultKey, top, sillTop, full, a
   const legacy = () => [isSill ? rect(0, full, sillTop - fw, sillTop, cutWeight) : rect(0, full, top, top + fw, cutWeight)];
   const wall = Number.isFinite(opts.wallThicknessMm) ? opts.wallThicknessMm : FALLBACK_WALL_THICKNESS_MM;
   const resolved = resolveSwingDoorFrame({
-    symbolKey: fixtureSymbolOf(o), detailRefs: o.detailRefs ?? null, slot, coord1: top, coord2: sillTop,
+    symbolKey: fixtureSymbolOf(o), detailRefs: o.detailRefs ?? null, fittingKey: fittingKeyOf(o), slot, coord1: top, coord2: sillTop,
     faceMin: FRAME_OVERHANG_MM, faceMax: FRAME_OVERHANG_MM + wall, wallThickness: wall,
     tSign: atFar ? 1 : -1, faceWidth: fw, projection: FRAME_OVERHANG_MM,
     defaultKey, // undefined＝片開き戸の slot 別の既定（resolveSwingDoorFrame の省略時）・null＝既定なし
@@ -372,7 +372,7 @@ export function openingSectionPrimitives(o, x0, dir, cutWeight, silhouetteWeight
     // 図が無い・失敗は profile（frameProfile 明示 ＞ 記号の profile）へ戻す（通知は init）。壁厚は呼び出し側の値を
     // そのまま渡す（t = full − 2·proj の再計算は集計側の値と 1ULP ずれて鍵が二重になるため）。
     const resolved = resolveDetailFrame({
-      symbolKey, detailRefs: o.detailRefs ?? null, slot: DetailSlot.HEAD, coord1: top, coord2: sillTop, faceMin: proj,
+      symbolKey, detailRefs: o.detailRefs ?? null, fittingKey: fittingKeyOf(o), slot: DetailSlot.HEAD, coord1: top, coord2: sillTop, faceMin: proj,
       wallThickness: Number.isFinite(opts.wallThicknessMm) ? opts.wallThicknessMm : FALLBACK_WALL_THICKNESS_MM,
       faceWidth: clampFrameFaceWidth(fw, top, sillTop), projection: proj,
     });

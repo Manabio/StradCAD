@@ -16,7 +16,7 @@
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { composeCatalog, composeList, overlayGeneration } from '../catalog/catalogRegistry.js';
 import { DetailSlot, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
-import { fitLocal, DetailFitError, detailBuiltinFigures } from '../detail/detailPlacement.js';
+import { fitLocal, DetailFitError, detailBuiltinFigures, parseFittingPartKey, fittingPartFigure } from '../detail/detailPlacement.js';
 import { ERR_DETAIL_FIGURE_NOT_FOUND } from '../error.js';
 import { detailFrameTargets, detailElevationTargets, detailFrameFail, DetailFrameError } from './openingDetailFrame.js';
 
@@ -319,10 +319,27 @@ export function detailFigureCatalog() {
   return _detailFigureMap;
 }
 
-/** 詳細図キー → エントリ（三層合成後。無ければnull）。 */
+// 建具一式の部品の合成図（'<一式キー>#<役割>'）のキャッシュ。detailFigureCatalog と同じ世代で破棄する（引けなかった null も持つ）。
+let _fittingPartMap = new Map();
+let _fittingPartGen = -1;
+
+/**
+ * 詳細図キー → エントリ（三層合成後。無ければnull）。完全一致を先に見て、無ければ合成キー '<一式キー>#<役割>'
+ * （parseFittingPartKey が成り立ち、前半の図が建具一式）として部品を単独の図（fittingPartFigure）で返す。
+ * 合成図は overlay の世代ごとにキャッシュする。一式でない図の '#' 付きキー・部品の無い役割は null。
+ */
 export function detailFigureEntry(key) {
   if (typeof key !== 'string' || key === '') return null;
-  return detailFigureCatalog().get(key) ?? null;
+  const catalog = detailFigureCatalog();
+  const exact = catalog.get(key);
+  if (exact !== undefined) return exact;
+  const gen = overlayGeneration();
+  if (_fittingPartGen !== gen) { _fittingPartMap = new Map(); _fittingPartGen = gen; }
+  if (_fittingPartMap.has(key)) return _fittingPartMap.get(key);
+  const parsed = parseFittingPartKey(key);
+  const figure = parsed ? fittingPartFigure(catalog.get(parsed.setKey) ?? null, parsed.role) : null;
+  _fittingPartMap.set(key, figure);
+  return figure;
 }
 
 /**
@@ -346,11 +363,11 @@ export function detailFigureRefsFor(symbolKey) {
 }
 
 /**
- * 建具種別（openingSubType）が参照する姿図の詳細図キー {figure?}。entry が渡されればそれを（保守パネルの未保存ドラフトや
+ * 建具種別（openingSubType）が参照する姿図の詳細図キー {figure?, figureBack?, fitting?}。entry が渡されればそれを（保守パネルの未保存ドラフトや
  * 呼び出し元が解決済みのエントリ）、無ければ findCatalogEntry(category, subType) を読む。1つも無ければnull。
  */
 export function subTypeDetailFigureRefsFor(category, subType, entry = undefined) {
-  return detailFigureRefsOfEntry(entry === undefined ? findCatalogEntry(category, subType) : entry, [DetailSlot.FIGURE, DetailSlot.FIGURE_BACK]);
+  return detailFigureRefsOfEntry(entry === undefined ? findCatalogEntry(category, subType) : entry, [DetailSlot.FIGURE, DetailSlot.FIGURE_BACK, DetailSlot.FITTING]);
 }
 
 /** 建具記号が参照する詳細図のうちカタログに実在するもの {jamb?: entry, head?: entry}。1つも無ければnull。 */

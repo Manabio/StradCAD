@@ -7,7 +7,7 @@
 // ================================================================
 
 import {
-  DetailSlot, DetailDash, DETAIL_PRIM_SOURCE, DetailFigureSource, DETAIL_FIT_EPS_MM, DOOR_LEAF_THICKNESS_MM,
+  DetailSlot, DetailDash, FittingPartRole, FITTING_PART_KEY_SEPARATOR, DETAIL_PRIM_SOURCE, DetailFigureSource, DETAIL_FIT_EPS_MM, DOOR_LEAF_THICKNESS_MM,
   DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY, SWING_LEAF_SUBTYPE, OpeningCategory,
   DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
   DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
@@ -15,7 +15,7 @@ import {
 import { detailFrameKindOf } from './openingPlanSymbolGeometry.js';
 import { ElevationLineRole, ElevationDash, weightForRole } from '../elevation/elevationStyle.js';
 import { line, polyline } from '../elevation/elevationPrimitives.js';
-import { OpeningMechanism, IMPLEMENTED_MECHANISMS, detailFigureEntry, detailFigureRefsFor, fitDetailLocalMemo, subTypeDetailFigureRefsFor } from './openingCatalog.js';
+import { OpeningMechanism, IMPLEMENTED_MECHANISMS, detailFigureEntry, detailFigureRefsFor, detailFigureRefsOfEntry, findCatalogEntry, fitDetailLocalMemo, subTypeDetailFigureRefsFor } from './openingCatalog.js';
 import { placeDetailSides, placeDetailElevation, withoutCollinearPoints } from './openingDetailFrame.js';
 import { effectiveHeight, effectiveSillHeight, windowHasSill } from './openingNumbering.js';
 
@@ -27,6 +27,29 @@ const SLOT_ORDER = Object.freeze({
   [DetailSlot.FIGURE]: [DetailSlot.FIGURE],
   [DetailSlot.FIGURE_BACK]: [DetailSlot.FIGURE_BACK], // 向こう側から見た姿図。他の slot を流用しない（FIGURE への落ち先は resolveDetailElevation が決める）
 });
+
+// 建具一式の部品の役割（slot ごとに探す役割。jambHinge/jambLatch は片側解決＝C6 で使う）。
+const FITTING_SLOT_ROLES = Object.freeze({
+  [DetailSlot.JAMB]: Object.freeze([FittingPartRole.JAMB]),
+  [DetailSlot.HEAD]: Object.freeze([FittingPartRole.HEAD]),
+  [DetailSlot.SILL]: Object.freeze([FittingPartRole.SILL]),
+  [DetailSlot.FIGURE]: Object.freeze([FittingPartRole.FIGURE]),
+  [DetailSlot.FIGURE_BACK]: Object.freeze([FittingPartRole.FIGURE_BACK]),
+});
+
+/**
+ * 建具の一式のキー（建具個別の detailRefs.fitting ＞ 建具種別エントリの detailFigures.fitting。無ければ null）。
+ * detailRefs.fitting を null で明示したときは種別の一式を見ない（null）。entry 省略時は建具のカタログエントリを引く。
+ */
+export function fittingKeyOf(opening, entry = undefined) {
+  const refs = opening?.detailRefs ?? null;
+  if (refs !== null && typeof refs === 'object' && Object.hasOwn(refs, DetailSlot.FITTING)) {
+    const own = refs[DetailSlot.FITTING];
+    return typeof own === 'string' && own !== '' ? own : null;
+  }
+  const e = entry === undefined ? findCatalogEntry(opening?.category, opening?.subType) : entry;
+  return detailFigureRefsOfEntry(e, [DetailSlot.FITTING])?.[DetailSlot.FITTING] ?? null;
+}
 
 const refOf = (refs, slot) => {
   if (refs === null || typeof refs !== 'object' || Array.isArray(refs)) return undefined;
@@ -46,18 +69,28 @@ const refOf = (refs, slot) => {
  *   null＝参照が1つも無い（従来どおり）。intended＝優先順の先頭の参照（利用者の意図）。drawn＝実在する図のうち先頭
  *   （intended の図が無いとき、後ろの候補の図を流用する）。drawn が null＝参照はあるが図が1つも実在しない。
  */
-export function resolveDetailFigure({ symbolKey, detailRefs = null, slot, subTypeRefs = null }) {
+export function resolveDetailFigure({ symbolKey, detailRefs = null, slot, subTypeRefs = null, fittingKey = null }) {
   const isFigure = slot === DetailSlot.FIGURE || slot === DetailSlot.FIGURE_BACK;
   const baseSource = isFigure ? 'subType' : 'symbol';
   const baseRefs = isFigure ? subTypeRefs : detailFigureRefsFor(symbolKey);
+  // 建具一式（detailRefs.fitting を null で明示したときは種別の一式も見ない）。一式の部品が無い役割は候補にしない。
+  const fittingSaysNone = detailRefs !== null && typeof detailRefs === 'object' && Object.hasOwn(detailRefs, DetailSlot.FITTING) && detailRefs[DetailSlot.FITTING] === null;
   const candidates = [];
   for (const s of SLOT_ORDER[slot] ?? []) {
-    // detailRefs がこの slot を null で明示しているときは「なし」＝記号（姿図は建具種別）側の同じ slot を候補にしない
+    // detailRefs がこの slot を null で明示しているときは「なし」＝建具一式・記号（姿図は建具種別）側の同じ slot を候補にしない
     // （保守パネルのプレビューが、保存済みの割当てを未保存で外した状態を描くための口）。キー無し・undefined は従来どおり記号へ進む。
     // 永続化（S6）は「空なら書かない」規約なので、保存された detailRefs に null は現れない。
     const openingSaysNone = detailRefs !== null && typeof detailRefs === 'object' && Object.hasOwn(detailRefs, s) && detailRefs[s] === null;
-    for (const [source, refs] of [['opening', detailRefs], [baseSource, baseRefs]]) {
+    // この slot の明示 null（「なし」）は記号の段だけでなく一式の段も飛ばす。
+    const fittingKeys = typeof fittingKey === 'string' && fittingKey !== '' && !fittingSaysNone && !openingSaysNone
+      ? (FITTING_SLOT_ROLES[s] ?? []).map(role => `${fittingKey}${FITTING_PART_KEY_SEPARATOR}${role}`).filter(k => detailFigureEntry(k) !== null)
+      : [];
+    for (const [source, refs] of [['opening', detailRefs], ['fitting', fittingKeys], [baseSource, baseRefs]]) {
       if (source === baseSource && openingSaysNone) continue;
+      if (source === 'fitting') {
+        for (const key of fittingKeys) candidates.push({ slot: s, key, source });
+        continue;
+      }
       const key = refOf(refs, s);
       if (key !== undefined) candidates.push({ slot: s, key, source });
     }
@@ -86,8 +119,8 @@ export function resolveDetailFigure({ symbolKey, detailRefs = null, slot, subTyp
  *   null＝割当てが無い、または参照先の図が実在しない（従来どおり）。sides＝[coord1側, coord2側]のストローク列、
  *   profiles＝sides を平らにしたもの（frameOnlyJambProfiles の detail にそのまま渡す）。
  */
-export function resolveDetailFrame({ symbolKey, detailRefs = null, slot, coord1, coord2, faceMin, wallThickness, faceWidth, projection }) {
-  const r = resolveDetailFigure({ symbolKey, detailRefs, slot });
+export function resolveDetailFrame({ symbolKey, detailRefs = null, fittingKey = null, slot, coord1, coord2, faceMin, wallThickness, faceWidth, projection }) {
+  const r = resolveDetailFigure({ symbolKey, detailRefs, slot, fittingKey });
   if (!r?.drawn) return null;
   const fitted = fitDetailLocalMemo({ figureKey: r.drawn.key, slot: r.drawn.slot, wallThickness, projection, faceWidth });
   if (fitted.error) return fitted;
@@ -150,8 +183,8 @@ const snapNear = (v, refs) => refs.find(r => Math.abs(v - r) <= DETAIL_FIT_EPS_M
  * @returns {null | {error:{code:string, message:string}, source:string} | {sides: object[][], profiles: object[], source:string}}
  *   null＝従来の描きへ戻る（参照切れ・既定の組込みが引けない）。error＝fit できない（呼び出し側は従来の描きへ。明示の割当てだけ通知の対象）。
  */
-export function resolveSwingDoorFrame({ symbolKey, detailRefs = null, slot = DetailSlot.JAMB, coord1, coord2, faceMin, faceMax, wallThickness, tSign, faceWidth, projection, defaultKey = SWING_DOOR_DEFAULT_KEYS[slot] }) {
-  const r = resolveDetailFigure({ symbolKey, detailRefs, slot });
+export function resolveSwingDoorFrame({ symbolKey, detailRefs = null, fittingKey = null, slot = DetailSlot.JAMB, coord1, coord2, faceMin, faceMax, wallThickness, tSign, faceWidth, projection, defaultKey = SWING_DOOR_DEFAULT_KEYS[slot] }) {
+  const r = resolveDetailFigure({ symbolKey, detailRefs, slot, fittingKey });
   let figure;
   let source;
   if (r === null) {
@@ -233,6 +266,7 @@ export function detailStrokesToElevationPrimitives(strokes, { towardViewer = nul
 export function resolveDetailElevation({ opening, entry = null, towardViewer = null }) {
   const subTypeRefs = subTypeDetailFigureRefsFor(opening.category, opening.subType, entry);
   const detailRefs = opening.detailRefs ?? null;
+  const fittingKey = fittingKeyOf(opening, entry);
   const dims = elevationDetailDims(opening);
   const placed = (drawn) => {
     const fitted = fitDetailLocalMemo({ figureKey: drawn.key, slot: drawn.slot, dims });
@@ -243,12 +277,12 @@ export function resolveDetailElevation({ opening, entry = null, towardViewer = n
     };
   };
   if (towardViewer === false) {
-    const back = resolveDetailFigure({ detailRefs, slot: DetailSlot.FIGURE_BACK, subTypeRefs });
+    const back = resolveDetailFigure({ detailRefs, slot: DetailSlot.FIGURE_BACK, subTypeRefs, fittingKey });
     if (back?.drawn) {
       const result = placed(back.drawn);
       if (!result.error) return result;
     }
   }
-  const r = resolveDetailFigure({ detailRefs, slot: DetailSlot.FIGURE, subTypeRefs });
+  const r = resolveDetailFigure({ detailRefs, slot: DetailSlot.FIGURE, subTypeRefs, fittingKey });
   return r?.drawn ? placed(r.drawn) : null;
 }

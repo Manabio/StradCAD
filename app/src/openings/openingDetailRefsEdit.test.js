@@ -48,8 +48,8 @@ test('select: 枠 slot 全部を出すと方立・上枠・下枠・姿図・姿
     { key: 'df-f', label: '姿図A', category: 'figure', view: 'elevation', subject: 'opening' },
   ];
   const sels = openingDetailRefSelects({ detailRefs: { [JAMB]: 'df-j' } }, list);
-  assert.deepEqual(sels.map(s => s.slot), [...OPENING_DETAIL_REF_SLOTS]);
-  assert.deepEqual(OPENING_DETAIL_REF_SLOTS, [JAMB, HEAD, SILL, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK]);
+  assert.deepEqual(sels.map(s => s.slot), [JAMB, HEAD, SILL, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK]);
+  assert.deepEqual(OPENING_DETAIL_REF_SLOTS, [JAMB, HEAD, SILL, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK, DetailSlot.FITTING], '一式は C7 まで select に出さない（出力の slot は下の 5 つのまま）');
   assert.deepEqual(sels.map(s => s.label), ['部分詳細図（方立）', '部分詳細図（上枠）', '部分詳細図（下枠）', '部分詳細図（姿図）', '部分詳細図（姿図・向こう側）']);
   assert.deepEqual(sels[0].options.map(o => o.value), ['', 'df-j']);
   assert.deepEqual(sels[1].options.map(o => o.value), ['', 'df-h']);

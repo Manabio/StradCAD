@@ -62,7 +62,7 @@ import {
   frameOnlyPerpRange, clampFrameFaceWidth, jambWidthFor, frameInnerSpan,
   DOOR_OPEN_ANGLE_DEG, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM, FRAME_KAKARI_WIDTH_MM, DOOR_LEAF_THICKNESS_MM,
 } from './openingPlanSymbolGeometry.js';
-import { resolveDetailFrame, resolveSwingDoorFrame, frameDefaultKey } from './openingDetailFit.js';
+import { resolveDetailFrame, resolveSwingDoorFrame, frameDefaultKey, fittingKeyOf } from './openingDetailFit.js';
 import { DetailSlot, DetailFigureSource, SWING_LEAF_SUBTYPE, WINDOW_FRAME_JAMB_WIDTH_MM, SLIDE_OUTSET_DOOR_FACE_INSET_MM } from '../core/constants.js';
 import { isOutsetSlide, outsetSlideLayout, slideRecessBand } from './slideOutset.js';
 import { fixtureSymbolOf, effectiveFrameFaceWidth, effectiveFrameProjection } from './openingNumbering.js';
@@ -676,7 +676,7 @@ function frameOnlyPrimitives(opening, faceLo, faceHi, axisValue, frameWeight) {
   const projection = effectiveFrameProjection(opening);
   const { faceMin, faceMax } = frameOnlyPerpRange({ faceLo, faceHi, axisValue, projection });
   const resolved = resolveDetailFrame({
-    symbolKey, detailRefs: opening.detailRefs ?? null, slot: DetailSlot.JAMB,
+    symbolKey, detailRefs: opening.detailRefs ?? null, fittingKey: fittingKeyOf(opening), slot: DetailSlot.JAMB,
     coord1: opening.coord1, coord2: opening.coord2, faceMin, wallThickness: faceMax - faceMin,
     faceWidth: clampFrameFaceWidth(faceWidth, opening.coord1, opening.coord2), projection,
   });
@@ -846,7 +846,7 @@ function swingDetailFramePrimitives(opening, band, faceLo, faceHi, outward, fram
   const faceMax = Math.max(faceLo, faceHi);
   const jambW = Math.min(FRAME_JAMB_WIDTH_MM, opening.width / 2);
   const resolved = resolveSwingDoorFrame({
-    symbolKey: fixtureSymbolOf(opening), detailRefs: opening.detailRefs ?? null, slot: DetailSlot.JAMB,
+    symbolKey: fixtureSymbolOf(opening), detailRefs: opening.detailRefs ?? null, fittingKey: fittingKeyOf(opening), slot: DetailSlot.JAMB,
     coord1: opening.coord1, coord2: opening.coord2, faceMin, faceMax, wallThickness: faceMax - faceMin,
     tSign: outward > 0 ? 1 : -1, faceWidth: jambW, projection: FRAME_OVERHANG_MM,
   });
@@ -877,7 +877,7 @@ function windowDetailJambPrimitives(opening, mechanism, band, faceLo, faceHi, pl
   const kind = plan.frame;
   const jambW = jambWidthFor(opening);
   const resolved = resolveSwingDoorFrame({
-    symbolKey: fixtureSymbolOf(opening), detailRefs: opening.detailRefs ?? null, slot: DetailSlot.JAMB,
+    symbolKey: fixtureSymbolOf(opening), detailRefs: opening.detailRefs ?? null, fittingKey: fittingKeyOf(opening), slot: DetailSlot.JAMB,
     coord1: opening.coord1, coord2: opening.coord2, faceMin, faceMax, wallThickness: faceMax - faceMin,
     tSign: kind === 'notched' && plan.leafOutward < 0 ? -1 : 1, faceWidth: jambW, projection: FRAME_OVERHANG_MM,
     defaultKey: frameDefaultKey(opening, DetailSlot.JAMB, mechanism),

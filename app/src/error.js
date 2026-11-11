@@ -387,6 +387,7 @@ export const ERR_SLIDE_ON_EXTERIOR_WALL = '外壁にある引き戸は外付け�
 // 参照先の詳細図がカタログ（ライブラリ・同梱）に無い場合。owner は参照の持ち主——記号キー、建具個別の指定なら
 // DETAIL_OWNER_OPENING、fit のメモ口では図のキー。
 export const DETAIL_OWNER_OPENING = '建具個別の指定';
+export const DETAIL_OWNER_FITTING = '建具一式';
 export const ERR_DETAIL_FIGURE_NOT_FOUND = (owner, slot) =>
   `${owner} の${detailSlotLabel(slot)}の詳細図がカタログに見つかりません（DXF・PDF 由来の図は保存ファイルに入らないため、別の端末では見つかりません）`;
 // 詳細図の基準（Datum）が取り付け先（既定は三方枠。建具の姿図なら「建具の姿図」）の供給できない組（role・軸・種別）のとき。

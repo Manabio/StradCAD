@@ -13,7 +13,7 @@ import {
 } from '../catalog/catalogMaintenance.js';
 import { withDetailRef } from '../core/detailRefs.js';
 import { paramMmOf } from '../detail/detailPlacement.js';
-import { resolveDetailFigure, frameDefaultKey } from './openingDetailFit.js';
+import { resolveDetailFigure, frameDefaultKey, fittingKeyOf } from './openingDetailFit.js';
 import { detailFigureRefsFor, subTypeDetailFigureRefsFor, detailFigureCatalog } from './openingCatalog.js';
 import { fixtureSymbolOf } from './openingNumbering.js';
 
@@ -24,7 +24,7 @@ export const FRAME_DETAIL_REF_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot
 const FRAME_ONLY_DETAIL_REF_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot.HEAD]);
 
 /** select を出す slot（表示順）。姿図（S6b）は全機構の建具に出し、枠の slot は frameDetailSlotsFor が建具ごとに絞る。 */
-export const OPENING_DETAIL_REF_SLOTS = Object.freeze([...FRAME_DETAIL_REF_SLOTS, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK]);
+export const OPENING_DETAIL_REF_SLOTS = Object.freeze([...FRAME_DETAIL_REF_SLOTS, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK, DetailSlot.FITTING]);
 
 /** 姿図の slot（手前から見た図と向こう側から見た図。基準は建具種別の割当て）。 */
 const isFigureSlot = slot => slot === DetailSlot.FIGURE || slot === DetailSlot.FIGURE_BACK;
@@ -98,7 +98,7 @@ export function detailRefsAfterSelect(opening, slot, value, mechanism) {
  */
 export function detailDimensionsToCopy(opening) {
   const resolved = resolveDetailFigure({
-    symbolKey: fixtureSymbolOf(opening), detailRefs: opening?.detailRefs ?? null, slot: DetailSlot.JAMB,
+    symbolKey: fixtureSymbolOf(opening), detailRefs: opening?.detailRefs ?? null, fittingKey: fittingKeyOf(opening), slot: DetailSlot.JAMB,
   });
   const mm = paramMmOf(resolved?.drawn?.entry);
   const out = {};

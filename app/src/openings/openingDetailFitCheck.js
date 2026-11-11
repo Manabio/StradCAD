@@ -10,14 +10,15 @@
 
 import { DetailSlot, FRAME_OVERHANG_MM } from '../core/constants.js';
 import { clampFrameFaceWidth, jambWidthFor } from './openingPlanSymbolGeometry.js';
-import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, DETAIL_OWNER_OPENING, ERR_SLIDE_ON_EXTERIOR_WALL } from '../error.js';
+import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, DETAIL_OWNER_OPENING, DETAIL_OWNER_FITTING, ERR_SLIDE_ON_EXTERIOR_WALL } from '../error.js';
+import { parseFittingPartKey } from '../detail/detailPlacement.js';
 import { OpeningCategory } from '../core.js';
 import { isOutsetSlide } from './slideOutset.js';
 import { effectiveFrameFaceWidth, effectiveFrameProjection, effectiveHeight, fixtureSymbolOf } from './openingNumbering.js';
 import { detailFitKey, fitDetailLocalMemo, subTypeDetailFigureRefsFor, findCatalogEntry } from './openingCatalog.js';
 import { isFrameOnlySection, isSwingLeafSection, isWindowSection, sectionFrameFaceWidthFor, openingSectionWallRange, wallMaterialRangeForOpening, wallMaterialRangesOf } from './openingSection.js';
 import { findHostWall, wallFaceRange } from './openingGeometry.js';
-import { resolveDetailFigure, elevationDetailDims, frameDefaultKey } from './openingDetailFit.js';
+import { resolveDetailFigure, elevationDetailDims, frameDefaultKey, fittingKeyOf } from './openingDetailFit.js';
 
 const FRAME_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot.HEAD, DetailSlot.SILL]);
 const FIGURE_SLOTS = Object.freeze([DetailSlot.FIGURE, DetailSlot.FIGURE_BACK]);
@@ -26,11 +27,11 @@ const ALL_SLOTS = Object.freeze([...FRAME_SLOTS, DetailSlot.FIGURE]);
 // 1つの解決結果 r（resolveDetailFigure の戻り値）の失敗（参照先の図が無い・fit できない）を failures に積む。
 // ownerKey＝通知文の主語（三方枠は建具記号キー・姿図は建具種別キー）。dims＝fit の寸法の写像。extra＝行に足す項目。
 function pushFailuresOf(r, { failures, seen, ownerKey, slot, dims, extra }) {
-  const push = (key, label, reason) => {
+  const push = (key, label, reason, owner = ownerKey) => {
     if (seen.has(key)) return;
     seen.add(key);
     failures.push({
-      key, symbolKey: ownerKey, slot, label, reason, message: ERR_DETAIL_FIT_FAILED(label, ownerKey, reason, slot), ...extra,
+      key, symbolKey: owner, slot, label, reason, message: ERR_DETAIL_FIT_FAILED(label, owner, reason, slot), ...extra,
     });
   };
   // 優先の参照先の図が無い（描画は後ろの候補の図を流用するか既定へ戻す）。
@@ -38,14 +39,29 @@ function pushFailuresOf(r, { failures, seen, ownerKey, slot, dims, extra }) {
     // 鍵は寸法を含めない（図が無いのは寸法によらない。出幅・見付違いの建具ごとに同じ文の行を増やさない）。
     // fit 失敗の鍵（detailFitKey）とは接頭辞で名前空間を分ける。
     push(`notFound|${r.intended.key}|${r.intended.slot}`, r.intended.key,
-      ERR_DETAIL_FIGURE_NOT_FOUND(r.intended.source === 'opening' ? DETAIL_OWNER_OPENING : ownerKey, r.intended.slot));
+      ERR_DETAIL_FIGURE_NOT_FOUND(ownerOfSource(r.intended.source, ownerKey), r.intended.slot));
   }
   if (!r.drawn) return;
   const fitted = fitDetailLocalMemo({ figureKey: r.drawn.key, slot: r.drawn.slot, dims });
   if (fitted.error) {
+    const fromFitting = r.drawn.source === 'fitting';
     push(detailFitKey({ figureKey: r.drawn.key, slot: r.drawn.slot, dims }),
-      r.drawn.entry.label || r.drawn.key, fitted.error.message);
+      fromFitting ? fittingPartLabel(r.drawn.key) : r.drawn.entry.label || r.drawn.key, fitted.error.message,
+      fromFitting ? DETAIL_OWNER_FITTING : ownerKey);
   }
+}
+
+// 通知文の主語: 建具個別の指定・建具一式はそれぞれ固定の言い方、それ以外（記号・建具種別）は持ち主のキー。
+function ownerOfSource(source, ownerKey) {
+  if (source === 'opening') return DETAIL_OWNER_OPENING;
+  if (source === 'fitting') return DETAIL_OWNER_FITTING;
+  return ownerKey;
+}
+
+// 行のキー表示（表示だけ）: 合成キー '<一式キー>#<役割>' は「一式キー（役割）」。
+function fittingPartLabel(key) {
+  const parsed = parseFittingPartKey(key);
+  return parsed ? `${parsed.setKey}（${parsed.role}）` : key;
 }
 
 /**
@@ -63,7 +79,7 @@ export function collectDetailFigureFailures(openings, seen = new Set()) {
     const refs = subTypeDetailFigureRefsFor(o.category, o.subType);
     // 手前から見た姿図に加えて、向こう側から見た姿図（T2-2。任意）も参照があるときだけ試す
     for (const slot of FIGURE_SLOTS) {
-      const r = resolveDetailFigure({ detailRefs: o.detailRefs ?? null, slot, subTypeRefs: refs });
+      const r = resolveDetailFigure({ detailRefs: o.detailRefs ?? null, slot, subTypeRefs: refs, fittingKey: fittingKeyOf(o) });
       if (!r) continue;
       const dims = elevationDetailDims(o);
       pushFailuresOf(r, { failures, seen, ownerKey: o.subType, slot, dims, extra: { dims } });
@@ -98,7 +114,7 @@ function collectFrameFailures(o, graph, frameSlots, { failures, seen }) {
     return [...new Set(thicknesses)].map(wallThickness => ({ wallThickness, projection: FRAME_OVERHANG_MM, faceWidth: sectionFrameFaceWidthFor(o) }));
   };
   for (const slot of frameSlots) {
-    const r = resolveDetailFigure({ symbolKey, detailRefs: o.detailRefs ?? null, slot });
+    const r = resolveDetailFigure({ symbolKey, detailRefs: o.detailRefs ?? null, slot, fittingKey: fittingKeyOf(o) });
     if (!r) continue;
     for (const dims of dimsListOf(slot)) {
       const before = failures.length;
@@ -148,7 +164,7 @@ export function collectDetailFitFailures(graph, seen = new Set(), { slots = ALL_
       [DetailSlot.HEAD]: clampFrameFaceWidth(Math.min(fw, o.width / 2), 0, effectiveHeight(o)),
     };
     for (const slot of nonSillSlots) {
-      const r = resolveDetailFigure({ symbolKey, detailRefs: o.detailRefs ?? null, slot });
+      const r = resolveDetailFigure({ symbolKey, detailRefs: o.detailRefs ?? null, slot, fittingKey: fittingKeyOf(o) });
       if (!r) continue;
       const faceWidth = faceWidthOf[slot];
       pushFailuresOf(r, {
