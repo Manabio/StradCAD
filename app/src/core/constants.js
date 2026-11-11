@@ -856,6 +856,8 @@ export const DETAIL_FIGURE_VERSION = 1;
 export const FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD = 'detailFigures';
 /** 平面の姿図が別の向きの図を束ねる任意項目名（views）。カタログ層が読み替え・推移展開・照合で引く。 */
 export const DETAIL_VIEWS_FIELD = 'views';
+/** 建具一式（DetailCategory.FITTING）の部品の列を持つ項目名（図エントリの最上位）。 */
+export const DETAIL_PARTS_FIELD = 'parts';
 /** 詳細図キーの接頭辞（S4 の生成が使う。S2 の登録表は書式を検査しない）。 */
 export const DETAIL_FIGURE_KEY_PREFIX = 'df-';
 /** 詳細図由来のプリミティブに付ける出どころの印（source。kind は立面が上書きするので使わない）。 */

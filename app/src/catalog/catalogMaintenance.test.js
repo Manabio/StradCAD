@@ -22,7 +22,7 @@ import {
   collectExportableEntries, formatBuiltinSource, formatCatalogSourceLine,
   DEFAULT_PANEL_X, DEFAULT_PANEL_Y, materialFormHasDimensions, materialFormHasBackingClass,
   initialMaterialDimensions, materialFormWithCategory, validateMaterialFormDimensions,
-  detailFigureOptionsFor, fixtureSymbolFormWithFrameOnly, FIXTURE_SYMBOL_DETAIL_HINT,
+  detailFigureOptionsFor, fixtureSymbolFormWithFrameOnly, FIXTURE_SYMBOL_DETAIL_HINT, formatDetailParts,
   FIXTURE_SYMBOL_DETAIL_FORM_FIELDS, FIXTURE_SYMBOL_DETAIL_SLOT_TEXT,
 } from './catalogMaintenance.js';
 import { DetailSlot, DETAIL_SLOT_TARGETS, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
@@ -2358,6 +2358,42 @@ test('【失敗系】validateOpeningSubTypeForm: 向こう側の姿図は実在�
   const wrong = validateOpeningSubTypeForm(subTypeForm({ detailFigureBack: 'df-j1' }), { isAdding: false, detailFigureList: FIG_LIST_WITH_FIGURE });
   assert.equal(wrong.ok, false, '分類（方立）が違えば拒否');
   assert.equal(validateOpeningSubTypeForm(subTypeForm({ detailFigureBack: 'df-f2' }), { isAdding: false }).ok, false, '一覧を渡さなければ拒否');
+});
+
+// ---- C7: 建具種別の建具一式の割当て（detailFigures.fitting）と閲覧の部品の整形 ----
+const FIG_LIST_WITH_FITTING = [...FIG_LIST_WITH_FIGURE, detailFig('df-set1', DT[DetailSlot.FITTING])];
+
+test('C7 建具種別 detailFitting 往復: フォーム→エントリ→フォームで fitting が残る。姿図・向こう側と共存し、空白だけなら項目ごと持たない・文字列でない値は未割当て', () => {
+  const entry = buildOpeningSubTypeEntry(subTypeForm({ detailFigure: 'df-f1', detailFitting: ' df-set1 ' }));
+  assert.deepEqual(entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { figure: 'df-f1', fitting: 'df-set1' });
+  assert.deepEqual(buildOpeningSubTypeEntry(openingSubTypeFormFromEntry(entry)), entry, '往復で fitting が落ちない');
+  const only = buildOpeningSubTypeEntry(subTypeForm({ detailFitting: 'df-set1' }));
+  assert.deepEqual(only[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD], { fitting: 'df-set1' });
+  assert.equal(openingSubTypeFormFromEntry(buildOpeningSubTypeEntry(subTypeForm({ detailFigure: 'df-f1' }))).detailFitting, '');
+  assert.equal(Object.hasOwn(buildOpeningSubTypeEntry(subTypeForm({ detailFitting: '  ' })), FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD), false);
+  assert.equal(openingSubTypeFormFromEntry({ ...entry, [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { fitting: 3 } }).detailFitting, '');
+});
+
+test('【失敗系】C7 validateOpeningSubTypeForm: 建具一式は実在し一式の分類に合うものだけ。存在しない図・単一の図・一覧なしは label「建具一式」で拒否', () => {
+  const ok = validateOpeningSubTypeForm(subTypeForm({ detailFitting: 'df-set1' }), { isAdding: false, detailFigureList: FIG_LIST_WITH_FITTING });
+  assert.equal(ok.ok, true);
+  const missing = validateOpeningSubTypeForm(subTypeForm({ detailFitting: 'df-x' }), { isAdding: false, detailFigureList: FIG_LIST_WITH_FITTING });
+  assert.equal(missing.ok, false);
+  assert.match(missing.message, /部分詳細図（建具一式）に指定した図が見つかりません: df-x/);
+  const single = validateOpeningSubTypeForm(subTypeForm({ detailFitting: 'df-f1' }), { isAdding: false, detailFigureList: FIG_LIST_WITH_FITTING });
+  assert.equal(single.ok, false, '実在しても単一の姿図は一式の候補でない');
+  assert.equal(validateOpeningSubTypeForm(subTypeForm({ detailFitting: 'df-set1' }), { isAdding: false }).ok, false, '一覧を渡さなければ拒否');
+  assert.deepEqual(detailFigureOptionsFor(DetailSlot.FITTING, FIG_LIST_WITH_FITTING).map(o => o.value), ['df-set1'], '建具一式の候補は一式だけ');
+  assert.deepEqual(FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FITTING], { label: '部分詳細図（建具一式）', unassigned: 'なし' });
+});
+
+test('C7 formatDetailParts: 「部品 n（役割ラベル・…）」。未知の役割は生のまま・parts なし/空は汎用整形', () => {
+  assert.equal(formatDetailParts([{ id: 'a', role: 'jamb' }, { id: 'b', role: 'head' }]), '部品 2（方立（両側）・上枠）');
+  assert.equal(formatDetailParts([{ id: 'a', role: 'slideLatchUp' }]), '部品 1（戸先側（枠＋閉じた扉）（見上げ））');
+  assert.equal(formatDetailParts([{ id: 'a', role: 'noSuchRole' }]), '部品 1（noSuchRole）', '壊れた役割を隠さない');
+  assert.equal(formatDetailParts([{ id: 'a' }]), `部品 1（${formatReadonlyValue(undefined)}）`, '役割が無い部品も落とさない');
+  assert.equal(formatDetailParts([]), formatReadonlyValue([]));
+  assert.equal(formatDetailParts(undefined), formatReadonlyValue(undefined));
 });
 
 test('fixtureSymbolFormWithFrameOnly: 外しても割当ては保ち（片開き戸でも使う）、付けると他の値を保つ', () => {

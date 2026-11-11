@@ -351,6 +351,7 @@ const DETAIL_SLOT_LABELS = Object.freeze({
   jamb: '方立（縦枠）', head: '上枠', sill: '下枠', figure: '姿図', figureBack: '姿図（向こう側）', floorWall: '床と壁', wallCeiling: '壁と天井',
   kneeTop: '腰壁の天端', dropBottom: '垂れ壁の下端', floorStep: '床の段差',
   ceilingStep: '天井の段差',
+  fitting: '建具一式', // 建具一式の参照切れ（C7）。「建具個別の指定 の建具一式の詳細図が…」
 });
 // 部屋の取り合い（Room.detailRefs。S8a）の通知文の主語。ERR_DETAIL_FIT_FAILED の symbolKey・ERR_DETAIL_FIGURE_NOT_FOUND の owner に渡す。
 export const detailOwnerRoom = (roomName) => `部屋「${roomName || '（名称なし）'}」`;

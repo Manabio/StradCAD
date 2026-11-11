@@ -22,7 +22,7 @@
 import {
   PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumKind, DetailAxis,
   DetailDatumRole, DetailParam, DetailMaterialField, DetailDash, DetailEdgeMark, DETAIL_VIEW_COMBOS,
-  DetailPlacementView, PLACED_FIGURE_SUBJECTS, DETAIL_VIEWS_FIELD,
+  DetailPlacementView, PLACED_FIGURE_SUBJECTS, DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD,
   DETAIL_FIGURE_VERSION, LINE_WEIGHT_MM, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_FIT_EPS_MM,
   FittingPartRole, FITTING_PART_TARGETS, FITTING_PART_KEY_SEPARATOR,
 } from '../core/constants.js';
@@ -153,8 +153,8 @@ export function normalizeDetailFigure(plain) {
     anchors: body.anchors,
     provenance: f.provenance ?? null,
     note: f.note ?? null,
-    ...(Array.isArray(f.parts)
-      ? { parts: f.parts.map(p => (isObj(p) ? { ...p, figure: isObj(p.figure) ? normalizeBody(p.figure) : p.figure } : p)) }
+    ...(Array.isArray(f[DETAIL_PARTS_FIELD])
+      ? { [DETAIL_PARTS_FIELD]: f[DETAIL_PARTS_FIELD].map(p => (isObj(p) ? { ...p, figure: isObj(p.figure) ? normalizeBody(p.figure) : p.figure } : p)) }
       : {}),
   };
 }
@@ -197,12 +197,12 @@ function validateFittingSet(fig, input, push) {
     push(E.SHAPE, '建具一式の最上位に strokes・datums・anchors は持てない（部品が持つ）', 'strokes');
   }
   if (fig[DETAIL_VIEWS_FIELD] != null) push(E.BAD_VIEWS, '建具一式は views を持てない', DETAIL_VIEWS_FIELD);
-  if (!Array.isArray(fig.parts)) { push(E.SHAPE, 'parts が配列でない', 'parts'); return; }
-  if (fig.parts.length === 0) { push(E.PARTS_EMPTY, '部品が 0 個', 'parts'); return; }
+  if (!Array.isArray(fig[DETAIL_PARTS_FIELD])) { push(E.SHAPE, 'parts が配列でない', DETAIL_PARTS_FIELD); return; }
+  if (fig[DETAIL_PARTS_FIELD].length === 0) { push(E.PARTS_EMPTY, '部品が 0 個', DETAIL_PARTS_FIELD); return; }
   const ids = new Set();
   const roles = new Set();
-  fig.parts.forEach((part, i) => {
-    const pp = `parts[${i}]`;
+  fig[DETAIL_PARTS_FIELD].forEach((part, i) => {
+    const pp = `${DETAIL_PARTS_FIELD}[${i}]`;
     if (!isObj(part)) { push(E.SHAPE, '部品がオブジェクトでない', pp); return; }
     if (!isNonEmptyString(part.id)) push(E.EMPTY_KEY, '部品の id が空', `${pp}.id`);
     else if (ids.has(part.id)) push(E.PART_DUPLICATE, `部品の id が重複: ${part.id}`, `${pp}.id`);
@@ -421,8 +421,8 @@ export function parseFittingPartKey(key) {
  * entry が建具一式でない・その role の部品が無いときは null。
  */
 export function fittingPartFigure(entry, role) {
-  if (!isObj(entry) || entry.category !== DetailCategory.FITTING || !Array.isArray(entry.parts)) return null;
-  const part = entry.parts.find(p => isObj(p) && p.role === role && isObj(p.figure));
+  if (!isObj(entry) || entry.category !== DetailCategory.FITTING || !Array.isArray(entry[DETAIL_PARTS_FIELD])) return null;
+  const part = entry[DETAIL_PARTS_FIELD].find(p => isObj(p) && p.role === role && isObj(p.figure));
   if (!part) return null;
   return {
     ...part.figure,

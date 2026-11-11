@@ -661,3 +661,31 @@ test('ElevationModeState.bandAtScreenY: viewSize.y（上帯）を引いた描画
   runInAction(() => { noTop.bands = [fakeBand]; });
   assert.equal(noTop.bandAtScreenY(1), 'r', 'viewSize.y が無いときは画面 y をそのまま使う');
 });
+
+// ---- C7: 建具一式の参照切れの通知（展開 init の materialError 経由で 1 行。立面は出さない＝C9 で文書化）----
+test('【C7】ElevationModeState.init: 建具個別の一式の参照切れは materialError に 1 件（主語「建具個別の指定」）。一式の指定が無い・null 明示なら null', async () => {
+  const graph = makeGraph();
+  makeRectRoom(graph, 0, 0, 4000, 3000, 'LDK');
+  const project = { openingNumberIndex: new Map() };
+  const wall = [...graph.walls][0];
+  const { opening, error } = placeOpeningWithDefaults(
+    graph, project, wall, { x: wall.isVertical ? 0 : 2000, y: wall.isVertical ? 1500 : 0 }, OpeningCategory.FITTING,
+  );
+  assert.ok(opening && !error, `前提: 開口を配置できるはず（実際のerror: ${error}）`);
+  try {
+    const none = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+    await none.init();
+    assert.equal(none.materialError, null, '一式の指定が無ければ通知なし');
+    runInAction(() => { opening.detailRefs = { fitting: null }; });
+    const nul = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+    await nul.init();
+    assert.equal(nul.materialError, null, '明示 null は通知なし');
+    runInAction(() => { opening.detailRefs = { fitting: 'set-gone' }; });
+    const state = new ElevationModeState(graph, project, { width: 1000, height: 800 });
+    await state.init();
+    assert.match(state.materialError, /^詳細図 set-gone を singleSwing の建具一式に合わせられません: 建具個別の指定 の建具一式の詳細図がカタログに見つかりません/);
+    assert.doesNotMatch(state.materialError, /ほか/, '1 件');
+  } finally {
+    clearOverlays();
+  }
+});

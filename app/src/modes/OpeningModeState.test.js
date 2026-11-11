@@ -444,6 +444,82 @@ test('init: 非アクティブ階（peek）の三方枠も詳細図の検査対�
   }
 });
 
+// ---- C7: 建具一式の通知（部品の fit 失敗・参照切れ。どちらも場面 detail-fit-failed・主語「建具一式」）----
+const fittingSetOf = (key, parts) => ({
+  key, version: 1, label: `一式${key}`, category: 'fitting', view: 'plan', subject: 'opening',
+  strokes: [], datums: [], anchors: [], provenance: null, note: null, parts,
+});
+const figurePartOf = fig => ({
+  id: 'p-figure', role: 'figure', figure: { category: fig.category, view: fig.view, subject: fig.subject, strokes: fig.strokes, datums: fig.datums, anchors: fig.anchors },
+});
+
+test('init: 一式の部品が合わせられない建具は detail-fit-failed を 1 行（主語「建具一式」）、一式が実在して合うなら 0 行', async () => {
+  const { project, graph, wall } = makeGraph();
+  setOverlay(CatalogKind.DETAIL_FIGURE, { user: [
+    fittingSetOf('set-bad', [figurePartOf(elevationFigure('x', { sFixed: 900 }))]),
+    fittingSetOf('set-ok', [figurePartOf(elevationFigure('y'))]),
+  ] });
+  try {
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { detailRefs: { fitting: 'set-ok' } });
+    assert.deepEqual((await new OpeningModeState(graph, project).init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed'), []);
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 1500, 800, OpeningCategory.FITTING, 'threeSidedFrame', { detailRefs: { fitting: 'set-bad' } });
+    const rows = (await new OpeningModeState(graph, project).init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+    assert.equal(rows.length, 1);
+    assert.match(rows[0].message, /^詳細図 set-bad（姿図） を 建具一式 の姿図に合わせられません: /);
+    assert.deepEqual(rows[0].allowedActions, ['defer']);
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('【失敗系】init: 一式の参照切れは detail-fit-failed を 1 行（同じキーは本数によらず 1 行）。明示 null・一式の図があるが該当の部品が無いのは 0 行', async () => {
+  const { project, graph, wall } = makeGraph();
+  setOverlay(CatalogKind.DETAIL_FIGURE, { user: [fittingSetOf('set-empty', [])] });
+  try {
+    const add = (off, refs) => graph.addOpening(wall.axisCL, 1, false, wall.clStart, off, 800, OpeningCategory.FITTING, 'threeSidedFrame', { detailRefs: refs });
+    add(300, { fitting: 'set-empty' });
+    add(1300, { fitting: null });
+    assert.deepEqual((await new OpeningModeState(graph, project).init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed'), [], '部品が無いのはエラーでない');
+    add(2000, { fitting: 'set-gone' });
+    add(2500, { fitting: 'set-gone' });
+    const rows = (await new OpeningModeState(graph, project).init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+    assert.equal(rows.length, 1);
+    assert.match(rows[0].message, /^詳細図 set-gone を threeSidedFrame の建具一式に合わせられません: 建具個別の指定 の建具一式の詳細図がカタログに見つかりません/);
+    assert.deepEqual(rows[0].allowedActions, ['defer']);
+    assert.equal(rows[0].targetLabel, 'set-gone');
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('【失敗系】init: 建具種別の割当て（detailFigures.fitting）の一式の参照切れは 1 行（主語は種別キー・建具に detailRefs なし）', async () => {
+  const { project, graph, wall } = makeGraph();
+  setOverlay(CatalogKind.OPENING_SUB_TYPE, { user: [{
+    category: 'fitting', key: 'stGone', label: '試験', mechanism: 'swing', defaultWidth: 800, defaultHeight: 2000,
+    detailFigures: { fitting: 'set-gone' },
+  }] });
+  try {
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.FITTING, 'stGone', {});
+    const rows = (await new OpeningModeState(graph, project).init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].targetLabel, 'set-gone');
+    assert.match(rows[0].message, /^詳細図 set-gone を stGone の建具一式に合わせられません: stGone の建具一式の詳細図がカタログに見つかりません/);
+  } finally {
+    clearOverlays();
+  }
+});
+
+test('init: 外付け引き戸の暗黙の既定（組込みの一式。detailRefs も種別の割当ても無い）は参照切れの対象外で 0 行', async () => {
+  const { project, graph, wall } = makeGraph();
+  try {
+    graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 1500, OpeningCategory.FITTING, 'sliding', {});
+    const rows = (await new OpeningModeState(graph, project).init()).catalogResolveRows.filter(r => r.scenario === 'detail-fit-failed');
+    assert.deepEqual(rows.filter(r => /建具一式/.test(r.message)), [], '組込みの一式は参照切れにならない');
+  } finally {
+    clearOverlays();
+  }
+});
+
 test('init: detail-fit-failed の行は App.jsx のマージ（場面 unresolved-code・detail-fit-failed×自分の kinds）で再突入時に置き換わり、他種別の行は残る', async () => {
   const { project, graph, wall } = makeGraph();
   const sym = uniqueSymbolKey();

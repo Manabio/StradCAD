@@ -258,6 +258,17 @@ export function formatDetailViews(views) {
     .map(([label, value]) => `${label}: ${formatReadonlyValue(value)}`).join('・');
 }
 
+/**
+ * 建具一式の部品（parts）を閲覧用の 1 行にする。「部品 n（役割ラベル・役割ラベル）」。役割の表示名は FITTING_PART_ROLE_TEXT
+ * （未知の役割・非文字列は生のまま足して壊れた一式を隠さない）。parts が無い（null/undefined）・空・配列でないときは formatReadonlyValue に委ねる。
+ * 定義順は FITTING_PART_ROLE_TEXT の宣言より後ろだが、関数本体は呼ばれた時に評価されるので参照できる。
+ */
+export function formatDetailParts(parts) {
+  if (!Array.isArray(parts) || parts.length === 0) return formatReadonlyValue(parts);
+  const roles = parts.map(p => (typeof p?.role === 'string' ? (FITTING_PART_ROLE_TEXT[p.role] ?? p.role) : formatReadonlyValue(p?.role)));
+  return `部品 ${parts.length}（${roles.join('・')}）`;
+}
+
 const PROVENANCE_TEXT = Object.freeze({
   manual: '手描き', dxf: 'DXF', pdf: 'PDF', file: 'ファイル', maker: 'メーカー', series: 'シリーズ', license: 'ライセンス注記', blank: '（未記入）',
   page: 'ページ', scale: '縮尺',
@@ -1377,6 +1388,8 @@ export const FIXTURE_SYMBOL_DETAIL_SLOT_TEXT = Object.freeze({
   [DetailSlot.FIGURE]: Object.freeze({ label: '部分詳細図（姿図）', unassigned: 'なし' }),
   // 向こう側から見た姿図（T2-2。任意。無ければ姿図を両側に使う）
   [DetailSlot.FIGURE_BACK]: Object.freeze({ label: '部分詳細図（姿図・向こう側）', unassigned: '姿図の図を使う' }),
+  // 建具一式（C7。建具種別タブと建具エディタ。部品を役割ごとに束ねた図）
+  [DetailSlot.FITTING]: Object.freeze({ label: '部分詳細図（建具一式）', unassigned: 'なし' }),
 });
 
 /** 建具一式（FITTING）の部品の役割の表示名（ヘルパーの部品一覧・閲覧・通知が共有）。全 FittingPartRole を持つ（テストで固定）。 */
@@ -1970,6 +1983,9 @@ export function openingSubTypeFormFromEntry(entry) {
     // 向こう側から見た姿図（T2-2。detailFigures.figureBack。'' は未割当て＝姿図を両側に使う）
     detailFigureBack: typeof entry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]?.[DetailSlot.FIGURE_BACK] === 'string'
       ? entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD][DetailSlot.FIGURE_BACK] : '',
+    // 建具一式（C7。detailFigures.fitting。'' は未割当て）
+    detailFitting: typeof entry?.[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]?.[DetailSlot.FITTING] === 'string'
+      ? entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD][DetailSlot.FITTING] : '',
   };
 }
 
@@ -2059,9 +2075,11 @@ export function buildOpeningSubTypeEntry(form) {
   // 向こう側の姿図（T2-2）も同じ detailFigures に持つ。どちらも空なら項目ごと持たない。
   const detailFigure = (form?.detailFigure ?? '').trim();
   const detailFigureBack = (form?.detailFigureBack ?? '').trim();
+  const detailFitting = (form?.detailFitting ?? '').trim();
   const detailFigures = {};
   if (detailFigure !== '') detailFigures[DetailSlot.FIGURE] = detailFigure;
   if (detailFigureBack !== '') detailFigures[DetailSlot.FIGURE_BACK] = detailFigureBack;
+  if (detailFitting !== '') detailFigures[DetailSlot.FITTING] = detailFitting;
   if (Object.keys(detailFigures).length > 0) entry[FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD] = detailFigures;
   return entry;
 }
@@ -2170,6 +2188,10 @@ export function validateOpeningSubTypeForm(form, { isAdding, allKeys = new Set()
   const detailFigureBack = (form?.detailFigureBack ?? '').trim();
   if (detailFigureBack !== '' && !detailFigureOptionsFor(DetailSlot.FIGURE_BACK, detailFigureList).some(o => o.value === detailFigureBack)) {
     return { ok: false, message: `${FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FIGURE_BACK].label}に指定した図が見つかりません: ${detailFigureBack}` };
+  }
+  const detailFitting = (form?.detailFitting ?? '').trim();
+  if (detailFitting !== '' && !detailFigureOptionsFor(DetailSlot.FITTING, detailFigureList).some(o => o.value === detailFitting)) {
+    return { ok: false, message: `${FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FITTING].label}に指定した図が見つかりません: ${detailFitting}` };
   }
 
   if (isAdding) {

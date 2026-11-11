@@ -3,7 +3,7 @@ import './CatalogMaintenancePanel.css';
 import {
   CatalogKind, kindDef, MATERIAL_CLASSES, FIXTURE_SYMBOL_PROFILES, KNOWN_OPENING_MECHANISMS,
 } from '../catalog/catalogKinds.js';
-import { DetailSlot, DETAIL_VIEWS_FIELD } from '../core/constants.js';
+import { DetailSlot, DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD } from '../core/constants.js';
 import { parseMaterialCode } from '../catalog/materialCode.js';
 import { docDiffMap, overlayFor, removeDocEntry } from '../catalog/catalogRegistry.js';
 import { CATALOG_DIFF_COLOR, CATALOG_DIFF_MARK, diffPairs, diffTooltip, fieldLabel } from '../catalog/catalogDiffView.js';
@@ -16,7 +16,7 @@ import {
   buildKindTabs, buildMaterialRows, buildCatalogRows, collectKnownMaterialCodes, nextMaterialCode,
   buildMaterialEntry, duplicateMaterialEntry, validateMaterialEntry,
   upsertUserCatalogEntry, commitUserEntries,
-  realignPlansFor, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel, formatDetailViewLabel, formatDetailSubjectLabel, formatDetailProvenance, formatDetailViews,
+  realignPlansFor, realignTargets, planBulkSectionImport, formatReadonlyValue, formatCategoryLabel, formatDetailViewLabel, formatDetailSubjectLabel, formatDetailProvenance, formatDetailViews, formatDetailParts,
   isEditableMaterialCategory, parseThicknessInput, MATERIAL_CATEGORY, BACKING_CLASS_OPTIONS,
   rowEditState, lockedFieldsFor, planSaveEntry, planRevertToBuiltin, planRemoveUserEntry,
   materialFormHasDimensions, materialFormHasBackingClass, initialMaterialDimensions,
@@ -75,8 +75,11 @@ const ORIGIN_LABELS = Object.freeze({ doc: '同梱', user: 'ライブラリ', bu
 const READONLY_KIND_FIELDS = Object.freeze({
   [CatalogKind.BOUNDARY_MASTER]: Object.freeze(['label', 'kind', 'layers', 'derivedFrom', 'fields']),
   // 部分詳細図（S2）: 閲覧のみ。strokes 等の図の中身は表示しない（編集・描画プレビューはヘルパー S4）。
-  [CatalogKind.DETAIL_FIGURE]: Object.freeze(['label', 'category', 'view', 'subject', 'provenance', DETAIL_VIEWS_FIELD]),
+  [CatalogKind.DETAIL_FIGURE]: Object.freeze(['label', 'category', 'view', 'subject', 'provenance', DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD]),
 });
+
+/** 持つ図だけ行を出す任意の項目（図の束 views・建具一式の部品 parts）。 */
+const OPTIONAL_DETAIL_FIELDS = Object.freeze([DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD]);
 
 /** layers（境界マスター）1件を「役割: コード or src」の1行文字列にする。 */
 function formatLayerLine(layer) {
@@ -114,6 +117,9 @@ function formatReadonlyFieldValue(kind, field, value) {
   }
   if (kind === CatalogKind.DETAIL_FIGURE && field === DETAIL_VIEWS_FIELD) {
     return formatDetailViews(value);
+  }
+  if (kind === CatalogKind.DETAIL_FIGURE && field === DETAIL_PARTS_FIELD) {
+    return formatDetailParts(value);
   }
   return formatReadonlyValue(value);
 }
@@ -1004,7 +1010,7 @@ function ReadonlyKindTab({ kind, builtinList, search, setSearch, selectedKey, se
               <span className="catmnt-form-label">キー</span>
               <span className="catmnt-code-readout">{def.keyOf(selectedRow.entry)}</span>
             </div>
-            {fieldDefs.filter(field => field !== DETAIL_VIEWS_FIELD || selectedRow.entry[field] != null).map(field => (
+            {fieldDefs.filter(field => !OPTIONAL_DETAIL_FIELDS.includes(field) || selectedRow.entry[field] != null).map(field => (
               <div className="catmnt-form-row" key={field}>
                 <span className="catmnt-form-label">{fieldLabel(kind, field)}</span>
                 <span
@@ -2821,7 +2827,7 @@ function emptyOpeningSubTypeForm(category, key) {
     wallInterior: false, wallExterior: false, wallKindsExplicitEmpty: false,
     defaultWidth: '', defaultHeight: '',
     childRatio: '', fireLeaves: '', fireAngle: '', slideLayoutText: '',
-    detailFigure: '', detailFigureBack: '',
+    detailFigure: '', detailFigureBack: '', detailFitting: '',
   };
 }
 
@@ -3375,6 +3381,21 @@ function OpeningSubTypeTab({ materialList, onLibraryChanged }) {
               >
                 <option value="">{FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FIGURE_BACK].unassigned}</option>
                 {detailFigureOptionsFor(DetailSlot.FIGURE_BACK, detailFigureList, form.detailFigureBack).map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* 建具一式（C7。部品を役割ごとに束ねた図。外付け引き戸は組込みの一式が既定） */}
+            <div className="catmnt-form-row">
+              <span className="catmnt-form-label">{FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FITTING].label}</span>
+              <select
+                value={form.detailFitting}
+                disabled={!!disabledReason}
+                onChange={e => setForm(f => ({ ...f, detailFitting: e.target.value }))}
+              >
+                <option value="">{FIXTURE_SYMBOL_DETAIL_SLOT_TEXT[DetailSlot.FITTING].unassigned}</option>
+                {detailFigureOptionsFor(DetailSlot.FITTING, detailFigureList, form.detailFitting).map(opt => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>

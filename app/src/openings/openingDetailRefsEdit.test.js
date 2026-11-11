@@ -6,7 +6,7 @@ import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '.
 import {
   DetailSlot, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, SWING_LEAF_SUBTYPE, DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY,
   DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY, DETAIL_BUILTIN_WINDOW_JAMB_KEY,
-  DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
+  DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY, DETAIL_BUILTIN_FITTING_SLIDING_KEY, SLIDE_OUTSET_SUBTYPE,
 } from '../core/constants.js';
 import { withDetailRef } from '../core/detailRefs.js';
 import { undoManager } from '../undoManager.js';
@@ -40,18 +40,22 @@ function makeFrameGraph(props = {}) {
   return { graph, opening, project: { openingNumberIndex: observable.map() } };
 }
 
-test('select: 枠 slot 全部を出すと方立・上枠・下枠・姿図・姿図（向こう側）の 5 つ。先頭は「記号の設定を使う」（姿図は建具種別）、図は slot に合うものだけ、現在値は value に出る', () => {
+test('select: 枠 slot 全部を出すと方立・上枠・下枠・姿図・姿図（向こう側）・建具一式の 6 つ。先頭は「記号の設定を使う」（姿図・建具一式は建具種別）、図は slot に合うものだけ（建具一式の候補は一式の図だけ）、現在値は value に出る', () => {
   const list = [
     { key: 'df-j', label: '方立A', category: 'paired', view: 'plan', subject: 'jamb' },
     { key: 'df-h', label: '上枠A', category: 'paired', view: 'section', subject: 'head' },
     { key: 'df-s', label: '下枠A', category: 'paired', view: 'section', subject: 'sill' },
     { key: 'df-f', label: '姿図A', category: 'figure', view: 'elevation', subject: 'opening' },
+    { key: 'df-set', label: '一式A', category: 'fitting', view: 'plan', subject: 'opening', strokes: [], parts: [] },
   ];
   const sels = openingDetailRefSelects({ detailRefs: { [JAMB]: 'df-j' } }, list);
-  assert.deepEqual(sels.map(s => s.slot), [JAMB, HEAD, SILL, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK]);
-  assert.deepEqual(OPENING_DETAIL_REF_SLOTS, [JAMB, HEAD, SILL, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK, DetailSlot.FITTING], '一式は C7 まで select に出さない（出力の slot は下の 5 つのまま）');
-  assert.deepEqual(sels.map(s => s.label), ['部分詳細図（方立）', '部分詳細図（上枠）', '部分詳細図（下枠）', '部分詳細図（姿図）', '部分詳細図（姿図・向こう側）']);
-  assert.deepEqual(sels[0].options.map(o => o.value), ['', 'df-j']);
+  assert.deepEqual(sels.map(s => s.slot), [JAMB, HEAD, SILL, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK, DetailSlot.FITTING]);
+  assert.deepEqual(OPENING_DETAIL_REF_SLOTS, [JAMB, HEAD, SILL, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK, DetailSlot.FITTING]);
+  assert.deepEqual(sels.map(s => s.label), ['部分詳細図（方立）', '部分詳細図（上枠）', '部分詳細図（下枠）', '部分詳細図（姿図）', '部分詳細図（姿図・向こう側）', '部分詳細図（建具一式）']);
+  assert.deepEqual(sels[5].options.map(o => o.value), ['', 'df-set'], '建具一式の候補は一式の図だけ（単一の方立・姿図は出ない）');
+  assert.equal(sels[5].options[0].label, '建具種別の設定を使う');
+  assert.deepEqual(sels[3].options.map(o => o.value), ['', 'df-f'], '姿図の候補に一式は出ない');
+  assert.deepEqual(sels[0].options.map(o => o.value), ['', 'df-j'], '方立の候補に一式は出ない');
   assert.deepEqual(sels[1].options.map(o => o.value), ['', 'df-h']);
   assert.deepEqual(sels[2].options.map(o => o.value), ['', 'df-s'], '下枠は section/sill の図だけ（上枠の図は出ない）');
   assert.deepEqual(sels[3].options.map(o => o.value), ['', 'df-f'], '姿図は figure/elevation/opening の図だけ');
@@ -63,16 +67,17 @@ test('select: 枠 slot 全部を出すと方立・上枠・下枠・姿図・姿
   assert.equal(sels[1].value, '');
 });
 
-test('select: frameSlots が空なら姿図の select だけ。省略なら 4 本・[JAMB, HEAD] なら 3 本・[JAMB] なら方立と姿図の 2 本。SILL は frameSlots に無ければ出ない', () => {
+test('select: frameSlots が空なら姿図・建具一式の select だけ。省略なら 6 本・[JAMB, HEAD] なら 5 本・[JAMB] なら方立と姿図・建具一式の 4 本。SILL は frameSlots に無ければ出ない', () => {
+  const FIT = DetailSlot.FITTING;
   const sels = openingDetailRefSelects({ detailRefs: { [DetailSlot.FIGURE]: 'df-f' } }, [], { frameSlots: [] });
-  assert.deepEqual(sels.map(s => s.slot), [DetailSlot.FIGURE, DetailSlot.FIGURE_BACK]);
+  assert.deepEqual(sels.map(s => s.slot), [DetailSlot.FIGURE, DetailSlot.FIGURE_BACK, FIT]);
   assert.equal(sels[0].value, 'df-f');
   assert.match(sels[0].options.at(-1).label, /見つかりません/, '参照切れは黙って未上書きに見せない');
-  const both = [DetailSlot.JAMB, DetailSlot.HEAD, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK];
+  const both = [DetailSlot.JAMB, DetailSlot.HEAD, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK, FIT];
   assert.deepEqual(openingDetailRefSelects({ detailRefs: null }, [], { frameSlots: [JAMB, HEAD] }).map(s => s.slot), both);
-  assert.deepEqual(openingDetailRefSelects({ detailRefs: null }, []).map(s => s.slot), [JAMB, HEAD, SILL, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK], '省略時は枠 slot 全部');
+  assert.deepEqual(openingDetailRefSelects({ detailRefs: null }, []).map(s => s.slot), [JAMB, HEAD, SILL, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK, FIT], '省略時は枠 slot 全部');
   assert.equal(openingDetailRefSelects({ detailRefs: null }, [], { frameSlots: [JAMB, HEAD] }).some(s => s.slot === SILL), false, '下枠は建具に漏れない');
-  assert.deepEqual(openingDetailRefSelects({ detailRefs: null }, [], { frameSlots: [JAMB] }).map(s => s.slot), [JAMB, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK]);
+  assert.deepEqual(openingDetailRefSelects({ detailRefs: null }, [], { frameSlots: [JAMB] }).map(s => s.slot), [JAMB, DetailSlot.FIGURE, DetailSlot.FIGURE_BACK, FIT]);
 });
 
 test('frameDetailSlotsFor（S8f-3c）: 三方枠・片開き戸＝方立と上枠／窓＝方立・上枠・下枠（引き違い窓は方立なし・掃き出し窓は下枠なし）／他・機構未指定／実装外の窓＝空', () => {
@@ -90,12 +95,12 @@ test('frameDetailSlotsFor（S8f-3c）: 三方枠・片開き戸＝方立と上�
   assert.deepEqual(frameDetailSlotsFor({ category: OpeningCategory.FITTING, subType: 'x' }, false, undefined), [], '窓でも片開き戸でもない建具は機構によらず空');
   assert.deepEqual(frameDetailSlotsFor(null, false, undefined), []);
   const slotsOf = (o, mech) => openingDetailRefSelects(o, [], { frameSlots: frameDetailSlotsFor(o, false, mech) }).map(s => s.slot);
-  const { FIGURE: FIG, FIGURE_BACK: FIG_BACK } = DetailSlot;
-  assert.deepEqual(slotsOf({ ...win('fixed'), detailRefs: null }, OpeningMechanism.FIXED), [JAMB, HEAD, SILL, FIG, FIG_BACK], '窓は 5 本');
-  assert.deepEqual(slotsOf({ ...win('doubleSliding'), detailRefs: null }, OpeningMechanism.SLIDE_DOUBLE), [HEAD, SILL, FIG, FIG_BACK], '引き違い窓は 4 本');
-  assert.deepEqual(slotsOf({ ...win('fixed', 0), detailRefs: null }, OpeningMechanism.FIXED), [JAMB, HEAD, FIG, FIG_BACK], '掃き出し窓は 4 本');
-  assert.deepEqual(slotsOf({ category: OpeningCategory.FITTING, subType: 'sliding', detailRefs: null }, OpeningMechanism.SLIDE_SINGLE), [FIG, FIG_BACK], '建具は姿図だけ（下枠が漏れない）');
-  assert.deepEqual(slotsOf({ category: OpeningCategory.FITTING, subType: SWING_LEAF_SUBTYPE, detailRefs: null }, OpeningMechanism.SWING), [JAMB, HEAD, FIG, FIG_BACK], '片開き戸に下枠は出ない');
+  const { FIGURE: FIG, FIGURE_BACK: FIG_BACK, FITTING: FIT } = DetailSlot;
+  assert.deepEqual(slotsOf({ ...win('fixed'), detailRefs: null }, OpeningMechanism.FIXED), [JAMB, HEAD, SILL, FIG, FIG_BACK, FIT], '窓は 6 本（建具一式を含む）');
+  assert.deepEqual(slotsOf({ ...win('doubleSliding'), detailRefs: null }, OpeningMechanism.SLIDE_DOUBLE), [HEAD, SILL, FIG, FIG_BACK, FIT], '引き違い窓は 5 本');
+  assert.deepEqual(slotsOf({ ...win('fixed', 0), detailRefs: null }, OpeningMechanism.FIXED), [JAMB, HEAD, FIG, FIG_BACK, FIT], '掃き出し窓は 5 本');
+  assert.deepEqual(slotsOf({ category: OpeningCategory.FITTING, subType: 'sliding', detailRefs: null }, OpeningMechanism.SLIDE_SINGLE), [FIG, FIG_BACK, FIT], '建具は姿図と建具一式だけ（下枠が漏れない）');
+  assert.deepEqual(slotsOf({ category: OpeningCategory.FITTING, subType: SWING_LEAF_SUBTYPE, detailRefs: null }, OpeningMechanism.SWING), [JAMB, HEAD, FIG, FIG_BACK, FIT], '片開き戸に下枠は出ない');
 });
 
 test('detailRefsAfterSelect（S8f-3c）: 窓は組込みの下枠・上枠キーを選んでも上書きにならない。別キーは残り、掃き出し窓の下枠・窓でない建具は畳まない', () => {
@@ -150,7 +155,28 @@ test('【失敗系】select: 無いキーを持つ建具は「見つかりませ
   assert.equal(sels[0].options.at(-1).value, 'df-gone');
   assert.match(sels[0].options.at(-1).label, /見つかりません/);
   const none = openingDetailRefSelects({ detailRefs: null }, []);
-  assert.deepEqual(none.map(s => s.value), ['', '', '', '', '']);
+  assert.deepEqual(none.map(s => s.value), ['', '', '', '', '', '']);
+  const gone = openingDetailRefSelects({ detailRefs: { [DetailSlot.FITTING]: 'set-gone' } }, []);
+  assert.equal(gone.at(-1).value, 'set-gone');
+  assert.match(gone.at(-1).options.at(-1).label, /見つかりません/, '建具一式の参照切れも黙って未上書きに見せない');
+});
+
+test('C7 detailRefsAfterSelect(fitting): 建具種別の一式と同じキーは上書きとして持たない。外付け引き戸は組込みの一式が基準。別のキー・空で外す', () => {
+  const FIT = DetailSlot.FITTING;
+  setOverlay(CatalogKind.OPENING_SUB_TYPE, { user: [subTypeEntry('user1', null, { [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { [FIT]: 'set-st' } })] });
+  const o = { category: 'fitting', subType: 'user1', detailRefs: null };
+  assert.equal(detailRefsAfterSelect(o, FIT, 'set-st'), null, '種別の割当てと同じキーは畳む');
+  assert.deepEqual(detailRefsAfterSelect(o, FIT, 'set-other'), { [FIT]: 'set-other' }, '別のキーは上書きとして持つ');
+  assert.equal(detailRefsAfterSelect({ ...o, detailRefs: { [FIT]: 'set-other' } }, FIT, ''), null, '空で外す');
+  // 種別に割当てが無い建具は、同じキーでも畳まない（既定が無い）
+  const plain = { category: 'fitting', subType: 'noAssign', detailRefs: null };
+  assert.deepEqual(detailRefsAfterSelect(plain, FIT, 'set-st'), { [FIT]: 'set-st' });
+  // 外付け引き戸（subType sliding）は組込みの一式が既定
+  const sliding = { category: 'fitting', subType: SLIDE_OUTSET_SUBTYPE, detailRefs: null };
+  assert.equal(detailRefsAfterSelect(sliding, FIT, DETAIL_BUILTIN_FITTING_SLIDING_KEY), null, '既定と同じキーは上書きとして持たない');
+  assert.deepEqual(detailRefsAfterSelect(sliding, FIT, 'set-st'), { [FIT]: 'set-st' });
+  // 他の slot の基準（記号）には影響しない: 方立の同キーは FITTING の既定を見ない
+  assert.deepEqual(detailRefsAfterSelect(plain, JAMB, DETAIL_BUILTIN_FITTING_SLIDING_KEY), { [JAMB]: DETAIL_BUILTIN_FITTING_SLIDING_KEY });
 });
 
 test('T2-2 detailRefsAfterSelect(figureBack): 向こう側の姿図を選ぶと detailRefs.figureBack が付き、建具種別の割当てと同じキー・空で外れる。姿図（figure）は不変', () => {

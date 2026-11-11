@@ -18,7 +18,7 @@ import {
   DETAIL_BUILTIN_DOOR_JAMB_KEY, DETAIL_BUILTIN_DOOR_HEAD_KEY, SWING_LEAF_SUBTYPE, OpeningCategory,
   DETAIL_BUILTIN_WINDOW_JAMB_KEY, DETAIL_BUILTIN_WINDOW_JAMB_OPEN_KEY, DETAIL_BUILTIN_WINDOW_JAMB_NOTCHED_KEY,
   DETAIL_BUILTIN_WINDOW_HEAD_KEY, DETAIL_BUILTIN_WINDOW_SILL_KEY,
-  DETAIL_VIEWS_FIELD, SLIDE_OUTSET_SUBTYPE, DETAIL_BUILTIN_FITTING_SLIDING_KEY,
+  DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD, SLIDE_OUTSET_SUBTYPE, DETAIL_BUILTIN_FITTING_SLIDING_KEY,
 } from '../core/constants.js';
 import { parseBaseboardHeightMm } from '../core/baseboardHeight.js';
 import { moveParts, canHaveDetailViews } from '../detail/detailModel.js';
@@ -179,7 +179,7 @@ function placedFigureViewKeys(figure) {
 function detailFigureMaterialCodes(figure) {
   const codes = new Set();
   // 建具一式（parts）は部品の図に埋め込みの strokes を持つ（最上位の strokes は空）。部品は入れ子にしない前提で 1 段だけ歩く。
-  const bodies = [figure, ...(Array.isArray(figure?.parts) ? figure.parts.map(p => p?.figure) : [])];
+  const bodies = [figure, ...(Array.isArray(figure?.[DETAIL_PARTS_FIELD]) ? figure[DETAIL_PARTS_FIELD].map(p => p?.figure) : [])];
   for (const body of bodies) {
     const strokes = Array.isArray(body?.strokes) ? body.strokes : [];
     for (const stroke of strokes) {

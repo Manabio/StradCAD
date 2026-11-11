@@ -16,7 +16,7 @@ import { FITTING_PART_ROLE_TEXT } from '../catalog/catalogMaintenance.js';
 import { OpeningCategory } from '../core.js';
 import { isOutsetSlide } from './slideOutset.js';
 import { effectiveFrameFaceWidth, effectiveFrameProjection, effectiveHeight, fixtureSymbolOf } from './openingNumbering.js';
-import { detailFitKey, fitDetailLocalMemo, subTypeDetailFigureRefsFor, findCatalogEntry } from './openingCatalog.js';
+import { detailFitKey, fitDetailLocalMemo, subTypeDetailFigureRefsFor, findCatalogEntry, detailFigureEntry } from './openingCatalog.js';
 import { isFrameOnlySection, isSwingLeafSection, isWindowSection, sectionFrameFaceWidthFor, openingSectionWallRange, wallMaterialRangeForOpening, wallMaterialRangesOf } from './openingSection.js';
 import { findHostWall, wallFaceRange } from './openingGeometry.js';
 import { resolveDetailFigure, elevationDetailDims, frameDefaultKey, fittingKeyOf, jambSidesFor } from './openingDetailFit.js';
@@ -85,6 +85,24 @@ export function collectDetailFigureFailures(openings, seen = new Set()) {
       const dims = elevationDetailDims(o);
       pushFailuresOf(r, { failures, seen, ownerKey: o.subType, slot, dims, extra: { dims } });
     }
+  }
+  return failures;
+}
+
+/**
+ * 建具一式（fittingKeyOf＝建具個別の指定＞建具種別の割当て。暗黙の既定の組込みは対象外）の参照先がカタログに無いものの集計（C7）。
+ * 部品が無いことはエラーにしない（一式の図はあるが該当 role の部品が無いだけ）。参照切れは一式のキーごとに 1 行（階をまたいで seen で畳む）。
+ * 行の形は pushFailuresOf と同じ（場面 detail-fit-failed。建具モードは詳細図の unresolved-code を持たないので枠・姿図の参照切れと同じ経路）。
+ */
+export function collectFittingNotFound(openings, seen = new Set()) {
+  const failures = [];
+  for (const o of openings ?? []) {
+    const key = fittingKeyOf(o);
+    if (key === null || detailFigureEntry(key) !== null) continue;
+    // 主語は参照の持ち主（枠の参照切れと同じ規約）: detailRefs が fitting を持てば建具個別の指定、無ければ建具種別。
+    const source = Object.hasOwn(o.detailRefs ?? {}, DetailSlot.FITTING) ? 'opening' : 'subType';
+    pushFailuresOf({ drawn: null, intended: { key, source, slot: DetailSlot.FITTING } },
+      { failures, seen, ownerKey: o.subType, slot: DetailSlot.FITTING, dims: {}, extra: {} });
   }
   return failures;
 }
@@ -181,7 +199,7 @@ export function collectDetailFitFailures(graph, seen = new Set(), { slots = ALL_
       });
     }
   }
-  if (slots.includes(DetailSlot.FIGURE)) failures.push(...collectDetailFigureFailures(graph?.openings, seen));
+  if (slots.includes(DetailSlot.FIGURE)) failures.push(...collectDetailFigureFailures(graph?.openings, seen), ...collectFittingNotFound(graph?.openings, seen));
   return failures;
 }
 

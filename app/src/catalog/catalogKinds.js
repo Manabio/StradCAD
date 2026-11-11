@@ -20,7 +20,7 @@
 // 増えていないかで都度確認すること。
 // ================================================================
 
-import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DETAIL_VIEWS_FIELD } from '../core/constants.js';
+import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD } from '../core/constants.js';
 import { isSupportedDetailFigure } from '../detail/detailModel.js';
 
 function isPlainObject(v) {
@@ -608,22 +608,22 @@ const REGISTRY = Object.assign(Object.create(null), {
       return { key };
     },
     encoding: 'json',
-    knownFields: ['key', 'version', 'label', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', DETAIL_VIEWS_FIELD, 'parts'],
+    knownFields: ['key', 'version', 'label', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD],
     requiredFields: ['key', 'label', 'category', 'view', 'strokes'],
     keyBoundFields: ['key'],
     overrideLockedFields: [],
     // views（平面の姿図が束ねる別の図）は入れ子のため厳密比較。建具記号の detailFigures と同じく compare だけ（dedupe には入れない）。
-    compareFields: ['version', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', DETAIL_VIEWS_FIELD, 'parts'],
+    compareFields: ['version', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD],
     silentDiffFields: ['label'],
     // strokes を先頭に置く: 末尾から外す段階的探索でも strokes は最後まで残る（線が違う図を
     // 呼称・分類だけで「同じもの」と見なさない）。入れ子は厳密比較（規約）。
     // parts は末尾: 一式の無い図の段は不変（parts は両方 undefined で一致扱い・最後の段 ['strokes'] の実質は変わらない）。
     // 一式は部品が違えば propose・同じなら alias。先頭に足すと最後の段が strokes だけになり一式の無い図の閾値が下がるので不可。
-    matchFields: ['strokes', 'category', 'view', 'subject', 'label', 'parts'],
+    matchFields: ['strokes', 'category', 'view', 'subject', 'label', DETAIL_PARTS_FIELD],
     minMatchFields: 2,
     // 建具一式（parts）は最上位の strokes が空なので、parts で一式どうしを区別し同じ図に畳まない
     // （views は dedupe に入れないが、parts は入れる。Q-C2）。
-    dedupeFields: ['parts', 'strokes', 'label', 'category', 'view', 'subject'],
+    dedupeFields: [DETAIL_PARTS_FIELD, 'strokes', 'label', 'category', 'view', 'subject'],
     // 浅い型検査だけ（必須項目の存在・配列か・文字列か）。深い検査（語彙・長さ・Anchor 規則）を例外にすると、
     // validateBundle の例外で全種別の overlay が立たなくなる——深い検査は isSupported（unsupported 通知）へ。
     // version・subject・datums・anchors は省略可（省略は isSupported/検証側が扱う）。
@@ -640,7 +640,7 @@ const REGISTRY = Object.assign(Object.create(null), {
       if (entry.version != null && !isFiniteNumber(entry.version)) {
         throw new Error('部分詳細図エントリのversionが不正です（数値が必要）');
       }
-      for (const f of ['strokes', 'datums', 'anchors', 'parts']) {
+      for (const f of ['strokes', 'datums', 'anchors', DETAIL_PARTS_FIELD]) {
         if (entry[f] == null && f !== 'strokes') continue; // strokes は requireFields が欠落（undefined）を弾き済み。null は下で弾く
         if (!Array.isArray(entry[f])) throw new Error(`部分詳細図エントリの${f}が不正です（配列が必要）`);
       }

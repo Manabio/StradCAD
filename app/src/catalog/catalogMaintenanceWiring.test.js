@@ -1870,7 +1870,7 @@ test('【不変条件・部分詳細図S2】CatalogMaintenancePanel.jsx: READONL
   const m = /const READONLY_KIND_FIELDS = Object\.freeze\(\{([\s\S]*?)\n\}\);/.exec(code);
   assert.ok(m, 'CatalogMaintenancePanel.jsx に READONLY_KIND_FIELDS が見つからない');
   assert.ok(
-    /\[CatalogKind\.DETAIL_FIGURE\]: Object\.freeze\(\['label', 'category', 'view', 'subject', 'provenance', DETAIL_VIEWS_FIELD\]\)/.test(m[1]),
+    /\[CatalogKind\.DETAIL_FIGURE\]: Object\.freeze\(\['label', 'category', 'view', 'subject', 'provenance', DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD\]\)/.test(m[1]),
     'READONLY_KIND_FIELDS に [CatalogKind.DETAIL_FIGURE] の閲覧項目が無い（部分詳細図タブの詳細欄が空になる）',
   );
 });
@@ -1882,12 +1882,17 @@ test('【不変条件・部分詳細図P2-3】CatalogMaintenancePanel.jsx: 図�
     'formatReadonlyFieldValue が views を formatDetailViews で整形していない',
   );
   assert.ok(
-    /fieldDefs\.filter\(field => field !== DETAIL_VIEWS_FIELD \|\| selectedRow\.entry\[field\] != null\)\.map\(field => \(/.test(code),
-    '閲覧タブが views の無い図にも「図の束」の行を出す（または filter が外れている）',
+    /fieldDefs\.filter\(field => !OPTIONAL_DETAIL_FIELDS\.includes\(field\) \|\| selectedRow\.entry\[field\] != null\)\.map\(field => \(/.test(code),
+    '閲覧タブが views・parts の無い図にも行を出す（または filter が外れている）',
+  );
+  assert.ok(/OPTIONAL_DETAIL_FIELDS = Object\.freeze\(\[DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD\]\)/.test(code), '任意項目の一覧が views・parts でない');
+  assert.ok(
+    /kind === CatalogKind\.DETAIL_FIGURE && field === DETAIL_PARTS_FIELD\) \{\s*return formatDetailParts\(value\);\s*\}/.test(code),
+    'formatReadonlyFieldValue が parts を formatDetailParts で整形していない',
   );
   // 検出力: 整形・出し分けを外した文字列は通らない
   assert.ok(!/kind === CatalogKind\.DETAIL_FIGURE && field === DETAIL_VIEWS_FIELD\) \{\s*return formatDetailViews\(value\);\s*\}/.test(code.replace('return formatDetailViews(value);', 'return formatReadonlyValue(value);')));
-  assert.ok(!/fieldDefs\.filter\(field => field !== DETAIL_VIEWS_FIELD \|\| selectedRow\.entry\[field\] != null\)\.map\(field => \(/.test(code.replace('.filter(field => field !== DETAIL_VIEWS_FIELD || selectedRow.entry[field] != null)', '')));
+  assert.ok(!/fieldDefs\.filter\(field => !OPTIONAL_DETAIL_FIELDS\.includes\(field\) \|\| selectedRow\.entry\[field\] != null\)\.map\(field => \(/.test(code.replace('.filter(field => !OPTIONAL_DETAIL_FIELDS.includes(field) || selectedRow.entry[field] != null)', '')));
 });
 
 // ---- 部分詳細図 S5: 割当て UI・プレビューの detailRefs・使用中の 1 回取得（コメント除去後の本体を検査）----
@@ -1952,4 +1957,17 @@ test('【不変条件・部分詳細図T2-2】検出力: select を detailFigure
   const rewired = 'value={form.detailFigure} onChange={e => setForm(f => ({ ...f, detailFigure: e.target.value }))}';
   assert.ok(!(/value=\{form\.detailFigureBack\}/.test(rewired) && /detailFigureBack: e\.target\.value/.test(rewired)));
   assert.ok(!/detailFigureOptionsFor\(DetailSlot\.FIGURE_BACK, detailFigureList, form\.detailFigureBack\)/.test('detailFigureOptionsFor(DetailSlot.FIGURE, detailFigureList, form.detailFigure)'));
+});
+
+test('【不変条件・建具一式C7】OpeningSubTypeTab: 建具一式の select は detailFitting に繋がり、候補は FITTING の絞り込み・初期フォームも detailFitting を持つ', () => {
+  const code = stripComments(readSrc('ui/CatalogMaintenancePanel.jsx'));
+  const body = extractBalancedBody(code, 'function OpeningSubTypeTab({ materialList, onLibraryChanged }) {');
+  assert.ok(body, 'OpeningSubTypeTab が見つからない');
+  assert.ok(/detailFigureOptionsFor\(DetailSlot\.FITTING, detailFigureList, form\.detailFitting\)/.test(body), 'select の選択肢が建具一式の絞り込みを通っていない');
+  assert.ok(/value=\{form\.detailFitting\}/.test(body) && /detailFitting: e\.target\.value/.test(body), 'select がフォーム項目 detailFitting に繋がっていない');
+  assert.ok(/FIXTURE_SYMBOL_DETAIL_SLOT_TEXT\[DetailSlot\.FITTING\]\.unassigned/.test(body), '未割当ての文言が FITTING のものではない');
+  const empty = extractBalancedBody(code, 'function emptyOpeningSubTypeForm(category, key) {');
+  assert.ok(empty && /detailFitting: ''/.test(empty), 'emptyOpeningSubTypeForm が detailFitting を初期化していない');
+  // 検出力: 姿図の select に繋ぎ直した文字列は通らない
+  assert.ok(!/value=\{form\.detailFitting\}/.test('value={form.detailFigure}'));
 });
