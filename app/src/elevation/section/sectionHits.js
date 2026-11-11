@@ -81,6 +81,9 @@ import { kneeDropZRangesAt } from '../../finish/kneeDropWall.js';
 // 既存の import 先（テスト・sectionProbe 等）を変えないよう再公開する。
 export { kneeDropZRangesAt };
 import { effectiveHeight } from '../../openings/openingNumbering.js';
+import { findCatalogEntry } from '../../openings/openingCatalog.js';
+import { findHostWall } from '../../openings/openingGeometry.js';
+import { openingCutSpan, isOutsetSlide } from '../../openings/slideOutset.js';
 import { isFrameOnlySection, openingSectionWallRange } from '../../openings/openingSection.js';
 import { GAP_EPS_MM as GAP_EPS, PROBE_EPS_MM } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
@@ -650,11 +653,12 @@ function openingAbsZRange(o, floorZ) {
  * @param {number} z1 - wall候補のz存在範囲上端
  * @returns {Array<{z0:number, z1:number}>}
  */
-function openingPassThroughRangesFor(wall, graph, worldMid, floorZ, z0, z1) {
+export function openingPassThroughRangesFor(wall, graph, worldMid, floorZ, z0, z1) {
   const ranges = [];
   for (const o of graphList(graph, 'openings') ?? []) {
     if (o.isVertical !== wall.isVertical || o.axisCL.id !== wall.axisCL.id) continue;
-    const c1 = Math.min(o.coord1, o.coord2), c2 = Math.max(o.coord1, o.coord2);
+    const mechanism = findCatalogEntry(o.category, o.subType)?.mechanism;
+    const [c1, c2] = openingCutSpan(o, mechanism, isOutsetSlide(mechanism) ? findHostWall(o, graph) : null) ?? [NaN, NaN];
     if (worldMid < c1 - GAP_EPS || worldMid > c2 + GAP_EPS) continue;
     const abs = openingAbsZRange(o, floorZ);
     const lo = clamp(abs.z0, z0, z1), hi = clamp(abs.z1, z0, z1);

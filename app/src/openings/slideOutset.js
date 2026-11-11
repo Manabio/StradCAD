@@ -124,6 +124,22 @@ export function openingCutSpan(opening, mechanism, host = null) {
 }
 
 /**
+ * 展開図用の「穴の代理」建具。外付け引き戸（layout 非 null）は coord1/coord2/width/centerCoord を穴 cut に替えた
+ * 浅いコピー、それ以外（引き戸でない・外壁ホスト〔R12〕・不正）は**同じオブジェクト**（参照の同一性＝他の建具の出力不変の根拠）。
+ * `{...opening}` は MobX の computed（centerCoord/coord1/coord2）を拾わないので 4 値を明示で上書きする
+ * （innerSpanOpening と同じ注意）。refOffset・hingeSide 等の observable は own enumerable なので spread で残る。
+ */
+export function cutSpanOpening(opening, mechanism, host = null) {
+  const cut = outsetSlideLayout(opening, mechanism, host)?.cut;
+  if (!cut) return opening;
+  // entityCenterCoord＝実体の中心（W の中心）。面の所属判定（手前の部屋の引き当て）は穴の中心でなく実体の位置で行うために残す。
+  return {
+    ...opening, id: opening.id, coord1: cut[0], coord2: cut[1], width: cut[1] - cut[0], centerCoord: (cut[0] + cut[1]) / 2,
+    entityCenterCoord: opening.centerCoord,
+  };
+}
+
+/**
  * 引き代区間の欠き込みの帯（世界座標）。recess は outsetSlideLayout().recess、faceRange は実ホスト壁の
  * wallFaceRange(host, graph)＝[面の小, 面の大]（呼び元が実ホスト壁で求める）。
  * 走る面＝perpSide>0 なら faceRange[1]・perpSide<0 なら faceRange[0]。across＝その面から深さ d だけ壁の内側。

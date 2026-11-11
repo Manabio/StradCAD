@@ -9,6 +9,9 @@
  */
 import { RoomKind, RoomFeature, OpeningCategory } from '@core';
 import { effectiveHeight } from '../openings/openingNumbering.js';
+import { findCatalogEntry } from '../openings/openingCatalog.js';
+import { findHostWall } from '../openings/openingGeometry.js';
+import { cutSpanOpening, isOutsetSlide } from '../openings/slideOutset.js';
 import { computeExternalEdgeParams, mergeSegments } from '../finish/wallGeneration.js';
 import { innerWallFaceAt } from '../finish/wallFaces.js';
 import { sameAxisLine } from '../finish/kneeDropWall.js';
@@ -761,15 +764,21 @@ export function upperFloorEndsOf(face, graph, upperGraph) {
  */
 export function openingBelongsToFaceRoom(o, face, room, graph) {
   if (!room) return true;
-  const near = roomAtFaceSide(face, o.centerCoord, graph);
+  // 外付け引き戸の代理（cutSpanOpening）は centerCoord が穴の中心なので、所属は実体の中心（entityCenterCoord）で引く。
+  const near = roomAtFaceSide(face, o.entityCenterCoord ?? o.centerCoord, graph);
   if (!near) return true;
   return near.id === room.id || !!near.referenceRoomIds?.has(room.id);
 }
 
 export function openingsOnFace(face, graph) {
+  // 外付け引き戸は穴（J 込み cut）の代理に替える（S10）。それ以外は同じオブジェクト。面の所属は実体の中心で判定する。
   return (graphList(graph, 'openings') ?? [])
     .filter(o => o.isVertical === face.isVertical && o.axisCL.id === face.axisCL.id)
     .filter(o => o.centerCoord >= face.lo && o.centerCoord <= face.hi)
+    .map(o => {
+      const mechanism = findCatalogEntry(o.category, o.subType)?.mechanism;
+      return cutSpanOpening(o, mechanism, isOutsetSlide(mechanism) ? findHostWall(o, graph) : null);
+    })
     .sort((a, b) => a.centerCoord - b.centerCoord);
 }
 

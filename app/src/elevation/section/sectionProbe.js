@@ -26,6 +26,9 @@
  */
 import { buildSpaceIndex } from '../space/spaceModel.js';
 import { collectRunBreaks } from './floorProfileMath.js';
+import { findCatalogEntry } from '../../openings/openingCatalog.js';
+import { findHostWall } from '../../openings/openingGeometry.js';
+import { openingCutSpan, isOutsetSlide } from '../../openings/slideOutset.js';
 import { GAP_EPS_MM as GAP_EPS } from '../elevationStyle.js';
 import { graphList } from '../../graphReadScope.js';
 import { isRealRoom, baseLayerOf, orderLayerStack, layersAboveOf } from './sectionLayerStack.js';
@@ -292,6 +295,12 @@ export function collectCutBreaks(cut, probeCtx) {
     for (const o of graphList(layer.graph, 'openings') ?? []) {
       if (!isSightlineShape(o, line, cut.viewSign)) continue;
       addIfInsideLayer(o.coord1); addIfInsideLayer(o.coord2);
+      // 外付け引き戸は通過範囲が穴 cut（openingPassThroughRangesFor）なので、cut の端も列の境界にする（W の端は残す＝従来どおり）。
+      const mechanism = findCatalogEntry(o.category, o.subType)?.mechanism;
+      if (isOutsetSlide(mechanism)) {
+        const cutSpan = openingCutSpan(o, mechanism, findHostWall(o, layer.graph));
+        if (cutSpan) { addIfInsideLayer(cutSpan[0]); addIfInsideLayer(cutSpan[1]); }
+      }
     }
   }
   // 梁・柱（U1b B2）: 梁・柱（部材）の run 方向の端。直交する梁は芯±半幅・平行な梁（切断線が帯を通るものを含む）はスパン両端・
