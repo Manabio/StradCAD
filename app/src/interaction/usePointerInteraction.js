@@ -15,7 +15,11 @@ import {
   findBeamAxisMoveSnap,
   resolvePointerTargets,
   SNAP_THRESHOLD_PX,
+  CL_THRESHOLD_PX,
+  endpointHitDistancePx,
+  openingHitAt,
 } from '../snap.js';
+import { resolveColumnLongPress } from './columnLongPress.js';
 import { useLongPress } from './useLongPress.js';
 import { TAP_MOVE_PX, isTapDistance, releaseGesture, CEILING_PAN_PX, CEILING_DECIDE_MS, ceilingDragStart } from './holdGesture.js';
 import { findColumnAxisLabel, findGutterCL } from './gutterHitTest.js';
@@ -51,6 +55,7 @@ const CEILING_DRAG_SAMPLE_PX = 4;
 export function usePointerInteraction({
   project, graph, size, appMode, columnAxisMode, modeRef,
   menu, setMenu, onToast, onUndo, onRedo, onExitOpeningMode, onMemberClick, onMemberDeselect,
+  composition = null,
 }) {
   const [isPanning,   setIsPanning]   = useState(false);
   const [pressPos,    setPressPos]    = useState(null);
@@ -152,9 +157,23 @@ export function usePointerInteraction({
       const cl           = nearCLRef.current;
       const opening      = nearOpeningRef.current;
       const wall         = nearWallRef.current;
+      // 柱の長クリック（平面・構造モード）: 柱の断面内→柱削除、CL の交点→柱追加。CL上・空白・交点 snap・端点より優先する。
+      // 発火時の画面座標（sx, sy）から求める——タッチでは押下時に updateSnap が走らずホバー時の値（snapRef 等）が古い。
+      // 他の候補に譲る規則の入力（交点より近い端点・柱の広げた当たり幅に重なる建具）も発火位置で求めて渡す。
+      const fireWorld = viewport.screenToWorld(sx, sy);
+      const columnMode = appMode === 'floorplan' || appMode === 'structure';
+      const columnLP = resolveColumnLongPress({
+        appMode, activeGraph: graph, composition, project,
+        world: fireWorld, scaleX: viewport.scaleX, scaleY: viewport.scaleY, thresholdPx: CL_THRESHOLD_PX,
+        endpointDistPx: columnMode ? endpointHitDistancePx(graph, viewport, fireWorld, { width: size.width, height: size.height, appMode, columnAxisMode }) : null,
+        openingHit: columnMode ? openingHitAt(graph, viewport, fireWorld, appMode) : false,
+      });
+      const column     = columnLP?.column ?? null;
+      const columnSlot = columnLP?.slot ?? null;
+      const inColumnContext = !!(column || columnSlot);
       // context 判定・メニュー items 生成は menuItems.js に集約（建具モードは壁・開口以外は null）。
-      // menuItems.js は import ゼロ（node:test対応）に保つため、graph 依存の判定値はここで算出して渡す。
-      const menuContext = detectContext(snap, cl, opening, wall, clEndpoint);
+      // menuItems.js は import ゼロ（node:test対応。例外は core/constants.js のみ）に保つため、graph 依存の判定値はここで算出して渡す。
+      const menuContext = detectContext(snap, cl, opening, wall, clEndpoint, column, columnSlot);
       // 天伏: ロングタップは全部メニュー（天井芯の追加・移動・削除・延長。ユーザー裁定 2026-10-19）。なぞりはドラッグで
       // 始める（holdGesture.js）ので、ここでは判定窓と押下の記録を捨て、離したときの確定（commitDrag）も走らせない。
       // 選択済みの内容（selection）は保つ。
@@ -170,19 +189,24 @@ export function usePointerInteraction({
       const state = buildMenuState(appMode, {
         snap, cl, clEndpoint, opening, wall,
         canMove: typeof modeRef.current?.startMove === 'function',
-        canExtend:  clEndpoint ? canExtendCenterLine(graph, clEndpoint.cl, clEndpoint.side) : undefined,
-        canShorten: clEndpoint ? canShortenCenterLine(graph, clEndpoint.cl, clEndpoint.side) : undefined,
+        canExtend:  clEndpoint && !inColumnContext ? canExtendCenterLine(graph, clEndpoint.cl, clEndpoint.side) : undefined,
+        canShorten: clEndpoint && !inColumnContext ? canShortenCenterLine(graph, clEndpoint.cl, clEndpoint.side) : undefined,
         hasInteriorWall: menuContext === CONTEXT.CENTER_LINE ? interiorWallSpans(graph, cl.id).length > 0 : undefined,
         wallEligible:    menuContext === CONTEXT.WALL ? isEligibleWallSpan(wall, graph) : undefined,
         ...convertMenuFlags(graph, { appMode, menuContext, cl, clEndpoint }),
+        column, columnSlot, columnSlotAddable: columnLP?.addable ?? false,
       });
       if (!state) return;
       // 移動を選ばれたときに備え、移動範囲の計算（他フロアのIDB読み込みを含む）を先読みしておく。
       if (state.clState?.canMove) modeRef.current.preloadMove(cl, { graph, project });
+      // 柱・交点の文脈では CL／壁／建具を渡さない（別メニューのハンドラが誤って拾わないように）。snap・worldPos は従来どおり
+      // （平面で交点 snap 併存のとき斜線・円弧・削除が使う）。
       setMenu({
         pos: { x: sx, y: sy }, items: state.items, snap, worldPos: viewport.screenToWorld(sx, sy),
-        cl: clEndpoint ? clEndpoint.cl : cl, wall, opening,
-        clEndpointSide: clEndpoint ? clEndpoint.side : null,
+        cl: inColumnContext ? null : (clEndpoint ? clEndpoint.cl : cl),
+        wall: inColumnContext ? null : wall, opening: inColumnContext ? null : opening,
+        clEndpointSide: !inColumnContext && clEndpoint ? clEndpoint.side : null,
+        columnEdit: inColumnContext ? { graph: columnLP.graph, column, slot: columnSlot } : null,
       });
     },
     onCancel: () => setPressPos(null),

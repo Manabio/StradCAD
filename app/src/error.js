@@ -46,6 +46,11 @@ export const ERR_OPENING_OVERLAP     = '既存の開口と重なっています�
 // 構造モード突入時、構造情報パネルの主要構造が未指定（'未定'）の場合
 export const ERR_STRUCT_MAIN_UNSPECIFIED = '主要構造を指定してください。';
 
+// 柱の長クリック（interaction/columnLongPress.js runColumnMenuAction）の確定時に、長クリックからメニュー選択までの間に
+// 編集先の階・柱・交点の状態が変わっていたため中止した場合。
+export const ERR_COLUMN_ADD_ABORTED = 'この位置には柱を追加できません。';
+export const ERR_COLUMN_DEL_ABORTED = '柱を削除できませんでした。';
+
 // 中心⇔通り芯の入替え（transform/centerLineConvert.js・centerLineOps.js）
 export const ERR_CL_CONVERT_NO_GRID   = '直交する通り芯が2本必要です。';
 // 降格（通り芯→中心）専用: 同じ軸（X/Y）に他の通り芯が無い＝この通り芯が軸最後の1本の場合

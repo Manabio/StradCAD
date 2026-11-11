@@ -6,7 +6,11 @@ import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
 import { Project, CenterLineType, Discipline } from './core.js';
 import { CL_OVERLAP_TOL_MM } from './core/constants.js';
-import { findCLCrossing as findCLCrossingRaw } from './snapGeometry.js';
+import {
+  findCLCrossing as findCLCrossingRaw, findNearestCenterLineEndpoint, findNearestCenterLineEndpointWithDist,
+  clEndpointPerpDist, minEndpointHitDistPx, openingHitApplies, pointerTargetScope,
+} from './snapGeometry.js';
+import { Viewport } from './viewport.js';
 
 // CL は循環参照を持つ大きなオブジェクトで、assert.equal の失敗時 diff が止まる——vCL/hCL は id に畳んで返す。
 function findCLCrossing(...args) {
@@ -160,9 +164,53 @@ test('【交点】非有限の押下位置・scale は null（throw しない）
   assert.equal(findCLCrossing([v], [h], 1300, 2700, TH, 0.2, NaN), null);
 });
 
+test('【端点の距離】findNearestCenterLineEndpointWithDist は findNearestCenterLineEndpoint と同じ候補を選び、突端円は中心までの画面距離を返す', () => {
+  const { graph, center } = makeEnv();
+  const cl = center(V, 3300, 2700, 6700);
+  const vp = new Viewport(1000, 800);
+  runInAction(() => { vp.scaleX = vp.pxPerMmX / 100; vp.scaleY = vp.pxPerMmY / 100; }); // 1/100: 下端の突端は 2700−300=2400
+  const any = () => true;
+  const withDist = findNearestCenterLineEndpointWithDist(graph, 3300, 2500, TH, vp.scaleX, vp.scaleY, vp, any);
+  const plain = findNearestCenterLineEndpoint(graph, 3300, 2500, TH, vp.scaleX, vp.scaleY, vp, any);
+  assert.ok(withDist.cl === cl && plain.cl === cl);
+  assert.equal(withDist.side, 'lo');
+  assert.equal(plain.side, 'lo');
+  assert.deepEqual(Object.keys(plain).sort(), ['cl', 'side'], '既存関数の戻り値の形は不変（dist を足さない）');
+  assert.ok(Math.abs(withDist.dist - 100 * vp.scaleY) < 1e-9, '突端（2400）まで 100mm の画面距離');
+  assert.ok(findNearestCenterLineEndpointWithDist(graph, 3300, 4500, TH, vp.scaleX, vp.scaleY, vp, any) === null, '端から遠い点は候補なし');
+});
+
 test('【交点・失敗側】空配列は null', () => {
   const { grid } = makeEnv();
   assert.equal(findCLCrossing([], [], 1300, 2700, TH, 0.2, 0.2), null);
   assert.equal(findCLCrossing([grid(V, 1300)], [], 1300, 2700, TH, 0.2, 0.2), null);
   assert.equal(findCLCrossing([], [grid(H, 2700)], 1300, 2700, TH, 0.2, 0.2), null);
+});
+
+// ---- 端点までの最短距離（柱の長クリックが交点と比べる値）と建具の当たりの適用モード ----
+const vLine = value => ({ centerLineType: V, value });
+const hLine = value => ({ centerLineType: H, value });
+
+test('【clEndpointPerpDist】縦線は x 距離×scaleX・横線は y 距離×scaleY（非対称 scale）', () => {
+  assert.equal(clEndpointPerpDist(vLine(1000), 1100, 9999, 0.04, 0.05), 100 * 0.04);
+  assert.equal(clEndpointPerpDist(hLine(2000), 9999, 2100, 0.04, 0.05), 100 * 0.05);
+});
+
+test('【minEndpointHitDistPx】突端だけ→tip.dist・足だけ→足の線への垂直距離・両方→小さいほう・どちらも無ければ null', () => {
+  const tip = { dist: 3 };
+  const leg = { cl: vLine(1000), side: 'lo' }; // 点 x=1100・scaleX 0.04 → 4px
+  assert.equal(minEndpointHitDistPx(tip, null, 1100, 0, 0.04, 0.05), 3, '突端だけ');
+  assert.equal(minEndpointHitDistPx(null, leg, 1100, 0, 0.04, 0.05), 100 * 0.04, '足だけ');
+  assert.equal(minEndpointHitDistPx(tip, leg, 1100, 0, 0.04, 0.05), 3, '両方: 突端のほうが近い');
+  assert.equal(minEndpointHitDistPx({ dist: 6 }, leg, 1100, 0, 0.04, 0.05), 100 * 0.04, '両方: 足のほうが近い');
+  assert.ok(minEndpointHitDistPx(null, null, 1100, 0, 0.04, 0.05) === null, 'どちらも無ければ null');
+});
+
+test('【openingHitApplies】建具を解決する平面は真・構造と天伏は偽（pointerTargetScope.planTargets と同じ）', () => {
+  assert.equal(openingHitApplies('floorplan'), true);
+  assert.equal(openingHitApplies('structure'), false);
+  assert.equal(openingHitApplies('ceiling'), false);
+  for (const m of ['floorplan', 'structure', 'ceiling', 'finish']) {
+    assert.equal(openingHitApplies(m), pointerTargetScope(m).planTargets, m);
+  }
 });

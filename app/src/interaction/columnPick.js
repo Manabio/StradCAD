@@ -14,6 +14,15 @@ function assertFiniteScale(name, v) {
 }
 
 /**
+ * 点（wx, wy）が柱の**実際の断面矩形**の内側（境界を含む）か。columnAtPoint が広げた当たり幅（小さい柱の最小の当たり）は含まない。
+ * 広げた部分で建具に譲るかの判定に使う（interaction/columnLongPress.js）。
+ */
+export function isInsideColumnRect(column, wx, wy) {
+  const r = bareColumnRect(column);
+  return wx >= r.xLo && wx <= r.xHi && wy >= r.yLo && wy <= r.yHi;
+}
+
+/**
  * 点（wx, wy）が断面矩形の内側にある柱を返す（境界を含む）。画面上で小さい柱は、中心 ± minHalfPx（画面 px）の
  * 正方形まで当たりを広げる（矩形の半幅が minHalfPx/scale より小さい辺だけ。大きい柱は広がらない）。
  * 複数当たれば中心までの画面距離が最小の柱（同距離は先頭）。

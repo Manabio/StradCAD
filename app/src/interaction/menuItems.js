@@ -1,10 +1,22 @@
-// import ゼロを維持する（node:test から安全に import できるようにするため。centerLineExtend.js /
+// import は core/constants.js の ColumnMenuItemId だけを例外とする（ユーザー承認 2026-11-11 のリテラル計画。
+// constants.js 自体が import を持たない）。それ以外は import ゼロを維持する（node:test から安全に import できるようにするため。centerLineExtend.js /
 // edgeClassify.js / kneeDropWall.js は snap.js → store.js（localStorage/indexedDB）へ連鎖しており、
 // これらに依存すると node:test 環境で import 不能になる）。graph 依存の判定値
 // （canExtend/canShorten/hasInteriorWall/wallEligible）は呼び出し側（interaction/usePointerInteraction.js）が算出して渡す。
 // CenterLineType.VERTICAL は 'X' 固定値で判定する（core/constants.js 参照。snap.js と同じ回避策）。
 
+import { ColumnMenuItemId, CL_OVERLAP_TOL_MM } from '../core/constants.js';
+
+// 柱追加の位置（columnSlot）と同じ交点に交点 snap があるか。snap のノード（core/nodes.js Intersection）の x・y は
+// 通り芯の effectiveValue（描画位置）、slot の x・y は押した交点の線の value——通常は同じ座標。graph に依存しない数値比較だけ
+// なのでここで行う（許容は CL_OVERLAP_TOL_MM）。ホバーで拾った近くの別の交点は同じ交点とみなさない。
+function snapAtSlot(snap, slot) {
+  return !!snap && Math.abs(snap.x - slot.x) < CL_OVERLAP_TOL_MM && Math.abs(snap.y - slot.y) < CL_OVERLAP_TOL_MM;
+}
+
 export const CONTEXT = Object.freeze({
+  COLUMN:              'column',
+  COLUMN_SLOT:         'columnSlot',
   INTERSECTION:        'intersection',
   CENTER_LINE_ENDPOINT: 'centerLineEndpoint',
   CENTER_LINE:         'centerLine',
@@ -14,11 +26,14 @@ export const CONTEXT = Object.freeze({
   EMPTY:               'empty',
 });
 
-// 交点 > CL端点(延長/短縮) > (CL/開口/壁のうち画面距離が最も近いもの。呼び出し側
+// 柱（断面内）> CL交点の柱追加位置 > 交点 > CL端点(延長/短縮) > (CL/開口/壁のうち画面距離が最も近いもの。呼び出し側
 // updateSnap で排他的に解決済み) > 空。CL と壁は軸オフセットが小さく8px判定が重なるため、
 // 呼び出し側で画面距離による排他選択を行ってから渡すこと（cl と nearWall/
-// nearOpening が同時に真になることは想定しない）。
-export function detectContext(snapPoint, nearCL, nearOpening, nearWall, nearCLEndpoint) {
+// nearOpening が同時に真になることは想定しない）。柱・柱追加位置は呼び出し側（interaction/columnLongPress.js
+// resolveColumnLongPress）が平面・構造モードでだけ渡す（省略時は従来どおり）。
+export function detectContext(snapPoint, nearCL, nearOpening, nearWall, nearCLEndpoint, column = null, columnSlot = null) {
+  if (column)         return CONTEXT.COLUMN;
+  if (columnSlot)     return CONTEXT.COLUMN_SLOT;
   if (snapPoint)      return CONTEXT.INTERSECTION;
   if (nearCLEndpoint) return CONTEXT.CENTER_LINE_ENDPOINT;
   if (nearCL)         return CONTEXT.CENTER_LINE;
@@ -34,14 +49,28 @@ function extendIconAngle(isVertical, side) {
   return side === 'hi' ? 0 : 180;
 }
 
-export function getMenuItems(context, endpointState, clState, wallState) {
+// 交点（既存の斜線・円弧・削除）の項目。INTERSECTION 文脈と、平面で CL の交点に snap が併存する柱追加メニューが共有する。
+function intersectionItems() {
+  return [
+    { id: 'diag',  label: '斜線',   icon: '╱' },
+    { id: 'arc',   label: '円弧',   icon: '◜' },
+    { id: 'del',   label: '削除',   icon: '✕' },
+  ];
+}
+
+export function getMenuItems(context, endpointState, clState, wallState, columnSlotState) {
   switch (context) {
+    case CONTEXT.COLUMN:
+      return [{ id: ColumnMenuItemId.DEL, label: '柱削除', icon: '✕' }];
+    case CONTEXT.COLUMN_SLOT: {
+      // 主構造が未確定・柱を持たない種別・位置が占有済みのときは押せない（addable 偽。グレー化）。
+      const { addable, withIntersection } = columnSlotState ?? {};
+      const items = [{ id: ColumnMenuItemId.ADD, label: '柱追加', icon: '□', disabled: !addable }];
+      if (withIntersection) items.push(...intersectionItems());
+      return items;
+    }
     case CONTEXT.INTERSECTION:
-      return [
-        { id: 'diag',  label: '斜線',   icon: '╱' },
-        { id: 'arc',   label: '円弧',   icon: '◜' },
-        { id: 'del',   label: '削除',   icon: '✕' },
-      ];
+      return intersectionItems();
     case CONTEXT.CENTER_LINE_ENDPOINT: {
       const { canExtend, canShorten, canToGrid, isVertical, side } = endpointState ?? {};
       const extendAngle  = extendIconAngle(isVertical, side);
@@ -130,13 +159,18 @@ export function getMenuItems(context, endpointState, clState, wallState) {
  * 削除を拒否するガードの多層防御。cl-del項目のグレー化判定）は
  * graph 依存のため呼び出し側（interaction/usePointerInteraction.js）が算出して渡す
  * （このモジュールを import ゼロに保つため。ファイル冒頭コメント参照）。
- * @returns {{context, items, endpointState, clState, wallState}|null}
+ * column・columnSlot・columnSlotAddable は interaction/columnLongPress.js resolveColumnLongPress の結果
+ * （平面・構造モードだけ有効。addable 偽なら柱追加はグレー化）。
+ * @returns {{context, items, endpointState, clState, wallState, columnSlotState}|null}
  */
 export function buildMenuState(appMode, {
   snap, cl, clEndpoint, opening, wall, canMove, canExtend, canShorten, hasInteriorWall, wallEligible,
   canToGrid, canToCenter, isLastGridOnAxis, isFootprintBoundary, isUnresolvable,
+  column = null, columnSlot = null, columnSlotAddable = false,
 }) {
-  const context = detectContext(snap, cl, opening, wall, clEndpoint);
+  // 柱の文脈は平面・構造モードだけ（それ以外のモードでは渡されても無視する。多層防御）。
+  const columnMode = appMode === 'floorplan' || appMode === 'structure';
+  const context = detectContext(snap, cl, opening, wall, clEndpoint, columnMode ? column : null, columnMode ? columnSlot : null);
   if (appMode === 'opening' && context !== CONTEXT.WALL && context !== CONTEXT.OPENING) return null;
   // 天伏（S8b）は天井芯の追加（空）・移動/削除（線上）・延長/短縮/削除（端点）だけ。交点・壁・開口の
   // メニューは出さない（snap.js が天伏ではそれらの候補自体を解決しない——ここは多層防御）。
@@ -164,6 +198,9 @@ export function buildMenuState(appMode, {
   } : null;
   // 壁上メニュー: 腰壁・垂れ壁の適格性（2a壁は対象外）を渡す。
   const wallState = context === CONTEXT.WALL ? { eligible: wallEligible } : null;
-  const items = getMenuItems(context, endpointState, clState, wallState);
-  return { context, items, endpointState, clState, wallState };
+  // 柱追加メニュー: 平面で、押した交点と同じ交点の snap があるときだけ、既存の斜線・円弧・削除を後ろに並べる（構造モードでは足さない）。
+  const columnSlotState = context === CONTEXT.COLUMN_SLOT
+    ? { addable: !!columnSlotAddable, withIntersection: appMode === 'floorplan' && snapAtSlot(snap, columnSlot) } : null;
+  const items = getMenuItems(context, endpointState, clState, wallState, columnSlotState);
+  return { context, items, endpointState, clState, wallState, columnSlotState };
 }

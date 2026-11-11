@@ -23,6 +23,9 @@ import { OpeningPanel } from './openings/OpeningPanel.jsx';
 import { placeOpeningWithDefaults, removeOpeningWithUndo, setOpeningGeometryListener } from './openings/openingEdit.js';
 import { collectFloorOpeningGroups, assignOpeningNumbers, applyOpeningTags, renumberOpenings, openingSignature } from './openings/openingNumbering.js';
 import { usePointerInteraction } from './interaction/usePointerInteraction.js';
+import { runColumnMenuAction } from './interaction/columnLongPress.js';
+import { resolveColumnEditTarget } from './structural/columnEditTarget.js';
+import { ColumnMenuItemId } from './core/constants.js';
 import { RoomNameInput }   from './finish/RoomNameInput.jsx';
 import { FinishSidebar }   from './finish/FinishSidebar.jsx';
 import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
@@ -654,6 +657,8 @@ const App = observer(() => {
     // usePointerInteraction.js のpointerUpが「パン未開始かつ長押し未成立」のときだけ呼ぶ）。
     onMemberClick: openMemberCard,
     onMemberDeselect: deselectStructuralMembers,
+    // 柱の長クリック（平面・構造）の編集先の解決に使う。平面では使われない（resolveColumnEditTarget は activeGraph を返す）。
+    composition: structComposition,
   });
 
   // 起動時IDB復元の完了をマウント時1回だけ待ち、activeFloorId をproject.activePlaneIdへ同期する。
@@ -2591,6 +2596,17 @@ const App = observer(() => {
 
   // ---- メニュー選択 ----
   function handleMenuSelect(item) {
+    // 柱の長クリック（平面・構造）: 追加・削除。選択時点で編集先を解決し直し、長クリック時から変わっていれば中止する。
+    // 追加・削除の直後に構造再計算・壁再生成は走らせない（構造リストの追加・削除と同じ）。
+    if (item.id === ColumnMenuItemId.ADD || item.id === ColumnMenuItemId.DEL) {
+      const result = runColumnMenuAction(item.id, {
+        columnEdit: menu.columnEdit,
+        currentTarget: resolveColumnEditTarget({ appMode, activeGraph: graph, composition: structComposition, project }),
+        project,
+      });
+      if (!result.ok) setToast({ msg: result.error, key: Date.now() });
+      return;
+    }
     if (item.id === 'cl-v' || item.id === 'cl-h') {
       const isV  = item.id === 'cl-v';
       const pos  = menu.worldPos;

@@ -225,6 +225,32 @@ export function findCLCrossing(verticals, horizontals, wx, wy, thresholdPx, scal
   return best;
 }
 
+// CL端点候補の垂直距離（isV:X距離／isH:Y距離）。findNearestCenterLineEndpoint（突端円・はね出し
+// 線分）と findCenterDimensionLegEndpoint（CENTER寸法の足）、由来の異なる2つの端点候補を
+// 「垂直距離が小さい方」で比較するための共通の物差し（cl.value基準、両関数の内部判定式と同じ）。
+// snap.js resolvePointerTargets の端点候補の選択と、minEndpointHitDistPx（柱の長クリック）が共有する。
+export function clEndpointPerpDist(cl, wx, wy, scaleX, scaleY) {
+  const isV = cl.centerLineType === CenterLineType.VERTICAL;
+  return isV ? Math.abs(cl.value - wx) * scaleX : Math.abs(cl.value - wy) * scaleY;
+}
+
+/**
+ * CL 端点の当たりまでの最短の画面距離（px）。tip は findNearestCenterLineEndpointWithDist の結果（突端円は円の中心まで・
+ * はね出し線分は線への垂直距離＝dist）、leg は legEndpointForMode で絞った CENTER 寸法の足の結果（線への垂直距離）。
+ * どちらも無ければ null。柱の長クリックが「交点より端点のほうが近いか」を比べるのに使う（snap.js endpointHitDistancePx）。
+ */
+export function minEndpointHitDistPx(tip, leg, wx, wy, scaleX, scaleY) {
+  const dists = [];
+  if (tip) dists.push(tip.dist);
+  if (leg) dists.push(clEndpointPerpDist(leg.cl, wx, wy, scaleX, scaleY));
+  return dists.length > 0 ? Math.min(...dists) : null;
+}
+
+/** 建具の当たり（柱の長クリックが建具に譲るかの判定）を解決するモードか。建具を解決しない構造・天伏は偽（pointerTargetScope.planTargets）。 */
+export function openingHitApplies(appMode) {
+  return pointerTargetScope(appMode).planTargets;
+}
+
 /**
  * 長押し位置に近接する中心線（非通り芯）を参照元候補として返す。
  * - clType を渡すと同種CLのみ（線分追加）。null なら垂直/水平両方（壁追加）。
@@ -344,6 +370,17 @@ export function clSideReachesCenterBoundary(cl, side, graph, viewport) {
  * @returns {{cl, side:'lo'|'hi'}|null}
  */
 export function findNearestCenterLineEndpoint(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport, kindFilter = k => k !== 'beam') {
+  const hit = findNearestCenterLineEndpointWithDist(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport, kindFilter);
+  return hit ? { cl: hit.cl, side: hit.side } : null;
+}
+
+/**
+ * findNearestCenterLineEndpoint と同じ判定（突端円・はね出し線分）で、採用した候補までの画面距離（px。突端円は円の中心まで、
+ * はね出し線分は線への垂直距離＝内部で比較している値そのもの）も返す。柱の長クリックが「交点より端点の先端のほうが近いか」を
+ * 比べるのに使う（interaction/columnLongPress.js）。ヒットの判定・採用は findNearestCenterLineEndpoint と同一。
+ * @returns {{cl, side:'lo'|'hi', dist:number}|null}
+ */
+export function findNearestCenterLineEndpointWithDist(graph, wx, wy, thresholdPx, scaleX, scaleY, viewport, kindFilter = k => k !== 'beam') {
   if (!graph) return null;
   let nearest = null, minDist = Infinity;
   for (const cl of graph.centerLines) {
@@ -385,5 +422,5 @@ export function findNearestCenterLineEndpoint(graph, wx, wy, thresholdPx, scaleX
       }
     }
   }
-  return nearest;
+  return nearest ? { ...nearest, dist: minDist } : null;
 }

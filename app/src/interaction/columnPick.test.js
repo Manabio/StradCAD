@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { Project, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
 import { Viewport } from '../viewport.js';
 import { bareColumnRect } from '../finish/columnWrap.js';
-import { columnAtPoint } from './columnPick.js';
+import { columnAtPoint, isInsideColumnRect } from './columnPick.js';
 
 const V = CenterLineType.VERTICAL, H = CenterLineType.HORIZONTAL;
 const PX = 8;
@@ -131,8 +131,42 @@ test('【柱当たり・失敗側】scale・minHalfPx が非有限・欠落は t
   assert.throws(() => call(undefined), /scaleX/);
 });
 
+test('【実断面】isInsideColumnRect: 4 辺の上は内側（境界を含む）・各辺の 1mm 外は外側', () => {
+  const { add } = makeEnv();
+  const c = add(H_SMALL, 0, 0); // 半幅 X50×Y100
+  const r = bareColumnRect(c);
+  assert.ok(r.xHi - r.xLo === 100 && r.yHi - r.yLo === 200, '前提: 断面 100×200');
+  assert.ok(isInsideColumnRect(c, r.xLo, c.y), '左辺の上');
+  assert.ok(isInsideColumnRect(c, r.xHi, c.y), '右辺の上');
+  assert.ok(isInsideColumnRect(c, c.x, r.yLo), '上辺の上');
+  assert.ok(isInsideColumnRect(c, c.x, r.yHi), '下辺の上');
+  assert.ok(!isInsideColumnRect(c, r.xLo - 1, c.y), '左 1mm 外');
+  assert.ok(!isInsideColumnRect(c, r.xHi + 1, c.y), '右 1mm 外');
+  assert.ok(!isInsideColumnRect(c, c.x, r.yLo - 1), '上 1mm 外');
+  assert.ok(!isInsideColumnRect(c, c.x, r.yHi + 1), '下 1mm 外');
+});
+
+test('【実断面】isInsideColumnRect: 回転 90° の H 形は x/y の半幅が入れ替わる', () => {
+  const { add } = makeEnv();
+  const c0 = add(H_SMALL, 0, 0, 0);    // 半幅 X50×Y100
+  const c90 = add(H_SMALL, 1, 1, 90);  // 半幅 X100×Y50
+  assert.ok(!isInsideColumnRect(c0, c0.x + 80, c0.y));
+  assert.ok(isInsideColumnRect(c0, c0.x, c0.y + 80));
+  assert.ok(isInsideColumnRect(c90, c90.x + 80, c90.y));
+  assert.ok(!isInsideColumnRect(c90, c90.x, c90.y + 80));
+});
+
+test('【実断面】広げた当たり幅の中（実断面の外）は columnAtPoint では柱・isInsideColumnRect では外側', () => {
+  const { graph, add } = makeEnv();
+  const c = add(WOOD, 0, 0); // 半幅 60mm
+  // 1/200（0.025px/mm）・8px → 320mm まで広がる。中心から 150mm は広げた部分
+  assert.ok(isHit(graph.columns, c.x + 150, c.y, opts(0.025), c));
+  assert.ok(!isInsideColumnRect(c, c.x + 150, c.y));
+  assert.ok(isInsideColumnRect(c, c.x + 50, c.y));
+});
+
 test('【柱当たり】柱が無ければ null', () => {
-  assert.equal(columnAtPoint([], 1300, 2700, opts(1)), null);
+  assert.ok(columnAtPoint([], 1300, 2700, opts(1)) === null);
 });
 
 test('【柱当たり・本番の形】実 graph.columns と実 Viewport の scale（1/100）で、小さい柱を 8px 内で拾う', () => {

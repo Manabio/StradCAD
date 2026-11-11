@@ -80,8 +80,8 @@ test('【確定・柱追加・失敗経路】vCL/hCL 欠落は throw し、graph
   const snap = JSON.stringify(serializeGraph(graph));
   assert.throws(() => commitManualColumnAdd(graph, GRID_PROJECT, { vCL: null, hCL: y2 }), /commitManualColumnAdd/);
   assert.throws(() => commitManualColumnAdd(graph, GRID_PROJECT, { vCL: x2, hCL: undefined }), /commitManualColumnAdd/);
-  assert.equal(JSON.stringify(serializeGraph(graph)), snap);
-  assert.equal(undoManager.peekUndo(), null);
+  assert.ok(JSON.stringify(serializeGraph(graph)) === snap, 'graph が変わった');
+  assert.ok(undoManager.peekUndo() === null, 'undo を積んではいけない');
 });
 
 function makeWithColumns() {
@@ -187,8 +187,8 @@ test('【確定・削除・失敗経路】未知の mapName は throw し不変'
   const { graph, cols: [c1] } = makeWithColumns();
   const snap = JSON.stringify(serializeGraph(graph));
   assert.throws(() => commitManualMemberRemoval(graph, GRID_PROJECT, 'noSuchMap', [c1.id]), /未知の mapName/);
-  assert.equal(JSON.stringify(serializeGraph(graph)), snap);
-  assert.equal(undoManager.peekUndo(), null);
+  assert.ok(JSON.stringify(serializeGraph(graph)) === snap, 'graph が変わった');
+  assert.ok(undoManager.peekUndo() === null, 'undo を積んではいけない');
 });
 
 test('【確定・削除・失敗経路】実在しない id だけなら 0 を返し undo を積まない', () => {
@@ -196,8 +196,8 @@ test('【確定・削除・失敗経路】実在しない id だけなら 0 を�
   const snap = JSON.stringify(serializeGraph(graph));
   assert.equal(commitManualMemberRemoval(graph, GRID_PROJECT, 'columnMap', ['nope-1', 'nope-2']), 0);
   assert.equal(commitManualMemberRemoval(graph, GRID_PROJECT, 'columnMap', []), 0);
-  assert.equal(JSON.stringify(serializeGraph(graph)), snap);
-  assert.equal(undoManager.peekUndo(), null);
+  assert.ok(JSON.stringify(serializeGraph(graph)) === snap, 'graph が変わった');
+  assert.ok(undoManager.peekUndo() === null, 'undo を積んではいけない');
 });
 
 test('【確定・削除】実在と非実在の混在は実在分だけ消える', () => {

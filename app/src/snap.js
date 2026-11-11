@@ -18,7 +18,8 @@ import { findCenterDimensionLegEndpoint } from './renderer/gutterLabelHits.js';
 // 再エクスポートし、既存の import 元（App.jsx・interaction/usePointerInteraction.js 等）を壊さない。
 import {
   overhangMm, findBracketingCLs, nonLabeledClExtent, findNearestCenterLine, findNearbyCenterLines,
-  findNearestCenterLineEndpoint, findCLMoveSnap, findBeamAxisMoveSnap, pointerTargetScope, legEndpointForMode,
+  findNearestCenterLineEndpoint, findNearestCenterLineEndpointWithDist, findCLMoveSnap, findBeamAxisMoveSnap, pointerTargetScope, legEndpointForMode,
+  clEndpointPerpDist, minEndpointHitDistPx, openingHitApplies,
 } from './snapGeometry.js';
 export {
   overhangMm, findBracketingCLs, nonLabeledClExtent, findNearestCenterLine, findNearbyCenterLines,
@@ -88,12 +89,28 @@ export function findOpeningAt(graph, wx, wy, thresholdPx, scaleX, scaleY) {
   return null;
 }
 
-// CL端点候補の垂直距離（isV:X距離／isH:Y距離）。findNearestCenterLineEndpoint（突端円・はね出し
-// 線分）と findCenterDimensionLegEndpoint（CENTER寸法の足）、由来の異なる2つの端点候補を
-// 「垂直距離が小さい方」で比較するための共通の物差し（cl.value基準、両関数の内部判定式と同じ）。
-function clEndpointPerpDist(cl, wx, wy, scaleX, scaleY) {
-  const isV = cl.centerLineType === CenterLineType.VERTICAL;
-  return isV ? Math.abs(cl.value - wx) * scaleX : Math.abs(cl.value - wy) * scaleY;
+/**
+ * 世界座標 world にある CL 端点候補（突端円・はね出し線分・CENTER寸法の足。resolvePointerTargets と同じ判定・同じ
+ * 対象種別 hitTestKinds(appMode)）までの最短の画面距離（px）。候補が無ければ null。柱の長クリックが、発火位置で
+ * 「交点より端点の先端のほうが近いか」を比べるのに使う（interaction/usePointerInteraction.js）。
+ * 突端円は円の中心まで・はね出し線分と足は線への垂直距離（resolvePointerTargets が内部で比べる値と同じ）。
+ */
+export function endpointHitDistancePx(graph, viewport, world, { width, height, appMode, columnAxisMode }) {
+  const hitKinds = hitTestKinds(appMode);
+  const tip = findNearestCenterLineEndpointWithDist(
+    graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, k => hitKinds.includes(k));
+  const leg = legEndpointForMode(
+    findCenterDimensionLegEndpoint(graph, world.x, world.y, CL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY, viewport, width, height, appMode, columnAxisMode),
+    appMode);
+  return minEndpointHitDistPx(tip, leg, world.x, world.y, viewport.scaleX, viewport.scaleY);
+}
+
+/**
+ * 世界座標 world に既存の建具の当たりがあるか（resolvePointerTargets と同じ findOpeningAt・WALL_THRESHOLD_PX）。
+ * 建具を解決しないモード（構造・天伏。pointerTargetScope.planTargets が偽）は常に false。
+ */
+export function openingHitAt(graph, viewport, world, appMode) {
+  return openingHitApplies(appMode) && findOpeningAt(graph, world.x, world.y, WALL_THRESHOLD_PX, viewport.scaleX, viewport.scaleY) !== null;
 }
 
 /**

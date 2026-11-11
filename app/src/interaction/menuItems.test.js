@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CONTEXT, buildMenuState } from './menuItems.js';
+import { CONTEXT, buildMenuState, detectContext } from './menuItems.js';
+import { ColumnMenuItemId, CL_OVERLAP_TOL_MM } from '../core/constants.js';
 
 // ---- buildMenuState（長押しメニューの context 判定＋items 生成） ----
 
@@ -306,6 +307,85 @@ test('buildMenuState: 天伏の天井芯の端点は 延長＋短縮|削除（�
   });
   assert.equal(state.context, CONTEXT.CENTER_LINE_ENDPOINT);
   assert.deepEqual(state.items.map(i => i.id), ['cl-extend', 'cl-del']);
+});
+
+// ---- 柱の長クリック（平面・構造）: 優先順 柱 > 柱追加位置 > 交点 > 端点 > CL > 建具 > 壁 > 空 ----
+const COL = { id: 'col1' };
+const SLOT = { vCL: { id: 'v' }, hCL: { id: 'h' }, x: 1, y: 2, occupied: false };
+
+test('detectContext: 優先順（柱 > 柱追加位置 > 交点 > 端点 > CL > 建具 > 壁 > 空）。柱と追加位置が同時なら柱', () => {
+  const all = [{ id: 'n' }, { id: 'cl' }, { id: 'o' }, { id: 'w' }, { cl: { id: 'e' }, side: 'lo' }];
+  assert.equal(detectContext(...all, COL, SLOT), CONTEXT.COLUMN);
+  assert.equal(detectContext(...all, null, SLOT), CONTEXT.COLUMN_SLOT);
+  assert.equal(detectContext(...all, null, null), CONTEXT.INTERSECTION);
+  assert.equal(detectContext(null, { id: 'cl' }, null, null, { cl: { id: 'e' }, side: 'lo' }), CONTEXT.CENTER_LINE_ENDPOINT);
+  assert.equal(detectContext(null, { id: 'cl' }, { id: 'o' }, { id: 'w' }), CONTEXT.CENTER_LINE);
+  assert.equal(detectContext(null, null, { id: 'o' }, { id: 'w' }), CONTEXT.OPENING);
+  assert.equal(detectContext(null, null, null, { id: 'w' }), CONTEXT.WALL);
+  assert.equal(detectContext(null, null, null, null), CONTEXT.EMPTY);
+  assert.equal(detectContext(null, null, null, null, null, null, SLOT), CONTEXT.COLUMN_SLOT, '柱が無ければ追加位置は snap・CL・壁・空より先');
+});
+
+test('buildMenuState: 柱の断面内→[柱削除]（平面・構造とも）', () => {
+  for (const appMode of ['floorplan', 'structure']) {
+    const state = buildMenuState(appMode, { snap: { id: 'n' }, cl: { id: 'cl', centerLineType: 'X' }, clEndpoint: null, opening: null, wall: null, column: COL, columnSlot: null });
+    assert.equal(state.context, CONTEXT.COLUMN);
+    assert.deepEqual(state.items.map(i => i.id), [ColumnMenuItemId.DEL]);
+    assert.equal(state.items[0].label, '柱削除');
+    assert.equal(state.clState, null);
+  }
+});
+
+test('buildMenuState: 平面で交点 snap があれば 柱追加 の後ろに既存の斜線・円弧・削除（INTERSECTION と同じ定義）。snap が無ければ 1 項目', () => {
+  const snap = { id: 'n', x: SLOT.x, y: SLOT.y }; // 押した交点と同じ交点の snap
+  const withSnap = buildMenuState('floorplan', { snap, cl: null, clEndpoint: null, opening: null, wall: null, columnSlot: SLOT, columnSlotAddable: true });
+  const inter = buildMenuState('floorplan', { snap, cl: null, clEndpoint: null, opening: null, wall: null });
+  assert.equal(withSnap.context, CONTEXT.COLUMN_SLOT);
+  assert.deepEqual(withSnap.items.map(i => i.id), [ColumnMenuItemId.ADD, 'diag', 'arc', 'del']);
+  assert.equal(withSnap.items[0].label, '柱追加');
+  assert.deepEqual(withSnap.items.slice(1), inter.items, '既存 3 項目は INTERSECTION と同じ定義');
+  const only = buildMenuState('floorplan', { snap: null, cl: null, clEndpoint: null, opening: null, wall: null, columnSlot: SLOT, columnSlotAddable: true });
+  assert.deepEqual(only.items.map(i => i.id), [ColumnMenuItemId.ADD]);
+});
+
+test('buildMenuState: 並べるのは押した交点と同じ交点の snap だけ。別の交点（隣）の snap・許容ちょうど以上のずれは柱追加だけ', () => {
+  const mk = snap => buildMenuState('floorplan', { snap, cl: null, clEndpoint: null, opening: null, wall: null, columnSlot: SLOT, columnSlotAddable: true }).items.map(i => i.id);
+  const four = [ColumnMenuItemId.ADD, 'diag', 'arc', 'del'];
+  assert.deepEqual(mk({ id: 'a', x: SLOT.x + CL_OVERLAP_TOL_MM / 2, y: SLOT.y - CL_OVERLAP_TOL_MM / 2 }), four, '許容内のずれは同じ交点');
+  assert.deepEqual(mk({ id: 'b', x: SLOT.x + 500, y: SLOT.y }), [ColumnMenuItemId.ADD], '隣の交点の snap（x が違う）');
+  assert.deepEqual(mk({ id: 'c', x: SLOT.x, y: SLOT.y + 500 }), [ColumnMenuItemId.ADD], '隣の交点の snap（y が違う）');
+  assert.deepEqual(mk({ id: 'd', x: SLOT.x + CL_OVERLAP_TOL_MM, y: SLOT.y }), [ColumnMenuItemId.ADD], '許容ちょうどは別の交点');
+  assert.deepEqual(mk(null), [ColumnMenuItemId.ADD], 'snap なし');
+});
+
+test('buildMenuState: 構造モードでは同じ交点の snap があっても 柱追加 だけ（既存 3 項目を足さない）', () => {
+  const state = buildMenuState('structure', { snap: { id: 'n', x: SLOT.x, y: SLOT.y }, cl: null, clEndpoint: null, opening: null, wall: null, columnSlot: SLOT, columnSlotAddable: true });
+  assert.deepEqual(state.items.map(i => i.id), [ColumnMenuItemId.ADD]);
+});
+
+test('buildMenuState: addable 偽なら 柱追加 は disabled（グレー化）・真なら押せる', () => {
+  const mk = addable => buildMenuState('floorplan', { snap: null, cl: null, clEndpoint: null, opening: null, wall: null, columnSlot: SLOT, columnSlotAddable: addable });
+  assert.equal(mk(false).items[0].disabled, true);
+  assert.equal(mk(true).items[0].disabled, false);
+  assert.equal(buildMenuState('floorplan', { snap: null, cl: null, clEndpoint: null, opening: null, wall: null, columnSlot: SLOT }).items[0].disabled, true, '省略は偽');
+});
+
+test('buildMenuState: 建具・天伏・仕上げでは column / columnSlot を渡しても柱のメニューにならない（多層防御）', () => {
+  const colIds = [ColumnMenuItemId.ADD, ColumnMenuItemId.DEL];
+  for (const appMode of ['opening', 'ceiling', 'finish', 'site']) {
+    const s1 = buildMenuState(appMode, { snap: null, cl: null, clEndpoint: null, opening: null, wall: null, column: COL, columnSlot: SLOT, columnSlotAddable: true });
+    const s2 = buildMenuState(appMode, { snap: { id: 'n' }, cl: { id: 'cl', centerLineType: 'X' }, clEndpoint: null, opening: null, wall: null, column: COL, columnSlot: SLOT, columnSlotAddable: true, canMove: true });
+    for (const s of [s1, s2]) {
+      assert.ok(s === null || (s.context !== CONTEXT.COLUMN && s.context !== CONTEXT.COLUMN_SLOT), `${appMode}: 柱の文脈にならない`);
+      assert.ok(s === null || !s.items.some(i => colIds.includes(i.id)), `${appMode}: 柱の項目が出ない`);
+    }
+  }
+});
+
+test('buildMenuState: 柱を渡さない従来の呼び出し（引数なし）は従来どおり（柱の文脈・columnSlotState は null）', () => {
+  const state = buildMenuState('floorplan', { snap: { id: 'n' }, cl: null, clEndpoint: null, opening: null, wall: null });
+  assert.equal(state.context, CONTEXT.INTERSECTION);
+  assert.equal(state.columnSlotState, null);
 });
 
 test('buildMenuState: 天伏の交点・壁・開口の長押しは null（メニューを出さない。多層防御）', () => {

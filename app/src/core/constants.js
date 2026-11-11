@@ -328,6 +328,12 @@ export const STAIR_SOFFIT_THICKNESS_MM = 300;
 // （structural/beamAxisMove.js）の両方が同じ値・同じ目的（他CLと同一座標に到達させない）で共有する。
 export const CL_OVERLAP_TOL_MM = 0.5;
 
+// 柱の長クリックメニューの項目 id（interaction/menuItems.js・interaction/columnLongPress.js・App.jsx handleMenuSelect が共有）。
+export const ColumnMenuItemId = Object.freeze({
+  ADD: 'column-add', // 柱追加（CL の交点）
+  DEL: 'column-del', // 柱削除（柱の断面内）
+});
+
 // 梁の役割（Beam.role）。新規コードでだけ使う（既存の文字列直書きは置換しない）。
 export const BeamRole = Object.freeze({
   PRIMARY:        'primary',        // 大梁
