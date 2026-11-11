@@ -293,6 +293,13 @@ canvasのlineCapはbutt（未指定）のままにし、Konvaへ渡す直前のp
 - **窓（category window で種別が引け機構が実装済み。S8f-3a・2026-11-04）の断面**は描き方`window`（`openingSection.js`。帯幅＝壁厚+24＝片開き戸と同じ）: 上枠・下枠（見付`sectionFrameFaceWidthFor`＝25〔開口高さの半分で頭打ち〕・見込は帯いっぱい。CUT）＋障子（SILHOUETTE・厚30・上下は枠にかかり代10ずつ掛かる。`windowSashLayout`＝開き系は開く側の壁の面・引き違い系はトラック・FIXは障子なしでガラスの線1本・他は中央1本）＋竪枠の見え掛かりの縦線（細線。開き系は障子の無い側の1本・他は両端。上枠の下端〜下枠の上端）。**窓台0（掃き出し窓）は下枠を描かず**、障子・縦線は床まで（`windowHasSill`）。種別の参照切れの窓・建具（引き戸など）は従来の矩形3本・帯120。上枠・下枠は組込みの部分詳細図の既定（`source:'detail'`。S8f-3b。建具個別 ＞ 記号 ＞ 既定。詳細は`detail-figure-model.md`）。障子・竪枠の線は定数のまま。
 - **三方枠（機構 FRAME_ONLY。S10-10・2026-10-25）の断面**は描き方`frameOnly`（`openingSection.js`。判定は記号ではなく機構＝姿図と同じ）: 上枠の断面（見付＝`frameOnlyInnerRect`の fw〔開口幅の半分で頭打ち〕・見込＝**壁全体の面から面`wallFaceRange`＋2×出幅**＝平面の方立・建具モードの見込み欄と同じ式。木製 solid は閉じた矩形・鋼板 bent は開いたコの字を縦にした polyline。CUT）＋竪枠の見え掛かりの縦線2本（上枠の下端〜床。細線）。扉・下枠は描かない。片開き戸の「当該部屋側の壁1枚」は三方枠には適用しない（枠は壁を包む）ので、切断壁の帯には`band.openingWallRange`、隅は`openingSectionWallRange`で壁全体の範囲を渡し、帯の始点は`openingSectionOverhangMm`（三方枠＝実効の出幅・他は12のまま）。隅の床線の延長は rect だけでなく polyline の x 範囲も見る。実データに切られる三方枠は無く（14.stq の WF 1件は隅にも掛からない）、基準は合成文書`golden-elev-opening/frame-only-section-test`（`makeFrameOnlySectionTestDoc.mjs`。隅の経路だけ。切断壁の経路は`sectionProbe.test.js`の合成テスト）。見付に1px保証は付けない（LODで分岐しない方針）。
 
+### 外付け引き戸は穴の代理建具で扱う（S10。2026-11-11）
+外付け引き戸（`opening-model.md`「外付け引き戸」）は建具幅Wでなく**穴（縦枠の見付Jを含むcut）**が壁を抜くので、展開は面の建具一覧の唯一の口`elevationFaces.js`の`openingsOnFace`で、引き戸だけ`cutSpanOpening`（cutの区間を coord1/coord2・width・centerCoord に持つ代理）に差し替える。下流（壁の穴・巾木の途切れ・仕上げラベルの障害物・隅・姿図の幅・`blockedRanges`）は`o.width`/`centerCoord`を読むだけなので無変更で穴に揃う。引き戸でない・外壁ホスト・W≤50は**同じオブジェクト**を返す（参照の同一性＝他の建具の出力不変の根拠）。
+- **面に載るか・手前の部屋の所属は実体の中心**（`entityCenterCoord`）で判定する（代理の中心で判定すると、階段下の部屋の境界がWの中心とcutの中心の間にあるとき描く/描かないがずれる）。
+- **隅に届くかは代理（cut）の幅**で判定する。戸先が隅の反対側でWは届いてもcutが届かないときは、隅の建具断面も端の太線除外も出さない（穴が届いていないので描かない）。
+- 断面エンジンは`sectionHits.js`の通過範囲をcutに揃え、`sectionProbe.js`の列の区切りに**cutの端を足す**（Wの端も残す）。区切りがWの端のままだと、欠き込みだけの区間が「通過」・本当の穴が「非通過」と判定される。
+- 姿図と記号丸は穴の幅・中心で描く（採番・建具表はWのまま）。立面は外壁の建具だけを拾い外付け引き戸は屋内壁だけなので対象外。限界・先送り（F2）：走る面から見た扉とレールの描き分け、断面（`openingSection.js`の引き戸はlegacy）。
+
 ### 姿図の配置（S10 P5。2026-11-05）
 - 衛生・家具・空調の姿図の配置（`PlacedFigure`）は`elevation/elevationPlacedFigures.js appendPlacedFigures`が`elevationFigure.js`の`appendOpenings`の直後・`appendCornerSections`の前に重ねる。対象＝配置点を含む部屋（`room.cells`）の帯の面のうち、図の s 範囲が面の [0, run] に掛かるもの（遠近・遮蔽なし）。`elevation/`は`detail/`を直接引かず`finish/placedFigure/placedFigureViews.js`経由（`importGraph.test.js`の不変条件 (4) に注記）。
 - 向き: 平面の姿図は正面を図の下（局所 +t）へ向けて描く＝正面の世界方向 f＝(−sinθ, cosθ)。見る向き d＝部屋側から壁へ（−`face.inward`）。f＝−d→正面図・f＝d→背面図・見る人が図の右手側（右手 ρ＝(−f_y, f_x)。y 下向き正で南向きの右手は西）→右側面図・左手→左側面図。鏡像は f を変えず LEFT↔RIGHT を入れ替え全 view で s 反転。

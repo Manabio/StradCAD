@@ -591,3 +591,9 @@ S造スラブ（`SteelSlab`）のセルキー。梁で囲まれた区画（ベ�
 
 ## 配置原点（DetailDatumRole.PLACEMENT_ORIGIN）
 配置図の基準の役割。この基準が姿図の配置点（x, y）そのものに当たる（`finish/placedFigure/placedFigureTargets.js`）。
+
+## 外付け引き戸 / 建具幅W / 扉幅DW / 穴（cut）/ 引き代（pull）/ 欠き込み（recess）/ 戸先・戸尻 / 走る面 / footprint（引き戸）
+外付け引き戸＝建具種別`sliding`。扉が壁の面の外側を走り、引き代の区間だけ壁を欠き込む（幾何は`openings/slideOutset.js`）。**建具幅W**＝`Opening.width`＝最外の縦枠の内法（扉の可動部）。**扉幅DW**＝(W+50)/2の導出値。**穴（cut）**＝壁を全厚で抜く区間＝戸先端からDW−50を縦枠の見付Jずつ両側へ広げた範囲（`openingCutSpan`。展開・構造の袖柱・壁の穴が共有）。**引き代（pull）**＝開けた扉が収まる、W内の区間。**欠き込み（recess）**＝引き代の区間で走る面の側だけ壁を深さ50削る帯。**戸先**＝扉が閉じて当たる側の端、**戸尻**＝引き代の側の端（`hingeSide`）。**走る面**＝扉が走る壁の面（`hingeSide`×`swingSide`）。**footprint**＝枠の外面〜外面（W+2J）の占有範囲で、可動範囲・重なり判定に使う（立体の footprint＝輪郭とは別語）。設計意図は`.claude/opening-model.md`。
+
+## 建具一式 / 部品（役割）/ 合成キー
+部分詳細図の分類`fitting`。最上位は空で、`parts`に役割（`jamb`・`slideLatch`など13種）ごとの埋め込みの単一図を持つ。部品は合成キー「<一式のキー>#<役割>」で単一図として引ける（図のキー自体に`#`は使えない）。引き戸は組込みの一式`df-builtin-fitting-sliding`。設計意図は`.claude/detail-figure-model.md`「建具一式」。
