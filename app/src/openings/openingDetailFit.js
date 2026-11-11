@@ -16,8 +16,8 @@ import {
 import { detailFrameKindOf } from './openingPlanSymbolGeometry.js';
 import { ElevationLineRole, ElevationDash, weightForRole } from '../elevation/elevationStyle.js';
 import { line, polyline } from '../elevation/elevationPrimitives.js';
-import { OpeningMechanism, IMPLEMENTED_MECHANISMS, detailFigureEntry, detailFigureRefsFor, detailFigureRefsOfEntry, findCatalogEntry, fitDetailLocalMemo, subTypeDetailFigureRefsFor } from './openingCatalog.js';
-import { placeDetailSides, placeDetailElevation, withoutCollinearPoints } from './openingDetailFrame.js';
+import { OpeningMechanism, IMPLEMENTED_MECHANISMS, hingeSideMatters, detailFigureEntry, detailFigureRefsFor, detailFigureRefsOfEntry, findCatalogEntry, fitDetailLocalMemo, subTypeDetailFigureRefsFor } from './openingCatalog.js';
+import { placeDetailSides, placeDetailSide, placeDetailElevation, withoutCollinearPoints } from './openingDetailFrame.js';
 import { effectiveHeight, effectiveSillHeight, windowHasSill } from './openingNumbering.js';
 
 // 要求された枠の図を探す slot の順（head は head の図が無ければ jamb を流用する＝R9。sill は下枠だけ＝方立・上枠を流用しない。S8f-3 R5）。
@@ -29,7 +29,7 @@ const SLOT_ORDER = Object.freeze({
   [DetailSlot.FIGURE_BACK]: [DetailSlot.FIGURE_BACK], // 向こう側から見た姿図。他の slot を流用しない（FIGURE への落ち先は resolveDetailElevation が決める）
 });
 
-// 建具一式の部品の役割（slot ごとに探す役割。jambHinge/jambLatch は片側解決＝C6 で使う）。
+// 建具一式の部品の役割（slot ごとに探す役割。JAMB の片側解決は side で jambHinge/jambLatch を先に探す＝fittingRolesFor）。
 const FITTING_SLOT_ROLES = Object.freeze({
   [DetailSlot.JAMB]: Object.freeze([FittingPartRole.JAMB]),
   [DetailSlot.HEAD]: Object.freeze([FittingPartRole.HEAD]),
@@ -37,6 +37,26 @@ const FITTING_SLOT_ROLES = Object.freeze({
   [DetailSlot.FIGURE]: Object.freeze([FittingPartRole.FIGURE]),
   [DetailSlot.FIGURE_BACK]: Object.freeze([FittingPartRole.FIGURE_BACK]),
 });
+
+/** 方立の片側解決の側（resolveDetailFigure の side）。吊元側・戸先側。null（省略）＝両側共通（従来）。 */
+export const DetailFrameSide = Object.freeze({ HINGE: 'hinge', LATCH: 'latch' });
+
+// 一式の段で slot ごとに探す役割。JAMB だけ side で先頭に吊元側・戸先側の役割を足す（他の slot は side を無視）。
+function fittingRolesFor(slot, side) {
+  if (slot === DetailSlot.JAMB && side === DetailFrameSide.HINGE) return [FittingPartRole.JAMB_HINGE, FittingPartRole.JAMB];
+  if (slot === DetailSlot.JAMB && side === DetailFrameSide.LATCH) return [FittingPartRole.JAMB_LATCH, FittingPartRole.JAMB];
+  return FITTING_SLOT_ROLES[slot] ?? [];
+}
+
+/**
+ * 方立を左右別々に解決するか（描画 resolveSwingDoorFrame と通知が共有する唯一の条件）。JAMB・fittingKey あり・hingeSide が ±1・
+ * hingeSideMatters 真（片開き系）のとき ['hinge','latch']、それ以外は両側共通の [null]。
+ */
+export function jambSidesFor({ slot, fittingKey, hingeSide, mechanism, entry }) {
+  const sided = slot === DetailSlot.JAMB && typeof fittingKey === 'string' && fittingKey !== ''
+    && (hingeSide === -1 || hingeSide === 1) && hingeSideMatters(mechanism, entry);
+  return sided ? [DetailFrameSide.HINGE, DetailFrameSide.LATCH] : [null];
+}
 
 /**
  * 建具の一式のキー（建具個別の detailRefs.fitting ＞ 建具種別エントリの detailFigures.fitting。無ければ null）。
@@ -73,7 +93,7 @@ const refOf = (refs, slot) => {
  *   null＝参照が1つも無い（従来どおり）。intended＝優先順の先頭の参照（利用者の意図）。drawn＝実在する図のうち先頭
  *   （intended の図が無いとき、後ろの候補の図を流用する）。drawn が null＝参照はあるが図が1つも実在しない。
  */
-export function resolveDetailFigure({ symbolKey, detailRefs = null, slot, subTypeRefs = null, fittingKey = null }) {
+export function resolveDetailFigure({ symbolKey, detailRefs = null, slot, subTypeRefs = null, fittingKey = null, side = null }) {
   const isFigure = slot === DetailSlot.FIGURE || slot === DetailSlot.FIGURE_BACK;
   const baseSource = isFigure ? 'subType' : 'symbol';
   const baseRefs = isFigure ? subTypeRefs : detailFigureRefsFor(symbolKey);
@@ -87,7 +107,7 @@ export function resolveDetailFigure({ symbolKey, detailRefs = null, slot, subTyp
     const openingSaysNone = refsSayNone(detailRefs, s);
     // この slot の明示 null（「なし」）は記号の段だけでなく一式の段も飛ばす。
     const fittingKeys = typeof fittingKey === 'string' && fittingKey !== '' && !fittingSaysNone && !openingSaysNone
-      ? (FITTING_SLOT_ROLES[s] ?? []).map(role => `${fittingKey}${FITTING_PART_KEY_SEPARATOR}${role}`).filter(k => detailFigureEntry(k) !== null)
+      ? fittingRolesFor(s, side).map(role => `${fittingKey}${FITTING_PART_KEY_SEPARATOR}${role}`).filter(k => detailFigureEntry(k) !== null)
       : [];
     for (const [source, refs] of [['opening', detailRefs], ['fitting', fittingKeys], [baseSource, baseRefs]]) {
       if (source === baseSource && openingSaysNone) continue;
@@ -226,35 +246,72 @@ const snapNear = (v, refs) => refs.find(r => Math.abs(v - r) <= DETAIL_FIT_EPS_M
  * 既定の上枠は従来の矩形（R2。方立の既定を流用すると欠き込みが出て従来と一致しない）。
  * @param {object} p resolveDetailFrame と同じ（slot は既定 JAMB）に、faceMax・tSign を加えたもの。wallThickness＝faceMax−faceMin をそのまま渡す。
  *   defaultKey＝割当て無しのときの組込み図のキー（省略時は片開き戸の slot 別の既定。窓の方立は frameDefaultKey の結果を渡す。S8f-1。null を渡すと引数の既定（片開き戸の表）に落ちず「既定なし」になる。detailFigureEntry(null) が null を返すため）
- * @returns {null | {error:{code:string, message:string}, source:string} | {sides: object[][], profiles: object[], source:string}}
+ *   mechanism・entry・hingeSide＝片開き戸の方立だけが渡す（左右で違う枠）。slot が JAMB で fittingKey があり hingeSideMatters(mechanism, entry) が真のとき
+ *   吊元側（hingeSide −1＝coord1 側）・戸先側を別々に解決する（一式の jambHinge/jambLatch ＞ jamb。違う図なら側ごとに fit して placeDetailSide。
+ *   fit できない明示の側は既定の組込み図へ戻る）。渡さない・窓・三方枠・引き戸・両開きは両側共通（従来）。
+ *   戻り値の sideSources＝[coord1 側, coord2 側] の source（全体の source は従来の意味。呼び出し側の R4 は側ごとに sideSources で見る）。
+ * @returns {null | {error:{code:string, message:string}, source:string} | {sides: object[][], profiles: object[], source:string, sideSources:string[]}}
  *   null＝従来の描きへ戻る（参照切れ・既定の組込みが引けない）。error＝fit できない（呼び出し側は従来の描きへ。明示の割当てだけ通知の対象）。
  */
-export function resolveSwingDoorFrame({ symbolKey, detailRefs = null, fittingKey = null, slot = DetailSlot.JAMB, coord1, coord2, faceMin, faceMax, wallThickness, tSign, faceWidth, projection, defaultKey = SWING_DOOR_DEFAULT_KEYS[slot] }) {
-  const r = resolveDetailFigure({ symbolKey, detailRefs, slot, fittingKey });
-  let figure;
-  let source;
-  if (r === null) {
-    const key = defaultKey;
-    if (key === undefined || detailFigureEntry(key) === null) return null;
-    figure = { key, slot };
-    source = DetailFigureSource.DEFAULT;
-  } else if (r.drawn) {
-    figure = r.drawn;
-    source = DetailFigureSource.EXPLICIT;
-  } else {
-    return null;
-  }
-  const fitted = fitDetailLocalMemo({ figureKey: figure.key, slot: figure.slot, wallThickness, projection, faceWidth });
-  if (fitted.error) return { error: fitted.error, source };
+export function resolveSwingDoorFrame({ symbolKey, detailRefs = null, fittingKey = null, slot = DetailSlot.JAMB, coord1, coord2, faceMin, faceMax, wallThickness, tSign, faceWidth, projection, defaultKey = SWING_DOOR_DEFAULT_KEYS[slot], mechanism = null, entry = null, hingeSide = null }) {
+  // side の図を選ぶ（side＝null は両側共通）。null＝従来の描きへ戻る（参照切れ・既定の組込みが引けない）。
+  const choose = side => {
+    const r = resolveDetailFigure({ symbolKey, detailRefs, slot, fittingKey, side });
+    if (r === null) {
+      if (defaultKey === undefined || detailFigureEntry(defaultKey) === null) return null;
+      return { figure: { key: defaultKey, slot }, source: DetailFigureSource.DEFAULT };
+    }
+    return r.drawn ? { figure: r.drawn, source: DetailFigureSource.EXPLICIT } : null;
+  };
+  const fitOf = ({ figure }) => fitDetailLocalMemo({ figureKey: figure.key, slot: figure.slot, wallThickness, projection, faceWidth });
   // 寄せ先は 1 組で足りる: 方立の組は上枠の組（帯の両端と壁の面）を含み、上枠は欠き込みが無いので余分な値は偶然一致しない限り効かない。
   const refs = tSign < 0
     ? [faceMax + projection, faceMin + DOOR_LEAF_THICKNESS_MM, faceMin - projection, faceMin, faceMax]
     : [faceMin - projection, faceMax - DOOR_LEAF_THICKNESS_MM, faceMax + projection, faceMin, faceMax];
-  const sides = placeDetailSides(fitted, { coord1, coord2, faceMin, faceMax, tSign }).map(side => side.map(st => {
+  const tidy = (strokes, source) => strokes.map(st => {
     const points = withoutCollinearPoints(st.points, st.closed);
     return { ...st, points: source === DetailFigureSource.DEFAULT ? points.map(({ along, perp }) => ({ along, perp: snapNear(perp, refs) })) : points };
-  }));
-  return { sides, profiles: sides.flat(), source };
+  });
+  const both = chosen => {
+    const fitted = fitOf(chosen);
+    if (fitted.error) return { error: fitted.error, source: chosen.source };
+    const sides = placeDetailSides(fitted, { coord1, coord2, faceMin, faceMax, tSign }).map(side => tidy(side, chosen.source));
+    return { sides, profiles: sides.flat(), source: chosen.source, sideSources: [chosen.source, chosen.source] };
+  };
+
+  // 左右で違う枠は片開き系（hingeSideMatters 真）の方立だけ。窓・両開き・三方枠・引き戸は呼び出し側が mechanism を渡さない／偽になる＝従来。
+  const sided = jambSidesFor({ slot, fittingKey, hingeSide, mechanism, entry }).length === 2;
+  if (!sided) {
+    const c = choose(null);
+    return c === null ? null : both(c);
+  }
+  const hingeC = choose(DetailFrameSide.HINGE);
+  const latchC = choose(DetailFrameSide.LATCH);
+  if (hingeC === null || latchC === null) return null;
+  if (hingeC.figure.key === latchC.figure.key && hingeC.figure.slot === latchC.figure.slot && hingeC.source === latchC.source) return both(hingeC);
+  // 違う図: 側ごとに fit して置く。吊元端＝hingeSide −1 が coord1 側（sides[0]）。fit できない側は既定の組込み図へ戻す（その側だけ従来）。
+  const hingeIdx = hingeSide < 0 ? 0 : 1;
+  const placeSide = (chosen, idx) => {
+    let c = chosen;
+    let fitted = fitOf(c);
+    if (fitted.error && c.source === DetailFigureSource.EXPLICIT && defaultKey !== undefined && detailFigureEntry(defaultKey) !== null) {
+      c = { figure: { key: defaultKey, slot }, source: DetailFigureSource.DEFAULT };
+      fitted = fitOf(c);
+    }
+    if (fitted.error) return { error: fitted.error, source: c.source };
+    const along = idx === 0 ? coord1 : coord2;
+    return { strokes: tidy(placeDetailSide(fitted, { along, sx: idx === 0 ? 1 : -1, faceMin, faceMax, tSign }), c.source), source: c.source };
+  };
+  const placed = [null, null];
+  placed[hingeIdx] = placeSide(hingeC, hingeIdx);
+  placed[1 - hingeIdx] = placeSide(latchC, 1 - hingeIdx);
+  const failed = placed.find(p => p.error);
+  if (failed) return { error: failed.error, source: failed.source };
+  const sides = placed.map(p => p.strokes);
+  // 全体の source は従来の意味（どちらかが明示なら明示。通知の「明示だけ」の判定用）。R4＝既定の図だけに掛ける検査は、呼び出し側が
+  // sideSources で側ごとに見る（既定へ戻った側だけ従来の描きに差し替える。C6 QA 指摘）。
+  const source = placed.some(p => p.source === DetailFigureSource.EXPLICIT) ? DetailFigureSource.EXPLICIT : DetailFigureSource.DEFAULT;
+  return { sides, profiles: sides.flat(), source, sideSources: placed.map(p => p.source) };
 }
 
 /** 姿図の fit の寸法 dims（描画 resolveDetailElevation と集計 openingDetailFitCheck.js が共有する唯一の式）。 */

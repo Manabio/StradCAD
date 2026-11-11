@@ -118,10 +118,21 @@ export function placeDetailElevation(fitted, { sillTop }) {
  *   [coord1 側のストローク列, coord2 側のストローク列]
  */
 export function placeDetailSides(fitted, { coord1, coord2, faceMin, faceMax, tSign = 1 }) {
+  return [
+    placeDetailSide(fitted, { along: coord1, sx: 1, faceMin, faceMax, tSign }),
+    placeDetailSide(fitted, { along: coord2, sx: -1, faceMin, faceMax, tSign }),
+  ];
+}
+
+/**
+ * placeDetailSides の片側版（左右で違う図を使う片開き戸の方立が使う）。along＝その側の開口端・sx＝s 軸の向き
+ * （coord1 側＝+1・coord2 側＝−1）。faceMin・faceMax・tSign の意味は placeDetailSides と同じ。
+ * @returns {{points:{along:number,perp:number}[], closed:boolean}[]}
+ */
+export function placeDetailSide(fitted, { along, sx, faceMin, faceMax, tSign = 1 }) {
   const flipped = tSign < 0;
-  const side = (ox, sx) => placeStrokes(fitted, { ox, oy: flipped ? faceMax : faceMin, sx, sy: 0, tx: 0, ty: flipped ? -1 : 1 })
-    .map(st => ({ points: st.points.map(([along, perp]) => ({ along, perp })), closed: st.closed }));
-  return [side(coord1, 1), side(coord2, -1)];
+  return placeStrokes(fitted, { ox: along, oy: flipped ? faceMax : faceMin, sx, sy: 0, tx: 0, ty: flipped ? -1 : 1 })
+    .map(st => ({ points: st.points.map(([a, perp]) => ({ along: a, perp })), closed: st.closed }));
 }
 
 // 外付け引き戸の部品（建具一式 slide* の平面）が供給する基準の値（局所座標。s＝戸先端（または部品の置き場）から戸尻へ・t＝走る面から壁の中へ）。

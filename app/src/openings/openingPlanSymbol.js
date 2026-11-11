@@ -893,7 +893,7 @@ function swingFramePrimitives(opening, band, pivotPerp, outward, frameWeight) {
 // 図の t は「扉が閉じる側」が正なので、tSign は outward（pivot 面＝開く側の面が perp の増える側か）で決める。
 // 暗黙の既定は従来の描きと同じ前提のときだけ（R4）: 見付が全幅 30（開口幅 60 以上）で、見込帯が壁の面±出幅いっぱい（半外付けでない）。
 // 明示の割当ては R4 を見ず壁の面へ fit する。fit に失敗したら従来の描き（通知は S8e-2）。平面の記号に source は付けない（S3 と同じ）。
-function swingDetailFramePrimitives(opening, band, faceLo, faceHi, outward, frameWeight) {
+function swingDetailFramePrimitives(opening, entry, band, pivotPerp, faceLo, faceHi, outward, frameWeight) {
   if (opening.subType !== SWING_LEAF_SUBTYPE) return null;
   if (!Number.isFinite(faceLo) || !Number.isFinite(faceHi)) return null;
   const faceMin = Math.min(faceLo, faceHi);
@@ -903,16 +903,21 @@ function swingDetailFramePrimitives(opening, band, faceLo, faceHi, outward, fram
     symbolKey: fixtureSymbolOf(opening), detailRefs: opening.detailRefs ?? null, fittingKey: fittingKeyOf(opening), slot: DetailSlot.JAMB,
     coord1: opening.coord1, coord2: opening.coord2, faceMin, faceMax, wallThickness: faceMax - faceMin,
     tSign: outward > 0 ? 1 : -1, faceWidth: jambW, projection: FRAME_OVERHANG_MM,
+    mechanism: entry.mechanism, entry, hingeSide: opening.hingeSide, // 左右で違う枠（一式の jambHinge・jambLatch）
   });
   if (resolved === null || resolved.error) return null;
   // R4 は解決の後で見る（既定か明示かは解決しないと分からない。fit はメモ化されるので捨てる場合の再計算は無い）。
   // 組込みと同じキーの上書きも source は DEFAULT＝R4 の対象（detail-figure-model.md）。
-  if (resolved.source === DetailFigureSource.DEFAULT
-    && !(jambW === FRAME_JAMB_WIDTH_MM && band.lo === faceMin - FRAME_OVERHANG_MM && band.hi === faceMax + FRAME_OVERHANG_MM)) return null;
-  return resolved.profiles.map(jamb => polylinePrim('frame', frameWeight, jamb.points.flatMap(({ along, perp }) => {
-    const p = toWorld(opening.isVertical, along, perp);
-    return [p.x, p.y];
-  }), jamb.closed));
+  // R4 は側ごと（sideSources）に見る: 既定の図の側で R4 が不成立ならその側だけ従来の描き（左右で図が違うとき、既定の側を明示の側に巻き込まない）。
+  const r4Holds = jambW === FRAME_JAMB_WIDTH_MM && band.lo === faceMin - FRAME_OVERHANG_MM && band.hi === faceMax + FRAME_OVERHANG_MM;
+  if (!r4Holds && resolved.sideSources.every(s => s === DetailFigureSource.DEFAULT)) return null;
+  const legacy = r4Holds ? null : swingFramePrimitives(opening, band, pivotPerp, outward, frameWeight);
+  return resolved.sides.flatMap((side, idx) => (!r4Holds && resolved.sideSources[idx] === DetailFigureSource.DEFAULT
+    ? [legacy[idx]]
+    : side.map(jamb => polylinePrim('frame', frameWeight, jamb.points.flatMap(({ along, perp }) => {
+      const p = toWorld(opening.isVertical, along, perp);
+      return [p.x, p.y];
+    }), jamb.closed))));
 }
 
 // 窓の方立（詳細 LOD の平面。3 経路: plan.frame が 'notched'・'sashOpen'・'sash'）を部分詳細図で描く（部分詳細図 S8f-1）。
@@ -985,7 +990,7 @@ function buildSwingGroupPrimitives(opening, entry, lodLevel, band, detail, axisV
 
   if (entry.mechanism === OpeningMechanism.SWING) {
     const frame = detail
-      ? (swingDetailFramePrimitives(opening, band, faceLo, faceHi, plan.leafOutward, frameWeight)
+      ? (swingDetailFramePrimitives(opening, entry, band, plan.pivotPerp, faceLo, faceHi, plan.leafOutward, frameWeight)
         ?? windowDetailJambPrimitives(opening, entry.mechanism, band, faceLo, faceHi, plan, frameWeight)
         ?? swingFramePrimitives(opening, band, plan.pivotPerp, plan.leafOutward, frameWeight))
       : [];

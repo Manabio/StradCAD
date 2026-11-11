@@ -267,8 +267,8 @@ test('通知: 一式の部品が fit 不能なら 1 行（主語「建具一式�
   assert.equal(rows.length, 1);
   assert.equal(rows[0].slot, FIGURE);
   assert.equal(rows[0].symbolKey, '建具一式');
-  assert.equal(rows[0].label, 'set-bad（figure）');
-  assert.match(rows[0].message, /^詳細図 set-bad（figure） を 建具一式 の姿図に合わせられません: 固定寸法の和が目標を超える/);
+  assert.equal(rows[0].label, 'set-bad（姿図）');
+  assert.match(rows[0].message, /^詳細図 set-bad（姿図） を 建具一式 の姿図に合わせられません: 固定寸法の和が目標を超える/);
 });
 
 test('【失敗系】通知: 一式の部品が合わせられる・fitting:null 明示・一式の参照切れは 0 行（従来の行も増減しない）', () => {

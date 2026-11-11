@@ -12,13 +12,14 @@ import { DetailSlot, FRAME_OVERHANG_MM } from '../core/constants.js';
 import { clampFrameFaceWidth, jambWidthFor } from './openingPlanSymbolGeometry.js';
 import { ERR_DETAIL_FIT_FAILED, ERR_DETAIL_FIGURE_NOT_FOUND, DETAIL_OWNER_OPENING, DETAIL_OWNER_FITTING, ERR_SLIDE_ON_EXTERIOR_WALL } from '../error.js';
 import { parseFittingPartKey } from '../detail/detailPlacement.js';
+import { FITTING_PART_ROLE_TEXT } from '../catalog/catalogMaintenance.js';
 import { OpeningCategory } from '../core.js';
 import { isOutsetSlide } from './slideOutset.js';
 import { effectiveFrameFaceWidth, effectiveFrameProjection, effectiveHeight, fixtureSymbolOf } from './openingNumbering.js';
 import { detailFitKey, fitDetailLocalMemo, subTypeDetailFigureRefsFor, findCatalogEntry } from './openingCatalog.js';
 import { isFrameOnlySection, isSwingLeafSection, isWindowSection, sectionFrameFaceWidthFor, openingSectionWallRange, wallMaterialRangeForOpening, wallMaterialRangesOf } from './openingSection.js';
 import { findHostWall, wallFaceRange } from './openingGeometry.js';
-import { resolveDetailFigure, elevationDetailDims, frameDefaultKey, fittingKeyOf } from './openingDetailFit.js';
+import { resolveDetailFigure, elevationDetailDims, frameDefaultKey, fittingKeyOf, jambSidesFor } from './openingDetailFit.js';
 
 const FRAME_SLOTS = Object.freeze([DetailSlot.JAMB, DetailSlot.HEAD, DetailSlot.SILL]);
 const FIGURE_SLOTS = Object.freeze([DetailSlot.FIGURE, DetailSlot.FIGURE_BACK]);
@@ -61,7 +62,7 @@ function ownerOfSource(source, ownerKey) {
 // 行のキー表示（表示だけ）: 合成キー '<一式キー>#<役割>' は「一式キー（役割）」。
 function fittingPartLabel(key) {
   const parsed = parseFittingPartKey(key);
-  return parsed ? `${parsed.setKey}（${parsed.role}）` : key;
+  return parsed ? `${parsed.setKey}（${FITTING_PART_ROLE_TEXT[parsed.role] ?? parsed.role}）` : key;
 }
 
 /**
@@ -113,13 +114,20 @@ function collectFrameFailures(o, graph, frameSlots, { failures, seen }) {
     const thicknesses = [merged, ...wallMaterialRangesOf(o, graph)].map(r => r.hi - r.lo);
     return [...new Set(thicknesses)].map(wallThickness => ({ wallThickness, projection: FRAME_OVERHANG_MM, faceWidth: sectionFrameFaceWidthFor(o) }));
   };
+  const fittingKey = fittingKeyOf(o);
+  // 片開き戸の方立は吊元側・戸先側を別々に解決する（描画 resolveSwingDoorFrame と同じ条件）。それ以外は両側共通の 1 回。
+  const swingEntry = isSwingLeafSection(o) ? findCatalogEntry(o.category, o.subType) : null;
   for (const slot of frameSlots) {
-    const r = resolveDetailFigure({ symbolKey, detailRefs: o.detailRefs ?? null, slot, fittingKey: fittingKeyOf(o) });
-    if (!r) continue;
-    for (const dims of dimsListOf(slot)) {
-      const before = failures.length;
-      pushFailuresOf(r, { failures, seen, ownerKey: symbolKey, slot, dims, extra: { ...dims } });
-      if (failures.length > before) break;
+    const sides = swingEntry === null ? [null]
+      : jambSidesFor({ slot, fittingKey, hingeSide: o.hingeSide, mechanism: swingEntry.mechanism, entry: swingEntry });
+    for (const side of sides) {
+      const r = resolveDetailFigure({ symbolKey, detailRefs: o.detailRefs ?? null, slot, fittingKey, side });
+      if (!r) continue;
+      for (const dims of dimsListOf(slot)) {
+        const before = failures.length;
+        pushFailuresOf(r, { failures, seen, ownerKey: symbolKey, slot, dims, extra: { ...dims } });
+        if (failures.length > before) break;
+      }
     }
   }
 }
