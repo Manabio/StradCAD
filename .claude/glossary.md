@@ -21,7 +21,7 @@
 appModeごとにCL種別が**描画対象**になるかだけを持つ表（`core/centerLineKindPolicy.js`）。ヒット対象は本表そのものではなく、本表からの例外（`HIT_EXCLUDED_KINDS_BY_MODE`。構造モードは通り芯がヒットしない等）を引いて別途導出する。直交端部候補・同方向障害物・移動スナップ吸着先はここから自動導出されるため、表を変えると連動先も一緒に動く。設計意図は`.claude/data-model.md`「CL種別間の関係は単一のポリシーから導出し…」節。
 
 ## 走査API（centerLineKindPolicy）
-`graph.centerLines`を種別条件で絞り込んで相手候補を返す関数群（`orthoAnchorCandidates(ForNew)`・`sameDirectionObstacles`・`sameCoordCounterparts`・`mergeCandidates`・`candidatesVisibleIn`・`gridCenterLines(OnAxis)`・`structuralAnchorAt`／`structuralAnchorCandidates`・`beamAxisCenterLines`等）。呼び出し元が種別条件を個別実装すると非表示種別を巻き込む不具合の温床になるため、相手選択はすべてこの経由に統一する（`core/centerLineKindPolicy.guard.test.js`が新規の素の直接走査を禁じる）。
+`graph.centerLines`を種別条件で絞り込んで相手候補を返す関数群（`orthoAnchorCandidates(ForNew)`・`sameDirectionObstacles`・`sameCoordCounterparts`・`mergeCandidates`・`candidatesVisibleIn`・`gridCenterLines(OnAxis)`・`structuralAnchorAt`／`structuralAnchorCandidates`・`beamAxisCenterLines`・`manualColumnAnchorLines`等）。呼び出し元が種別条件を個別実装すると非表示種別を巻き込む不具合の温床になるため、相手選択はすべてこの経由に統一する（`core/centerLineKindPolicy.guard.test.js`が新規の素の直接走査を禁じる）。
 
 ## 構造アンカー種別（STRUCTURAL_ANCHOR_KINDS）
 在来木造の柱・通し梁・土台・床梁が点をCLへ解決するときの相手になれる種別の表。第1候補＝通り芯・梁芯、第2候補＝壁の乗る意匠中心線（補助線は対象外）。梁芯の重複ガードも第1候補を共有する。設計意図は`.claude/structural-model.md`「在来木造の柱は『壁が交差する位置』に立てる」節。
@@ -157,6 +157,9 @@ CL・梁芯・柱を「誰が・何のために作ったか」で表す語彙（
 
 ## 固定材（構造部材のdimensionStatus）
 `dimensionStatus`が`'auto'`以外（`'locked'`・`'calculated'`）の構造部材の総称。手動追加（`structural/manualMemberAdd.js`）は追加直後に`locked`化され、撤去段（`autoFillColumns`等）・固定梁と重なる自動梁の撤去（`structural/fixedBeamOverlap.js`）から保護される。CL（通り芯・梁芯・中心線）の削除・降格で固定材が巻き込まれるときは確認のうえで削除する。設計意図は`.claude/structural-model.md`「手動追加は`locked`で撤去段・CL削除巻き込みから守る」節。
+
+## 柱追加・柱削除（長クリック）/ 柱の交点（COLUMN_SLOT）/ 編集先
+平面・構造モードで、柱の断面内の長クリック（＝長押し／ロングタップ。メニューを開く同じ操作）に出る「柱削除」と、CLの交点の長クリックに出る「柱追加」（2026-11-11。占有済み・主構造未確定・柱を持たない構造種別ではグレー）。**柱の交点**＝柱を立てられる縦横の線の組（通り芯＋モードごとの種別。壁は対象でない）で、メニューの文脈名は`COLUMN_SLOT`（柱の断面内は`COLUMN`）。**編集先**＝追加・削除を書き込むgraph（平面は表示中の階、構造モードは構造リストの柱グループと同じ階＝非在来は下階）。確定は構造リストと同じ`structural/manualMemberCommit.js`を通る。設計意図は`.claude/structural-model.md`「柱の手動追加・削除の確定は1か所」節。
 
 ## role（構造部材のrole）
 柱=`standard`/`foundation`、梁=`primary`/`secondary`/`foundation`/`eaves`/`roof`/`landing`（踊り場受け梁。記号`LG`）/`sill`（土台。記号`SL`。在来木造の基礎伏図＝最下階専用）/`floor`（床梁。記号`FB`）/`roofBeam`（小屋梁・飛び梁。記号`KB`。在来木造の小屋組）。伏図の慣習（基礎伏図に柱なし等）に対応する。
