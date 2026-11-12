@@ -517,10 +517,10 @@ export const FACADE_EMPTY_MESSAGE = '外壁が無いため立面図を描けま�
 export const FACADE_INIT_ERROR_MESSAGE = '立面モードの初期化に失敗しました';
 
 // ---- 敷地モードの配置図（site/sitePlacementView.js・modes/SiteModeState.js・ui/SiteInfoPanel.jsx） ----
-/** 配置図の表示スイッチの見出しと2つの選択肢。 */
+/** 配置図の表示スイッチの見出しと2つの選択肢（表示側＝「配置」、非表示側＝「敷地入力」。画面の名前で呼ぶ）。 */
 export const SITE_PLACEMENT_SWITCH_LABEL = '配置図';
-export const SITE_PLACEMENT_SHOW_LABEL = '表示';
-export const SITE_PLACEMENT_HIDE_LABEL = '非表示';
+export const SITE_PLACEMENT_SHOW_LABEL = '配置';
+export const SITE_PLACEMENT_HIDE_LABEL = '敷地入力';
 /** 配置図に描く屋根伏せ図の線が1本も無いときの表示文。 */
 export const SITE_PLACEMENT_EMPTY_MESSAGE = '屋根伏図がありません';
 /** 一部の階（または屋根）を読み込めなかったときの表示文（立面の FACADE_INIT_ERROR_MESSAGE と同じ位置づけ）。 */

@@ -200,7 +200,7 @@ test('SceneLayers: 配置図の表示中（sitePlacementShown）は敷地の3レ
   }
 });
 
-test('SiteInfoPanel: 配置図スイッチ（表示｜非表示）を出し、表示中はタブ・面積行・表・NumPad を出さない', () => {
+test('SiteInfoPanel: 配置図スイッチ（配置｜敷地入力）を出し、表示中はタブ・面積行・表・NumPad を出さない', () => {
   assert.match(panel, /const placing {3}= mode\.showPlacement;/);
   assert.match(panel, /onClick=\{\(\) => mode\.setShowPlacement\(opt\.on\)\}/);
   assert.match(panel, /style=\{segmentButtonStyle\(placing === opt\.on\)\}/);
