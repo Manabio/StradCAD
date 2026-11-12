@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project } from '../core.js';
 import { FinishModeState } from './FinishModeState.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { floorWriteGeneration, noteFloorWrite } from '../storage/floorWriteGeneration.js';
 
 function makeTwoFloors() {
@@ -13,12 +13,6 @@ function makeTwoFloors() {
   const { graph: above } = project.addPlane(3000, '2階', 'lg-p2');
   project.activePlaneId = 'lg-p2';
   return { project, below, above };
-}
-
-async function withPeek(peek, fn) {
-  const original = floorSwapManager.peek;
-  floorSwapManager.peek = peek;
-  try { await fn(); } finally { floorSwapManager.peek = original; }
 }
 
 test('init 後、直下階がある階では lowerGraphGeneration === floorWriteGeneration(直下階の id)（_lowerGraph が在る）', async () => {

@@ -9,7 +9,7 @@ import {
 } from '../core.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeekGraphs as withPeek } from '../storage/floorSwapTestFixtures.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { autoFillWoodFloorBeams } from './woodAutoFill.js';
@@ -150,13 +150,6 @@ function buildTwoFloors(roofCellsIJ) {
   roof.setFeature(RoomFeature.ROOF);
   roof.setRoofSpec(createLeanToRoofSpec());
   return { project, g1, g2 };
-}
-
-async function withPeek(graphs, fn) {
-  const peekMap = Object.fromEntries(graphs.map(g => [g.plane.id, g]));
-  const original = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try { return await fn(); } finally { floorSwapManager.peek = original; }
 }
 
 // 本番の反映パスと同じ降順（上階→下階）を、2階とも changed=false になるまで回す（上限8周）。

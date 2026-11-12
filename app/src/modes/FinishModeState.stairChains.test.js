@@ -5,19 +5,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FinishModeState } from './FinishModeState.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { serializeGraph } from '../graphSnapshot.js';
 import { RoomFeature } from '@core';
 import { makeStorePeek } from '../finish/equipment/equipmentTestFixtures.js';
 import { setupProject, addPerFloorV, placeStair } from '../finish/stair/stairRemovalTestFixtures.js';
 
 const LEFT = [250, 500];
-
-async function withPeek(peek, fn) {
-  const original = floorSwapManager.peek;
-  floorSwapManager.peek = peek;
-  try { await fn(); } finally { floorSwapManager.peek = original; }
-}
 
 // 3階建て。stairsOn に挙げた階（0 始まり）へ同位置の階段を指定し、activeIndex の階をアクティブにした状態を返す。
 // peek はバイト列から復元した別インスタンスを返し、呼ばれた planeId を calls へ積む。

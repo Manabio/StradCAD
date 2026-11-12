@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PlanGraph, Project, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { undoManager } from '../undoManager.js';
 import {
@@ -165,13 +166,9 @@ test('collectFixedMembersByFloor: 他階peekが失敗すると関数がrejectし
   const bytesBefore = serializeGraph(p1);
   const undoBefore = undoManager.peekUndo();
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async () => { throw new Error('他階peek失敗'); };
-  try {
+  await withPeek(async () => { throw new Error('他階peek失敗'); }, async () => {
     await assert.rejects(() => collectFixedMembersByFloor(project, p1, x0), /他階peek失敗/);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
   assert.deepEqual(serializeGraph(p1), bytesBefore, '自階グラフ（p1）は変化しない（読み取り専用のまま失敗する）');
   assert.equal(undoManager.peekUndo(), undoBefore, 'undoスタックは変化しない（積まれていない）');
   assert.equal(project.structGraph.shapeMap.has(x0.id), true, 'structGraph側の通り芯は未変更');

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { Project, PlanGraph, CenterLineType, Discipline, RoomFeature } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { serializeGraph, restoreGraph, decodeFloorSnapshot, floorBytesMayHaveClEccentricities } from '../graphSnapshot.js';
 import { countClEccentricities } from '../schema/graphFbs.js';
 import { runFinishEntryBoundary } from './finishBoundary.js';
@@ -25,9 +26,7 @@ async function makeFixture() {
   const { graph: below } = project.addPlane(0, '1階', 'p1');
   const { graph: above } = project.addPlane(3000, '2階', 'p2');
   project.activePlaneId = 'p2';
-  const orig = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => (plane.id === below.plane.id ? below : above);
-  try {
+  return withPeek(async (plane) => (plane.id === below.plane.id ? below : above), async () => {
     const grid = (g) => ({
       x0: g.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH }),
       x1: g.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false, discipline: Discipline.ARCH }),
@@ -47,9 +46,7 @@ async function makeFixture() {
     await runFinishEntryBoundary(above, project);
     const materialMap = await loadMaterialMap();
     return { project, below, above, belowYm: b.ym, aboveYm: a.ym, materialMap };
-  } finally {
-    floorSwapManager.peek = orig;
-  }
+  });
 }
 
 // 本番同型の他階スタブ。peek 回数と loadFloorFn 回数を数える。
@@ -258,9 +255,7 @@ async function makeThreeFloorStairFixture() {
   const project = new Project('proj', 'test');
   const gs = [1, 2, 3].map(i => project.addPlane((i - 1) * 3000, `${i}階`, `p${i}`).graph);
   project.activePlaneId = 'p1';
-  const orig = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => gs.find(g => g.plane.id === plane.id);
-  try {
+  return withPeek(async (plane) => gs.find(g => g.plane.id === plane.id), async () => {
     const yms = [];
     for (const g of gs) {
       const x0 = g.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });
@@ -276,9 +271,7 @@ async function makeThreeFloorStairFixture() {
     }
     const materialMap = await loadMaterialMap();
     return { project, gs, yms, materialMap };
-  } finally {
-    floorSwapManager.peek = orig;
-  }
+  });
 }
 
 // recIdx 階（0始まり）にだけ偏芯レコード、activeIdx 階が自階。新経路と旧経路（loadFloorFn: null）を比べる。

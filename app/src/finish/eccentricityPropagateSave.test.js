@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project, PlanGraph, CenterLineType, Discipline, RoomFeature } from '../core.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { floorBytesEqual } from '../floorOps.js';
 import { runFinishEntryBoundary } from './finishBoundary.js';
@@ -54,20 +55,16 @@ async function withStore(f, activeIdx, fn) {
   const saves = [];
   const peeks = [];
   const saveFloorFn = async (planeId, bytes) => { saves.push(planeId); store.set(planeId, bytes); };
-  const orig = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane, structGraph) => {
+  return withPeek(async (plane, structGraph) => {
     peeks.push(plane.id);
     const g = new PlanGraph(plane);
     g._structGraph = structGraph;
     const bytes = store.get(plane.id);
     if (bytes) { restoreGraph(g, bytes); floorSwapManager._healDerivedGeometry(g); }
     return g;
-  };
-  try {
+  }, async () => {
     return await fn({ store, saves, peeks, saveFloorFn });
-  } finally {
-    floorSwapManager.peek = orig;
-  }
+  });
 }
 
 function setSpec(f, idx, rec) {

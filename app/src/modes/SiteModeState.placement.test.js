@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project, CenterLineType, Discipline, DimensionSide } from '@core';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import {
   SITE_PLACEMENT_EMPTY_MESSAGE, SITE_PLACEMENT_READ_ERROR_MESSAGE, SITE_PLACEMENT_LOADING_MESSAGE,
@@ -22,13 +22,6 @@ function makeProject(n, { activeId = 'p2' } = {}) {
   project.activePlaneId = activeId;
   project.structuralInfo.mainStructure = TRADITIONAL_WOOD_STRUCTURE;
   return project;
-}
-
-/** peek を差し替えて fn を実行する（finally で戻す）。 */
-async function withPeek(peek, fn) {
-  const orig = floorSwapManager.peek;
-  floorSwapManager.peek = peek;
-  try { return await fn(); } finally { floorSwapManager.peek = orig; }
 }
 
 /** 外から解決できる Promise。 */

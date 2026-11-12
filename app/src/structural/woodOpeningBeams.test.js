@@ -7,7 +7,7 @@ import { runInAction } from 'mobx';
 import { Project, CenterLineType, Discipline, RoomFeature, StairType, StructuralMaterialType } from '../core.js';
 import { getAllCells } from '../finish/gridCells.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { autoFillStructuralGrid } from './structuralAutoFill.js';
@@ -67,13 +67,7 @@ function fillThenDropSmalls(g, project) {
 const brief = b => `${b.isVertical ? 'V' : 'H'}${Math.round(b.axisCL.effectiveValue)}:${Math.round(b.clStart.effectiveValue)}..${Math.round(b.clEnd.effectiveValue)}`;
 
 async function recompute(f) {
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => f.project.graphMap.get(plane.id) ?? null;
-  try {
-    return await recomputeStructuralForGraph(f.g2, f.project, WOOD, f.g1);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  return withPeek(async (plane) => f.project.graphMap.get(plane.id) ?? null, () => recomputeStructuralForGraph(f.g2, f.project, WOOD, f.g1));
 }
 
 test('【S3-1】部分指定の吹抜け: 壁のない辺だけに小梁が架かり、壁のある辺は壁線の通し梁が覆って生成されない。最短スパンの辺が先で、後の辺はその小梁に取りつく', () => {
@@ -324,13 +318,9 @@ test('【S3-9】下階の階段吹抜け（STAIR_VOID）: 階段開口4辺は st
   g2.addRoom(new Set([mk(g2, GRID)])).setFeature(RoomFeature.STAIR_VOID);
   assert.ok(openingEdgeComponents(g2, { belowGraph: g1 }).length >= 1, '前提: 2階に床開口の成分がある');
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
-  try {
+  await withPeek(async (plane) => project.graphMap.get(plane.id) ?? null, async () => {
     await recomputeStructuralForGraph(g2, project, WOOD, g1);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
   const primaries = g2.beams.filter(b => b.role === 'primary');
   assert.ok(primaries.length >= 4, `前提: 階段開口の縁梁（通し梁）が4辺に生成される（実際: ${primaries.length}）`);
   assert.equal(smalls(g2).length, 0, '全辺が通し梁で覆われるので小梁は 0 本');
@@ -486,13 +476,7 @@ function makeLandingFixture({ lowerStructure = WOOD, upDirection = 'up', rects =
   return { project, g1, g2 };
 }
 async function recomputeLanding(f) {
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => f.project.graphMap.get(plane.id) ?? null;
-  try {
-    return await recomputeStructuralForGraph(f.g2, f.project, WOOD, f.g1);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  return withPeek(async (plane) => f.project.graphMap.get(plane.id) ?? null, () => recomputeStructuralForGraph(f.g2, f.project, WOOD, f.g1));
 }
 const frontSmalls = g => smalls(g).filter(b => !b.isVertical && Math.abs(b.axisCL.effectiveValue - 1000) < 1);
 

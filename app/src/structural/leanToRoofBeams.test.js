@@ -12,7 +12,7 @@ import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeekGraphs as withPeek } from '../storage/floorSwapTestFixtures.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { leanToFraming, leanToFramingRegions, leanToFramingCellKeys } from './roofFramingRegions.js';
@@ -55,13 +55,6 @@ function buildTwoFloors(leanGroups, { highSide = RoofHighSide.TOP } = {}) {
     return roof;
   });
   return { project, g1, g2, roofs };
-}
-
-async function withPeek(graphs, fn) {
-  const peekMap = Object.fromEntries(graphs.map(g => [g.plane.id, g]));
-  const original = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try { return await fn(); } finally { floorSwapManager.peek = original; }
 }
 
 // 本番の反映パスと同じ降順（上階→下階）を、2階・1階とも changed=false になるまで回す（上限8周）。

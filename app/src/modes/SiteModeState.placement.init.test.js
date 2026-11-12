@@ -3,19 +3,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project } from '@core';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { SiteModeState } from './SiteModeState.js';
 
 const PLACEMENT = {
   rotationDeg: 0, tx: 100, ty: 200,
   input: { v1: { x: 0, y: 0 }, v2: { x: 0, y: 1000 }, centerLineId: 'cl', distance: 1000, rotationFlipped: false, sideFlipped: false },
 };
-
-async function withPeek(peek, fn) {
-  const orig = floorSwapManager.peek;
-  floorSwapManager.peek = peek;
-  try { return await fn(); } finally { floorSwapManager.peek = orig; }
-}
 
 test('init: placement があれば配置図を開き、読込みの完了まで待つ（placementRoof が入る）', async () => {
   const project = new Project('proj', 'test');

@@ -11,6 +11,7 @@ import {
 } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { saveFloor } from '../storage/db.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
@@ -442,15 +443,11 @@ test('recomputeStructuralComposition: 下階編集経路は直前に立った下
   g2.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, y0, {});
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const composition = { graphForCategory: () => g1 }; // belowGraph=g1（下階編集経路を通す）
     await recomputeStructuralComposition(composition, g2, project, { mutate: () => {} });
     assert.ok(g1.columnMap.has(col3b.id), '1階の3b柱は下階編集経路の再計算で撤去されない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- ステップ3h-2: 下階編集経路（主構造変更時等）は直前に立った下階の3h-2柱（上階の頭つなぎ・受梁が
@@ -488,15 +485,11 @@ test('recomputeStructuralComposition: 下階編集経路は直前に立った下
   tieBeam.setDimensionStatus('locked');
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const composition = { graphForCategory: () => g1 }; // belowGraph=g1（下階編集経路を通す）
     await recomputeStructuralComposition(composition, g2, project, { mutate: () => {} });
     assert.ok(g1.columnMap.has(colTie.id), '1階の3h-2柱は下階編集経路の再計算で撤去されない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 実機裁定ステップ4 C-2 QA2: 「各階柱寸法」欄（下階graphのwoodColumnWidthMm）は
@@ -527,9 +520,7 @@ test('recomputeStructuralComposition【実機裁定ステップ4 C-2 QA2】: 下
   beam2F.setDimensionStatus('locked');
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const composition = { graphForCategory: () => g1 }; // 柱グループの欄が編集する graph（下階=1階）
     const col1FNoBefore = col1F.memberNo;
     const beam2FNoBefore = beam2F.memberNo;
@@ -558,9 +549,7 @@ test('recomputeStructuralComposition【実機裁定ステップ4 C-2 QA2】: 下
     // （belowGraphのbeforeスナップショットをmutate実行後に取っていたバグ。再発防止）。
     assert.equal(col1FAfterUndo.memberNo, col1FNoBefore, 'undoで1階柱の部材番号も変更前に戻る');
     assert.equal(beam2FAfterUndo.memberNo, beam2FNoBefore, 'undoで2階梁の部材番号も変更前に戻る');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- ステップ3（2026-09-17裁定）: 柱の個別柱寸（column.woodColumnWidthMm）----
@@ -661,9 +650,7 @@ test('recomputeStructuralComposition【実機裁定ステップ4 C-2 QA3】: und
   assert.equal(countBefore, 1);
 
   const peekMap = { p1: g1, p2: g2, p3: g3 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const composition = { graphForCategory: () => g1 };
     await recomputeStructuralComposition(composition, g2, project, {
       mutate: () => { g1.setWoodColumnWidthMm(105); },
@@ -684,9 +671,7 @@ test('recomputeStructuralComposition【実機裁定ステップ4 C-2 QA3】: und
     undoManager.redo();
     const groupAfterRedo = project.memberNumberIndex.get(groupKey);
     assert.equal(groupAfterRedo, undefined, 'redoで再び120×120@1Fグループが消える（変更後の状態と一致）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- reflectStructuralAfterFinishExit ----
@@ -763,9 +748,7 @@ test('renumberMembers【実機裁定ステップ4 C-2 QA4】: 構造リストの
   for (const b of [beamStdA, beamStdB, beamNonStd]) b.setDimensionStatus('locked');
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const composition = { graphForCategory: () => g1 }; // 「各階柱寸法」欄が編集するgraph（下階=1階）
     // 突入時相当の再計算: 1階の柱寸を105にした状態で2階を再計算し、graph.beamColumnWidthMm
     // （下階=1階基準の派生値）を2階へキャッシュさせる。
@@ -782,9 +765,7 @@ test('renumberMembers【実機裁定ステップ4 C-2 QA4】: 構造リストの
     assert.equal(beamStdA.memberNo, beamStdB.memberNo,
       'renumberMembers後も105×120の2本は同一タグのまま分裂しない（実機観測: 2G18が2G18〜2G26に分裂したバグの回帰防止）');
     assert.notEqual(beamStdA.memberNo, beamNonStd.memberNo, '105×330（個別採番対象）は引き続き標準材の2本とは別タグ');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 実機再QA指摘2→再QA指摘4: 配線側（反映の呼び出し側）は temp インスタンス自体を持ち回らず、
@@ -952,15 +933,11 @@ test('recomputeStructuralComposition【QA3-1・非在来は維持】: 非在来�
     }
     const peekMap = { p1: g1, p2: g2 };
     let peekCount = 0;
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async (plane) => { peekCount++; return peekMap[plane.id] ?? null; };
-    try {
+    await withPeek(async (plane) => { peekCount++; return peekMap[plane.id] ?? null; }, async () => {
       const composition = { graphForCategory: () => g2 };
       await recomputeStructuralComposition(composition, roofGraph, project, {});
       if (withColumnGrid) assert.ok(g2.columns.length > 0, '前提: 下階(=最上階)に柱が新規に立ち、下階柱集合が変化した');
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
     return peekCount;
   }
   const withoutChange = await run(false);
@@ -998,9 +975,7 @@ test('recomputeStructuralComposition【裁定変更・2026-09-19】: 在来木�
   // ため、ここでは事前に手動生成しない——生成される梁の材幅（幅）が最上階の柱寸（105）にそろうはず。
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const composition = { graphForCategory: () => g2 }; // structuralPlaneBelow: 屋根→最上階
     await recomputeStructuralComposition(composition, roofGraph, project, {});
 
@@ -1011,9 +986,7 @@ test('recomputeStructuralComposition【裁定変更・2026-09-19】: 在来木�
       assert.equal(findSectionEntry(b.sectionDefId)?.width, 105,
         '屋根伏図の軒桁の材幅は最上階の柱寸(105)になる（裁定変更・2026-09-19。屋根の1つ下=最上階）');
     }
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // テストの穴（コーディネーター指摘）: roofReexecBlockedを常時trueへ全戻し（旧2026-09-17裁定のまま）
@@ -1053,9 +1026,7 @@ test('recomputeStructuralComposition【テストの穴・再発防止】: 在来
   generateRoomWallsFromOutline(g2, room);
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const composition = { graphForCategory: () => g2 };
     await recomputeStructuralComposition(composition, roofGraph, project, {});
 
@@ -1065,9 +1036,7 @@ test('recomputeStructuralComposition【テストの穴・再発防止】: 在来
     const eaveSegmentsAtY0 = roofGraph.beams.filter(b => b.role === 'primary' && !b.isVertical && Math.abs(b.axisValue) < 1);
     assert.equal(eaveSegmentsAtY0.length, 2,
       `屋根の軒桁(y=0)は2回目の再計算で下階の新規柱(x=1820)により2本に分割され直る（実測=${eaveSegmentsAtY0.length}本）`);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('recomputeStructuralComposition【裁定変更・2026-09-19】: 在来木造の屋根は1回目（peekRoofBelowGraph経由）・2回目（precomputedBelowGraph）のbelowGraphが同じ最上階になり、軒桁材幅がチャーンしない', async () => {
@@ -1097,9 +1066,7 @@ test('recomputeStructuralComposition【裁定変更・2026-09-19】: 在来木�
   // 屋根伏図の軒桁は在来木造では壁線方式（ステップ5）で自動生成される——事前に手動生成しない。
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     // 1回目相当: recomputeStructuralForGraph単体（structuralRecompute.jsのpeekRoofBelowGraphが
     // 直接この時点で最上階g2を解決するため、1回目の時点で既に材幅(width)は105へそろっているはず）。
     // 注意: 成(depth)はbelowGraph.columns（この時点ではg2にまだ3a柱が無い）に依存するため対象外
@@ -1122,9 +1089,7 @@ test('recomputeStructuralComposition【裁定変更・2026-09-19】: 在来木�
       roofGraph.beams.filter(b => b.role === 'primary' && b.beamType === '軒桁')
         .map(b => [b.id, findSectionEntry(b.sectionDefId)?.width]));
     assert.deepEqual(afterFullPath, afterFirstCallOnly, '2回目が走っても軒桁のid・材幅(width)はチャーンしない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- QA3-2: precomputedBelowGraph（structuralRecompute.js第4引数）を落とすと全スイート緑になって
@@ -1157,8 +1122,7 @@ test('recomputeStructuralComposition【QA3-2】: 下階のpeekが古い（3b柱�
   const y0b = y0;
   g2.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', xMid, y0b, {});
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => {
+  await withPeek(async (plane) => {
     if (plane.id === 'p1') {
       const stale = new PlanGraph(plane);
       stale._structGraph = project.structGraph;
@@ -1167,8 +1131,7 @@ test('recomputeStructuralComposition【QA3-2】: 下階のpeekが古い（3b柱�
     }
     if (plane.id === 'p2') return g2;
     return null;
-  };
-  try {
+  }, async () => {
     const composition = { graphForCategory: () => g1 }; // peekではなく生のg1を直接返す
     await recomputeStructuralComposition(composition, g2, project, {});
 
@@ -1176,9 +1139,7 @@ test('recomputeStructuralComposition【QA3-2】: 下階のpeekが古い（3b柱�
     const splitBeams = g2.beams.filter(b => b.role === 'primary' && !b.isVertical && Math.abs(b.axisValue - 0) < 1);
     assert.equal(splitBeams.length, 2,
       'peekが古いコピーを返しても、compositionの下階graphを直接使うことで自階の梁が分割され直る');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 実機再々QA指摘1: reflectStructuralToOtherFloors はアクティブ階を recomputeStructuralForGraph
@@ -1470,9 +1431,7 @@ test('【失敗系・R-3】reflectStructuralToOtherFloors: 非在来（S造。ro
     roofGraph.structureOverride = 'S造';
     project.activePlaneId = null;
 
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
-    try {
+    await withPeek(async (plane) => project.graphMap.get(plane.id) ?? null, async () => {
       // 非在来の屋根専用平面はreflectRoofPlaneが「収集だけ」（!roofRules.framing早期return）で
       // 自階再計算・保存をしない（実際のジオメトリ生成はユーザーが屋根伏図を直接訪れたときの
       // 通常経路に委ねる既存の割り切り）——ここでは「直接訪れた」を模して先に1回だけ自階再計算する。
@@ -1483,9 +1442,7 @@ test('【失敗系・R-3】reflectStructuralToOtherFloors: 非在来（S造。ro
 
       await reflectStructuralToOtherFloors(project);
       assert.ok(roofBeams.every(b => b.memberNo == null), '非在来の屋根はmemberNoを書き戻さない（従来どおり収集のみ）');
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
   });
 });
 
@@ -1504,12 +1461,10 @@ test('【統合】reflectStructuralToOtherFloors: 非在来（S造）は各非�
     project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
 
     const peekCounts = new Map();
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async (plane) => {
+    await withPeek(async (plane) => {
       peekCounts.set(plane.id, (peekCounts.get(plane.id) ?? 0) + 1);
       return project.graphMap.get(plane.id) ?? null;
-    };
-    try {
+    }, async () => {
       // 【B-5是正・2026-09-21】ctx: null を明示し「コンテキストを使わない従来経路」に固定する——
       // 省略（自前生成）だと同じ階への複数箇所からのpeekがコンテキスト経由で使い回され、下記の
       // 手動導出した内訳（実peek回数）の前提が崩れる（B-4の同型是正と同じ理由）。コンテキスト経路の
@@ -1530,9 +1485,7 @@ test('【統合】reflectStructuralToOtherFloors: 非在来（S造）は各非�
       // 追加peekが発生せず、この値は変わらない（p1=3のまま）。
       assert.equal(peekCounts.get('p1'), 3, '1階のpeek回数（内部パス1回分の基準値）');
       assert.equal(peekCounts.get('p2'), 2, '2階のpeek回数（内部パス1回分の基準値）');
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
   });
 });
 
@@ -1907,9 +1860,7 @@ test('recomputeStructuralComposition【実機再々QA指摘2】: 1階=105（既�
   for (const b of [beamStdA, beamStdB, beamNonStd]) b.setDimensionStatus('locked');
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     // 反映パス相当（1階=105が既に効いた状態を収集で確立する。既存QA3テストと同じ手法）。
     runInAction(() => {
       collectFloorGroups(g1, project);
@@ -1937,9 +1888,7 @@ test('recomputeStructuralComposition【実機再々QA指摘2】: 1階=105（既�
     assert.equal(totalCountOf(groupAfterUndo), 2, 'undo後は105×120グループが2本へ戻る（分裂したまま復元されない不具合の回帰防止）');
     assert.deepEqual([...groupAfterUndo.floorRanks].sort(), floorRanksBefore, 'undo後にfloorRanksも変更前と一致する（floorRanks自体の復元の回帰防止。totalCountOfだけでなくfloorRanksも見る）');
     assert.equal(beamStdA.memberNo, beamStdB.memberNo, 'undo後も105×120の2本は実体レベルでも同一タグ');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 実機再々QA指摘3: 下階編集経路（belowGraph自身のbeamColumnWidthMm書き込み。:107付近）を
@@ -1971,9 +1920,7 @@ test('recomputeStructuralComposition【実機再々QA指摘3】: 3階建て（be
   for (const b of [beamStdA, beamStdB, beamNonStd]) b.setDimensionStatus('locked');
 
   const peekMap = { p1: g1, p2: g2, p3: g3 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     // composition対象＝subject=3階、below=2階（各階柱寸法欄が編集する対象は3階の「1つ下」＝2階だが、
     // ここでは2階の柱寸自体は変更しない——2階「自身の梁」が1階の柱寸を参照する経路だけを見る）。
     const composition = { graphForCategory: () => g2 };
@@ -1983,9 +1930,7 @@ test('recomputeStructuralComposition【実機再々QA指摘3】: 3階建て（be
     assert.equal(beamStdA.memberNo, beamStdB.memberNo,
       '2階自身の105×120梁2本が同一タグのまま（下階編集経路のbelowGraph自身への書き込みが効いている）');
     assert.notEqual(beamStdA.memberNo, beamNonStd.memberNo, '105×330（個別採番対象）は引き続き別タグ');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- columnSetSignature（下階柱集合の変更検知。ユーザー裁定2026-09-16「分割後に正しい距離を
@@ -2060,9 +2005,7 @@ test('recomputeStructuralComposition【ユーザー裁定2026-09-16】: 突入�
   g2.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, y0, {});
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const composition = { graphForCategory: () => g1 };
     await recomputeStructuralComposition(composition, g2, project, {});
 
@@ -2081,9 +2024,7 @@ test('recomputeStructuralComposition【ユーザー裁定2026-09-16】: 突入�
       assert.ok(span > 0 && span < 1820, `分割後の各区間は表の最小区分（1820以下）に収まる短いスパンになる（実測${span}）`);
       assert.equal(b.sectionDefId, 'WOOD-120x120', '単一スパン(1820以下)・中間荷重なしの表引き成（120）になる');
     }
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 上のテストと対をなす不変条件: 下階の柱集合が変わらない（1回目の突入で3a・3b柱とも

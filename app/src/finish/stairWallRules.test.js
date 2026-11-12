@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project, CenterLineType, Discipline, StairType, StairPortSide, RoomFeature, RoomKind } from '../core.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finishBoundary.js';
 import { loadMaterialMap } from './wallRegeneration.js';
 import { stairPortEdges } from './stair/stairGeometry.js';
@@ -63,15 +63,11 @@ function addVoid(f, cells = STAIR_CELLS) {
 // 本番の脱出境界を回す。突入側の reconcileOnFinishEntry（直下階の階段の吹抜けを足す）も本番どおり走る。
 async function exitWalls(project, graph) {
   const materialMap = await loadMaterialMap();
-  const original = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
-  try {
+  await withPeek(async (plane) => project.graphMap.get(plane.id) ?? null, async () => {
     project.activePlaneId = graph.plane.id;
     await runFinishEntryBoundary(graph, project);
     await runFinishExitBoundary(graph, project, { materialMap, stairUnderRooms: () => [] }, { goingToStructure: false });
-  } finally {
-    floorSwapManager.peek = original;
-  }
+  });
 }
 
 const dump = (graph) => graph.walls.map(w => ({

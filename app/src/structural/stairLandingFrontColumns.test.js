@@ -9,7 +9,7 @@ import { getAllCells } from '../finish/gridCells.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { generateStairPartitionWalls } from '../finish/stair/stairPartitionWalls.js';
 import { stairLandingFrontLine, stairPartitionLines } from '../finish/stair/stairPartition.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { stairLandingFrontWallPoints } from './wallFreeEnds.js';
 import { autoFillWoodColumns } from './woodAutoFill.js';
@@ -48,13 +48,7 @@ function dropSideWall(g, x) {
   runInAction(() => { for (const w of [...g.walls]) if (w.isVertical && Math.abs(w.axisCL.effectiveValue - x) < 1) g.removeShape(w.id); });
 }
 async function recompute(g, project, belowGraph) {
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
-  try {
-    return await recomputeStructuralForGraph(g, project, WOOD, belowGraph);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  return withPeek(async (plane) => project.graphMap.get(plane.id) ?? null, () => recomputeStructuralForGraph(g, project, WOOD, belowGraph));
 }
 
 test('【stairLandingFrontLine】踊り場前縁の両端と走行座標（EQUAL_UP=y1000 / EQUAL_DOWN=y3000）。stairPartitionLines の landingAlong と一致', () => {

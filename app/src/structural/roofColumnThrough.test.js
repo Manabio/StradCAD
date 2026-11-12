@@ -12,6 +12,7 @@ import { Plane, PlanGraph, Project, CenterLineType, Discipline, RoomKind, RoomFe
 import { createLeanToRoofSpec } from '../finish/roof/roofDefaults.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeekGraphs as withPeek } from '../storage/floorSwapTestFixtures.js';
 import { buildRoofColumnFilter, ROOF_COLUMN_CLASS } from './roofColumnFilter.js';
 import { buildSelfFootprintGate, buildStructuralWallGate } from './wallGate.js';
 import { autoFillColumns, autoFillColumnsForStructure } from './structuralAutoFill.js';
@@ -289,13 +290,6 @@ function buildTwoFloorSteel(through) {
   autoFillColumns(g1, project, null);
   autoFillColumns(g2, project, null); // 屋根にする前に立った柱の持ち越し
   return { project, g1, g2, roof: placed.roofRooms[0] };
-}
-
-async function withPeek(graphs, fn) {
-  const peekMap = Object.fromEntries(graphs.map(g => [g.plane.id, g]));
-  const original = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try { return await fn(); } finally { floorSwapManager.peek = original; }
 }
 
 // 本番の反映パスと同じ降順（2階→1階）を、changed が無くなるまで回す。収束したスイープ数を返す。

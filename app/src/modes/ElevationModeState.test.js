@@ -9,7 +9,7 @@ import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import { placeOpeningWithDefaults } from '../openings/openingEdit.js';
 import { ElevationModeState } from './ElevationModeState.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { clearOverlays } from '../catalog/catalogRegistry.js';
 import {
   jambFigure, headFigure, materialBoundFigure, uniqueSymbolKey, installFrameSymbol, elevationFigure, installElevationFigures,
@@ -545,16 +545,12 @@ function makeVoidAboveProject({ withColumn }) {
 // 直上階の解決はIDB（floorSwapManager.peek）経由のため、テストではその1点だけ差し替える。
 async function bandsWithUpper({ withColumn }) {
   const { lower, upper, room, project } = makeVoidAboveProject({ withColumn });
-  const origPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async plane => (plane.id === upper.plane.id ? upper : null);
-  try {
+  return withPeek(async plane => (plane.id === upper.plane.id ? upper : null), async () => {
     const state = new ElevationModeState(lower, project, { width: 1000, height: 800 });
     const result = await state.init();
     assert.equal(result.ok, true, '帯が構築できるはず');
     return state.bands.find(b => b.roomId === room.id);
-  } finally {
-    floorSwapManager.peek = origPeek;
-  }
+  });
 }
 
 const mediumVerticals = band => band.primitives
@@ -606,15 +602,11 @@ function makeStairUnderProject(structure) {
 
 async function underBandOf(structure) {
   const { lower, upper, under, project } = makeStairUnderProject(structure);
-  const origPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async plane => (plane.id === upper.plane.id ? upper : null);
-  try {
+  return withPeek(async plane => (plane.id === upper.plane.id ? upper : null), async () => {
     const state = new ElevationModeState(lower, project, { width: 1000, height: 800 });
     assert.equal((await state.init()).ok, true, '帯が構築できるはず');
     return state.bands.find(b => b.roomId === under.id);
-  } finally {
-    floorSwapManager.peek = origPeek;
-  }
+  });
 }
 const slopedThickLines = band => band.primitives
   .filter(p => p.type === 'line' && p.weight === 'thick' && Math.abs(p.y1 - p.y2) > 1 && Math.abs(p.x1 - p.x2) > 1);

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { Project, CenterLineType, Discipline, RoomFeature } from '../core.js';
 import { getAllCells } from '../finish/gridCells.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from './structureRules.js';
 import { autoFillStructuralGrid } from './structuralAutoFill.js';
 import { autoFillWoodFloorBeams } from './woodAutoFill.js';
@@ -79,13 +79,7 @@ const insideRect = (b, r) => {
 };
 
 async function recompute(f) {
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => f.project.graphMap.get(plane.id) ?? null;
-  try {
-    return await recomputeStructuralForGraph(f.g2, f.project, WOOD, f.g1);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  return withPeek(async (plane) => f.project.graphMap.get(plane.id) ?? null, () => recomputeStructuralForGraph(f.g2, f.project, WOOD, f.g1));
 }
 
 const VOID_RECT = { x1: 5460, x2: 8190, y1: 0, y2: 3640 };

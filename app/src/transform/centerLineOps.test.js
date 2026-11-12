@@ -18,6 +18,7 @@ import { findUnresolvableCells } from '../finish/roomReinterpret.js';
 import { syncEdgesFromTopology, snapshotEdges } from '../finish/edgeClassify.js';
 import { undoManager } from '../undoManager.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { serializeGraph, restoreGraph, decodeFloorSnapshot } from '../graphSnapshot.js';
 import { findLineIdOccurrences } from '../lineIdRemap.js';
 import { findDuplicateLineIds } from '../lineIdUniqueness.js';
@@ -6270,16 +6271,12 @@ test('promoteCenterToGridWithUndo: 同期ガード（ATTACHED）で確実に失�
   graph.addDiagonalLine(ix, graph.addPoint(2000, 2000));
   const beforeTop = undoManager.peekUndo();
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async () => { throw new Error('同期ガードで弾かれるはずなのにpeekが呼ばれた'); };
-  try {
+  await withPeek(async () => { throw new Error('同期ガードで弾かれるはずなのにpeekが呼ばれた'); }, async () => {
     const { toast } = await promoteCenterToGridWithUndo(graph, project, cl);
 
     assert.equal(toast, ERR_CL_CONVERT_ATTACHED);
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('demoteGridToCenterWithUndo: 同期ガード（想定外の discipline/labeled 組合せ）で確実に失敗する場合はfindFloorsWithCounterpartCL（IDB peek）を呼ばない（N5）', async () => {
@@ -6287,17 +6284,13 @@ test('demoteGridToCenterWithUndo: 同期ガード（想定外の discipline/labe
   const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.STRUCT });
   const beforeTop = undoManager.peekUndo();
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async () => { throw new Error('同期ガードで弾かれるはずなのにpeekが呼ばれた'); };
-  try {
+  await withPeek(async () => { throw new Error('同期ガードで弾かれるはずなのにpeekが呼ばれた'); }, async () => {
     const { toast } = await demoteGridToCenterWithUndo(graph, project, cl);
 
     assert.equal(typeof toast, 'string');
     assert.ok(toast.length > 0);
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // 降格は直交通り芯2本必須のガードを維持する（昇格と非対称。旧F4ガード撤去済みなのは昇格側のみ）
@@ -6308,16 +6301,12 @@ test('demoteGridToCenterWithUndo: 同期ガード（NO_GRID）で確実に失敗
   const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
   const beforeTop = undoManager.peekUndo();
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async () => { throw new Error('同期ガードで弾かれるはずなのにpeekが呼ばれた'); };
-  try {
+  await withPeek(async () => { throw new Error('同期ガードで弾かれるはずなのにpeekが呼ばれた'); }, async () => {
     const { toast } = await demoteGridToCenterWithUndo(graph, project, cl);
 
     assert.equal(toast, ERR_CL_CONVERT_NO_GRID);
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 複数階シナリオ（floorSwapManager.peek 差し替え方式） ----
@@ -6543,15 +6532,11 @@ test('promoteCenterToGridWithUndo: 同じ他階に補助線と保護される梁
   project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 3000, { labeled: true, discipline: Discipline.STRUCT });
   const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
-  try {
+  await withPeek(async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null), async () => {
     const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl);
     assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR([{ name: '2階', kind: 'aux' }]), '保護される梁芯より補助線を優先して表示する');
     assert.equal(toast, '2階 の同じ位置に補助線があるため通り芯にできません。', 'リテラル文字列で固定（QA指摘m-1）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('promoteCenterToGridWithUndo: 複数階・種別混在のトーストは種別ごとにまとめ「、」で連結する（種別の並び順は中心線→補助線→梁芯）', async () => {
@@ -6577,9 +6562,7 @@ test('promoteCenterToGridWithUndo: 複数階・種別混在のトーストは種
   const cl = activeGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: false, discipline: Discipline.ARCH });
 
   const graphsById = new Map([[g2.plane.id, g2], [g3.plane.id, g3], [g4.plane.id, g4]]);
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => graphsById.get(plane.id) ?? null;
-  try {
+  await withPeek(async (plane) => graphsById.get(plane.id) ?? null, async () => {
     const { toast } = await promoteCenterToGridWithUndo(activeGraph, project, cl);
     // 種別の並び順（中心線→補助線→梁芯）が優先され、階の登録順（2階・3階・4階）ではなく
     // 「4階（補助線）」が先に来る。同種別の階（2階・3階）は「・」で連結する。
@@ -6587,9 +6570,7 @@ test('promoteCenterToGridWithUndo: 複数階・種別混在のトーストは種
       toast,
       '4階 の同じ位置に補助線、2階・3階 の同じ位置に梁芯があるため通り芯にできません。',
     );
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('demoteGridToCenterWithUndo: 他階（アクティブ階の移籍先ではない階）に同座標の中心線があればフロア名入りトーストで拒否され変換されない（F3-2）', async () => {
@@ -6604,9 +6585,7 @@ test('demoteGridToCenterWithUndo: 他階（アクティブ階の移籍先では�
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT });
   const beforeTop = undoManager.peekUndo();
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
-  try {
+  await withPeek(async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null), async () => {
     const { toast } = await demoteGridToCenterWithUndo(activeGraph, project, cl);
 
     assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE([{ name: '2階', kind: 'center' }]), '降格専用の文言（「中心線にできません」）が使われる（N1）');
@@ -6614,9 +6593,7 @@ test('demoteGridToCenterWithUndo: 他階（アクティブ階の移籍先では�
     assert.equal(project.structGraph.shapeMap.has(cl.id), true, '変換されずstructGraphに残る（片階だけ複製漏れを防ぐ）');
     assert.equal(activeGraph.shapeMap.has(cl.id), false);
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('demoteGridToCenterWithUndo: 他階の相手が補助線のみのときはトースト文言に「補助線」と表示される', async () => {
@@ -6629,15 +6606,11 @@ test('demoteGridToCenterWithUndo: 他階の相手が補助線のみのときは�
   const cl = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 1000, { labeled: true, discipline: Discipline.STRUCT });
   project.structGraph.addCenterLine(CenterLineType.VERTICAL, 5000, { labeled: true, discipline: Discipline.STRUCT }); // isLastGridOnAxis対策
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
-  try {
+  await withPeek(async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null), async () => {
     const { toast } = await demoteGridToCenterWithUndo(activeGraph, project, cl);
     assert.equal(toast, ERR_CL_CONVERT_DUP_FLOOR_DEMOTE([{ name: '2階', kind: 'aux' }]));
     assert.equal(toast, '2階 の同じ位置に補助線があるため中心線にできません。', 'リテラル文字列で固定（QA指摘m-1）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 同一id複製（降格が propagateDemotedCenterLine で他階へ複製した「同じ線の分身」）の
@@ -6660,9 +6633,7 @@ test('promoteCenterToGridWithUndo: 他階にある同一idの線は（既存デ�
 
   const saved = [];
   const saveFloorFn = async (planeId) => { saved.push(planeId); };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null);
-  try {
+  await withPeek(async (plane) => (plane.id === otherGraph.plane.id ? otherGraph : null), async () => {
     const { toast } = await promoteCenterToGridWithUndo(graph, project, cl, { saveFloorFn });
 
     assert.equal(toast, ERR_CL_CONVERT_SAME_ID_FLOOR(['2階']), '裁定Q11: 同じidの線が他の平面にあれば拒否する');
@@ -6670,9 +6641,7 @@ test('promoteCenterToGridWithUndo: 他階にある同一idの線は（既存デ�
     assert.equal(graph.shapeMap.has(clId), true, '自階は無変更（中心線のまま）');
     assert.deepEqual(saved, [], '何も保存しない');
     assert.equal(undoManager.peekUndo(), beforeTop, 'undoは積まれない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // 裁定Q1・Q2（線種変更の移籍一本化・ステップ4）: 他階の同座標の中心線（同一idではなく別id）は

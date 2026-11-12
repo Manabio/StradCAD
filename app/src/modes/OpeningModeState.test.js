@@ -17,6 +17,7 @@ import {
 } from '../openings/openingDetailTestFixtures.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 
 // 長さ3000mmの水平壁を1本graphへ追加する（openingEdit.test.jsのmakeWallGraphと同型）。
 function addWallTo(graph, length = 3000) {
@@ -137,9 +138,7 @@ test('【失敗系・QA指摘Major-1】init: 他階のpeekが失敗しても例�
   graph.addOpening(wall.axisCL, 1, false, wall.clStart, 500, 800, OpeningCategory.FITTING, 'zzUnknown', {});
   project.addPlane(3000, '2階', 'p2'); // 他階（peekが失敗する想定。中身は使わない）
 
-  const origPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async () => { throw new Error('peek失敗（テスト）'); };
-  try {
+  await withPeek(async () => { throw new Error('peek失敗（テスト）'); }, async () => {
     const s = new OpeningModeState(graph, project);
     let result;
     await assert.doesNotReject(async () => { result = await s.init(); });
@@ -147,9 +146,7 @@ test('【失敗系・QA指摘Major-1】init: 他階のpeekが失敗しても例�
     assert.equal(result.catalogResolveRows.length, 1, '他階が全滅しても自階の未知subType行は失われない');
     assert.equal(result.catalogResolveRows[0].targetKey, 'fitting:zzUnknown');
     assert.equal(result.catalogResolveRows[0].usage.length, 1);
-  } finally {
-    floorSwapManager.peek = origPeek;
-  }
+  });
 });
 
 // ---- QA指摘Major-2（ステップ10e）: 非アクティブ階（floorSwapManager.peek経由）の未知subTypeも
@@ -166,15 +163,13 @@ test('【QA指摘Major-2】init: 非アクティブ階（floorSwapManager.peek�
   const store = new Map();
   store.set(plane2.id, serializeGraph(g2));
 
-  const origPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane, structGraph) => {
+  await withPeek(async (plane, structGraph) => {
     const g = new PlanGraph(plane);
     g._structGraph = structGraph;
     const bytes = store.get(plane.id);
     if (bytes) restoreGraph(g, bytes);
     return g;
-  };
-  try {
+  }, async () => {
     const s = new OpeningModeState(g1, project);
     const { catalogResolveRows } = await s.init();
 
@@ -182,9 +177,7 @@ test('【QA指摘Major-2】init: 非アクティブ階（floorSwapManager.peek�
     assert.equal(catalogResolveRows[0].targetKey, 'fitting:zzUnknown');
     assert.equal(catalogResolveRows[0].usage.length, 1);
     assert.equal(catalogResolveRows[0].usage[0].openingId, o2.id);
-  } finally {
-    floorSwapManager.peek = origPeek;
-  }
+  });
 });
 
 // ---- QA指摘Major-3（ステップ10e）: 生走査（missingUsage）とpeek合流（stillUnresolved）の

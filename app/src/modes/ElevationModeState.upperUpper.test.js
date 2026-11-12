@@ -12,6 +12,7 @@ import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { buildStairBand } from '../elevation/elevationStair.js';
 import { ElevationModeState } from './ElevationModeState.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { stripCommentLines, extractFunctionBody } from '../uiBusySourceScan.js';
 
 const src = stripCommentLines(fs.readFileSync(path.resolve(import.meta.dirname, 'ElevationModeState.js'), 'utf8'));
@@ -119,14 +120,10 @@ test('【S10-6 S2・A-2】自階に階段が無ければ N+2 は peek しない�
   const u = new PlanGraph(new Plane('p2', 2400, '2階', 2, 1));
   const third = thirdFloor(true);
   const peeked = [];
-  const origPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async plane => { peeked.push(plane.id); return plane.id === 'p2' ? u : third; };
-  try {
+  await withPeek(async plane => { peeked.push(plane.id); return plane.id === 'p2' ? u : third; }, async () => {
     const project = { planes: [g.graph.plane, u.plane, third.plane], activePlane: g.graph.plane, structGraph: null, openingNumberIndex: new Map() };
     assert.equal((await new ElevationModeState(g.graph, project, { width: 1000, height: 800 }).init()).ok, true);
-  } finally {
-    floorSwapManager.peek = origPeek;
-  }
+  });
   assert.ok(peeked.includes('p2'), 'N+1 は peek する');
   assert.ok(!peeked.includes('p3'), `N+2 は peek しない: ${peeked}`);
 });

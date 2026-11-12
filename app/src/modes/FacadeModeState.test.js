@@ -9,7 +9,7 @@ import { faceGapLimitMm } from '../elevation/elevationStyle.js';
 import { resolveLineWeightsPx } from '../viewport.js';
 import { FACADE_OPENING_KIND } from '../facade/facadeStyle.js';
 import { FACADE_EMPTY_MESSAGE, FACADE_INIT_ERROR_MESSAGE, FACADE_DIRECTION_ORDER } from '../core/constants.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { eaveTopZMm, resolveTopStoryHeightMm } from '../floorHeights.js';
 import { FacadeModeState } from './FacadeModeState.js';
@@ -26,13 +26,6 @@ function makeProject(n, { activeId = 'p1', withRooms = true } = {}) {
   }
   project.activePlaneId = activeId;
   return project;
-}
-
-/** peek を差し替えて fn を実行する（finally で戻す）。 */
-async function withPeek(peek, fn) {
-  const orig = floorSwapManager.peek;
-  floorSwapManager.peek = peek;
-  try { return await fn(); } finally { floorSwapManager.peek = orig; }
 }
 
 test('FacadeModeState.init: 自階は activeGraph・他階は全部 peek して4面（東南西北）を作る。materialError なし', async () => {

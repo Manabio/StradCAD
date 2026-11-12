@@ -20,6 +20,7 @@ import { createStructuralResolveContext } from './structuralResolveContext.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { regenerateWalls, loadMaterialMap } from '../finish/wallRegeneration.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { SECONDARY_BEAM_CLEARANCE_MM } from '../core/structuralEntities.js';
 import { findSectionEntry } from './sectionCatalog.js';
@@ -1281,9 +1282,7 @@ test('【統合・3b×3d】recomputeStructuralForGraph: 1階に3b柱ができる
   g2.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, y0, {});
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
     const before = beam.sectionDefId;
 
@@ -1303,9 +1302,7 @@ test('【統合・3b×3d】recomputeStructuralForGraph: 1階に3b柱ができる
       const afterHeight = findSectionEntry(b.sectionDefId)?.height;
       assert.ok(afterHeight < beforeHeight, `成が下がる: before=${beforeHeight} after=${afterHeight}`);
     }
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('【統合・3h-2】recomputeStructuralForGraph: 1つ上の実体階の頭つなぎが自階の壁を横切る位置に柱が立つ（peekAboveGraph→columnSeedBeamSegments→autoFillWoodColumnsの本番配線）', async () => {
@@ -1332,9 +1329,7 @@ test('【統合・3h-2】recomputeStructuralForGraph: 1つ上の実体階の頭�
   g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, true, yA, yB, { role: 'primary', beamType: '頭つなぎ' });
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     const col = g1.columns.find(c => c.role !== 'foundation' && Math.abs(c.x - 1820) < 1 && Math.abs(c.y) < 1);
     assert.ok(col, '1階に3h-2柱(1820,0)が立つ（上階の頭つなぎが自階の壁を横切る位置）');
@@ -1344,9 +1339,7 @@ test('【統合・3h-2】recomputeStructuralForGraph: 1つ上の実体階の頭�
     const columnCountBefore = g1.columns.length;
     await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(g1.columns.length, columnCountBefore, '2回目は柱本数が変わらない（冪等）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 小屋伏図にも梁・柱ルールを適用する計画（ステップ6）: 最上階のaboveGraphに屋根を入れて3h-2/3iを効かせる ----
@@ -1375,9 +1368,7 @@ test('【統合・ステップ6】recomputeStructuralForGraph: 最上階を直�
   roofGraph.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, true, yA, yB, { role: 'primary', beamType: '軒桁' });
 
   const peekMap = { p1: g1, roof1: roofGraph };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     const col = g1.columns.find(c => c.role !== 'foundation' && Math.abs(c.x - 1820) < 1 && Math.abs(c.y) < 1);
     assert.ok(col, '最上階に3h-2柱(1820,0)が立つ（屋根の壁線方式の軒桁が自階の壁を横切る位置）');
@@ -1387,9 +1378,7 @@ test('【統合・ステップ6】recomputeStructuralForGraph: 最上階を直�
     const columnCountBefore = g1.columns.length;
     await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(g1.columns.length, columnCountBefore, '2回目は柱本数が変わらない（冪等）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('【失敗系・ステップ6】recomputeStructuralForGraph: 最上階でない実体階（1つ上に別の実体階がある）はpeekAboveGraphが優先され、屋根専用平面をpeekしない（追加peek0回）', async () => {
@@ -1405,17 +1394,13 @@ test('【失敗系・ステップ6】recomputeStructuralForGraph: 最上階で�
 
   let roofPeeked = false;
   const peekMap = { p1: g1, p2: g2, roof1: roofGraph };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => {
+  await withPeek(async (plane) => {
     if (plane.id === 'roof1') roofPeeked = true;
     return peekMap[plane.id] ?? null;
-  };
-  try {
+  }, async () => {
     await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(roofPeeked, false, '1階（最上階でない）の再計算では屋根専用平面をpeekしない（peekAboveGraphが2階を返すため）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('【統合・3h-2・変更1】recomputeStructuralForGraph: 1つ上の実体階の床梁(role:floor)の端が自階の壁を横切る位置に柱が立つ（peekAboveGraph→columnSeedBeamSegments→autoFillWoodColumnsの本番配線）', async () => {
@@ -1443,9 +1428,7 @@ test('【統合・3h-2・変更1】recomputeStructuralForGraph: 1つ上の実体
   g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, true, yA, yB, { role: 'floor', beamType: '床梁' });
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     const col = g1.columns.find(c => c.role !== 'foundation' && Math.abs(c.x - 1820) < 1 && Math.abs(c.y) < 1);
     assert.ok(col, '1階に3h-2柱(1820,0)が立つ（上階の床梁の端が自階の壁を横切る位置）');
@@ -1455,9 +1438,7 @@ test('【統合・3h-2・変更1】recomputeStructuralForGraph: 1つ上の実体
     const columnCountBefore = g1.columns.length;
     await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(g1.columns.length, columnCountBefore, '2回目は柱本数が変わらない（冪等）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- A-2（2026-09-19）: 点源の一般化（beamTypeを見ない）----
@@ -1491,9 +1472,7 @@ test('【統合・A-2】recomputeStructuralForGraph: 1つ上の実体階の壁�
   g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, true, yA, yB, { role: 'primary', beamType: '大梁' });
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     const col = g1.columns.find(c => c.role !== 'foundation' && Math.abs(c.x - 1820) < 1 && Math.abs(c.y) < 1);
     assert.ok(col, '1階に3h-2柱(1820,0)が立つ（上階の壁線由来の大梁の端が自階の壁を横切る位置）');
@@ -1503,9 +1482,7 @@ test('【統合・A-2】recomputeStructuralForGraph: 1つ上の実体階の壁�
     const columnCountBefore = g1.columns.length;
     await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(g1.columns.length, columnCountBefore, '2回目は柱本数が変わらない（冪等）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('【失敗系・A-2】recomputeStructuralForGraph: 1つ上の実体階のrole:secondary（小梁）の端は自階の壁を横切っても柱を立てない（beamTypeが同名でも対象外の境界は一般化後も不変）', async () => {
@@ -1532,15 +1509,11 @@ test('【失敗系・A-2】recomputeStructuralForGraph: 1つ上の実体階のro
   g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x120', xm, true, yA, yB, { role: 'secondary', beamType: '大梁' });
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     const col = g1.columns.find(c => c.role !== 'foundation' && Math.abs(c.x - 1820) < 1 && Math.abs(c.y) < 1);
     assert.ok(!col, '1階に3h-2柱(1820,0)は立たない（role:secondaryは点源から除外）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // m11・【統合・3h-2×3c-2b】: 3h-2が下階(g1)に立てた柱が、次の自階(g2)recomputeで壁線上の通し梁
@@ -1590,9 +1563,7 @@ test('【統合・3h-2×3c-2b】recomputeStructuralForGraph: 3h-2で立った下
   tieBeam.setDimensionStatus('locked');
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     // 1回目: 自階(g2)は1階の壁（wallRunSegmentsで合成）から壁線通し梁(y=0,x:0..3640)を1本生成する
     // （1階にまだ柱が無いため分割されない）。
     await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
@@ -1627,9 +1598,7 @@ test('【統合・3h-2×3c-2b】recomputeStructuralForGraph: 3h-2で立った下
     assert.equal(g1.columns.length, columnCountBefore, '1階の柱本数は不変（冪等）');
     await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.deepEqual(new Set(g2.beams.map(b => b.id)), beamIdsBefore, '2階の梁本数・idとも不変（冪等）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // QA第2巡・(c): 頭つなぎを横切る下階壁の候補区間がexcludedBeamSlotsで除外されemittedに入らなければ、
@@ -1674,9 +1643,7 @@ test('【統合・3h-2】頭つなぎを横切る下階壁の区間がexcludedBe
   g2.excludedBeamSlots.add(spanKey(hx1, hy0, hy1));
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     // 1回目: 間仕切り壁の候補区間が除外されているため、フェーズBの頭つなぎ候補は左右の壁（x=0,x=3640）
     // だけを支持にとり、全長(0..3640)のまま生成される（1階にまだ3h-2柱が無いため分割もされない）。
     await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
@@ -1710,9 +1677,7 @@ test('【統合・3h-2】頭つなぎを横切る下階壁の区間がexcludedBe
     assert.equal(g1.columns.length, columnCountBefore, '1階の柱本数は不変（冪等）');
     await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.deepEqual(new Set(g2.beams.map(b => b.id)), beamIdsBefore, '2階の梁id集合は不変（冪等）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('structuralRecompute.js（3b・14）: 在来木造のときだけ1つ上の実体階をpeekし、非在来ではpeekしない', async () => {
@@ -1725,13 +1690,9 @@ test('structuralRecompute.js（3b・14）: 在来木造のときだけ1つ上の
     g2.structureOverride = structure;
     const graphMap = { p1: g1, p2: g2 };
     const calls = [];
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async (plane) => { calls.push(plane.id); return graphMap[plane.id] ?? null; };
-    try {
+    await withPeek(async (plane) => { calls.push(plane.id); return graphMap[plane.id] ?? null; }, async () => {
       await recomputeStructuralForGraph(g1, project, structure);
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
     return calls;
   }
   const woodCalls = await run(TRADITIONAL_WOOD_STRUCTURE);
@@ -4064,9 +4025,7 @@ test('【統合】recomputeStructuralForGraph: 在来木造の梁成が更新さ
   const belowColumn = g1.addColumn(StructuralMaterialType.WOOD, 'WOOD-120x120', bx, by, {});
 
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const { changed } = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(changed, true, '梁成の更新がchangedのORに反映されている');
     assert.equal(beam.sectionDefId, 'WOOD-120x120', '下階柱1820が支持点になり2区間×1820・荷重なし＝成120');
@@ -4078,9 +4037,7 @@ test('【統合】recomputeStructuralForGraph: 在来木造の梁成が更新さ
     const { changed: changed2 } = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(changed2, true);
     assert.equal(beam.sectionDefId, 'WOOD-120x300', '1階の柱を消した対照では単一区間3640＝成300');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // A2-2a: 梁成の表示用の値（woodAutoDepthMm・woodDepthFollowsManual）だけが変わった再計算は、changed=false
@@ -4098,9 +4055,7 @@ test('【統合】recomputeStructuralForGraph: 梁成の表示用の値だけが
   const beam = g2.addBeam(StructuralMaterialType.WOOD, 'WOOD-120x300', y0, false, x0, x1, { role: 'primary' });
   beam.setField('woodManualDepthMm', 360); // 表値300より大きい手入力
   const peekMap = { p1: g1, p2: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     let last = null;
     for (let i = 0; i < 4; i++) { last = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE); if (!last.changed) break; }
     assert.equal(last.changed, false, '前提: 収束した');
@@ -4114,9 +4069,7 @@ test('【統合】recomputeStructuralForGraph: 梁成の表示用の値だけが
     assert.equal(beam.woodAutoDepthMm, 300);
     const again = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.deepEqual([again.changed, again.originsChanged], [false, false], '値が変わらなければ保存不要');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 【統合】recomputeStructuralForGraphへの配線（壁線上の通し梁・候補に無い自動梁の撤去）を固定する（ステップ3c-2） ----
@@ -4142,18 +4095,14 @@ test('【統合】recomputeStructuralForGraph: 在来木造は壁線上に通し
   // 1階（非アクティブ）のpeekはfloorSwapManagerのシングルトンpeekを一時差し替える
   // （wallRefresh.test.js:285付近・本ファイル既存の【統合】テストと同じ手法）。
   const peekMap = { p1: g1, p2: graph };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const { changed } = await recomputeStructuralForGraph(graph, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(changed, true);
     assert.equal(graph.beamMap.has(staleBeam.id), false, '壁の無い辺の自動大梁は撤去される');
     const wallBeams = graph.beams.filter(b => b.role === 'primary' && b.materialType === StructuralMaterialType.WOOD);
     assert.ok(wallBeams.length > 0, '部屋の壁線上に通し梁が生成される');
     assert.ok(wallBeams.every(b => b.id !== staleBeam.id));
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 【統合・ステップD】recomputeStructuralForGraph: captureSnapshotsオプション（既定はbefore/after=null）----
@@ -4176,23 +4125,17 @@ function buildRoomGraphForSnapshotTest() {
 
 test('【統合・ステップD】recomputeStructuralForGraph: オプション省略時はbefore/afterがnullで、changedは従来どおり', async () => {
   const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const result = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(result.changed, true, '壁線上に柱・梁が生成されchangedになる（従来どおり）');
     assert.equal(result.before, null, 'captureSnapshots省略時はbeforeを取らない');
     assert.equal(result.after, null, 'captureSnapshots省略時はafterを取らない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('【統合・ステップD】recomputeStructuralForGraph: captureSnapshots:trueは変化ありでbefore≠afterを返し、beforeへrestoreGraphすると再計算前の柱・梁本数へ戻る。変化なしはafter===before', async () => {
   const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const columnsBefore = g2.columns.length;
     const beamsBefore = g2.beams.length;
 
@@ -4214,9 +4157,7 @@ test('【統合・ステップD】recomputeStructuralForGraph: captureSnapshots:
     const settled = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, { captureSnapshots: true });
     assert.equal(settled.changed, false, '前提: 収束済みで変化なし');
     assert.equal(settled.after, settled.before, '変化なしはafterとbeforeが同一参照（再シリアライズしない）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 【統合・ステップC】recomputeStructuralForGraph: options.wallSourceCache（1回の再計算内での壁区間memo）----
@@ -4231,14 +4172,10 @@ test('【統合・ステップC】recomputeStructuralForGraph: options.wallSourc
   const run = async (options) => {
     // フィクスチャは呼ぶたびに独立したProjectを作る＝cacheあり／なしを同じ入力から比べられる。
     const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-    try {
+    return withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
       const result = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, options);
       return { changed: result.changed, ...dump(g2) };
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
   };
   // 対照は null（＝memoしない従来経路）。省略(undefined)だと既定のcacheが作られ、cache経路どうしの
   // 比較になってしまう（恒真）。
@@ -4262,14 +4199,10 @@ test('【統合・ステップA】recomputeStructuralForGraph: options.footprint
   const run = async (options) => {
     // フィクスチャは呼ぶたびに独立したProjectを作る＝cacheあり／なしを同じ入力から比べられる。
     const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-    try {
+    return withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
       const result = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, options);
       return { changed: result.changed, ...dump(g2) };
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
   };
   // 対照は null（＝memoしない従来経路）。省略(undefined)だと既定のcacheが作られ、cache経路どうしの
   // 比較になってしまう（恒真）。
@@ -4296,14 +4229,10 @@ test('【統合・ステップB-3】recomputeStructuralForGraph: options.ctxを�
   });
   const runWithoutCtx = async (options) => {
     const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-    try {
+    return withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
       const result = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, options);
       return { changed: result.changed, ...dump(g2) };
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
   };
   // 対照はctx:null（＝コンテキストを使わない従来経路。peekViaがfloorSwapManager.peek直呼びへ委ねる）。
   // 省略(undefined)も同じ経路になる（options.ctx省略時のデフォルトはundefinedでpeekVia(undefined,...)も
@@ -4428,14 +4357,10 @@ test('【統合・ステップB-6・失敗系】recomputeStructuralForGraph: dis
   });
   const run = async (ctxOption) => {
     const { project, g2, peekMap } = buildRoomGraphForSnapshotTest();
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-    try {
+    return withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
       const result = await recomputeStructuralForGraph(g2, project, TRADITIONAL_WOOD_STRUCTURE, undefined, { ctx: ctxOption });
       return { changed: result.changed, ...dump(g2) };
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
   };
   const baseline = await run(null);
   assert.ok(baseline.columns.length > 0 && baseline.beams.length > 0, '前提: 壁交点柱・壁線上の通し梁が生成される');
@@ -4552,15 +4477,11 @@ test('【ステップ3・失敗系】recomputeStructuralForGraph: 屋根専用�
   // buildStructuralWallGate（屋根はroofForPlaneId=p1を基準階にする）が1階を非アクティブpeekするため、
   // 他の【統合】テストと同じ手法でfloorSwapManagerのシングルトンpeekを一時差し替える。
   const peekMap = { p1: g1 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     await assert.doesNotReject(
       () => recomputeStructuralForGraph(roofGraph, project, TRADITIONAL_WOOD_STRUCTURE),
       '屋根専用平面の再計算はbuildSelfFootprintGate(null)のクラッシュを起こさない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- R-6（2026-09-19是正）: 屋根の壁線梁は最上階のフットプリントで区間が切られる ----
@@ -4601,17 +4522,13 @@ test('【R-6】recomputeStructuralForGraph: 屋根専用平面の壁線梁（軒
   project.activePlaneId = 'p1';
 
   const peekMap = { p1: g1 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     await recomputeStructuralForGraph(roofGraph, project, TRADITIONAL_WOOD_STRUCTURE);
     const nearBeam = roofGraph.beams.find(b => b.role === 'primary' && !b.isVertical && Math.abs(b.axisValue) < 1);
     assert.ok(nearBeam, '前提: 建物本体(y=0)の軒桁は生成される');
     const farBeam = roofGraph.beams.find(b => b.role === 'primary' && !b.isVertical && Math.abs(b.axisValue - 8000) < 1);
     assert.ok(!farBeam, 'フットプリントの外（孤立壁y=8000）には軒桁を生成しない（selfGateが最上階のフットプリントで止める）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 小屋伏図にも梁・柱ルールを適用する計画（ステップ5）: 屋根専用平面の梁を壁線方式へ切り替え ----
@@ -4752,16 +4669,12 @@ test('【統合・R-2】recomputeStructuralForGraph: 屋根専用平面の反映
   roofGraph.addCenterLine(CenterLineType.HORIZONTAL, 2000, { labeled: true, discipline: Discipline.STRUCT });
   project.activePlaneId = 'p1';
   const peekMap = { p1: g1 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     await recomputeStructuralForGraph(roofGraph, project, TRADITIONAL_WOOD_STRUCTURE);
     const vBeam = roofGraph.beams.find(b => b.isVertical && Math.abs(b.axisValue - 0) < 1 && b.role === 'primary');
     assert.ok(vBeam, `本番配線（belowGraph=g1をfreeEndGraphに使う）でも自由端(0,0)まで軒桁が生成されるはず（実際:${roofGraph.beams.map(b => `${b.isVertical}:${b.axisValue}:${b.role}`)}）`);
     assert.equal(vBeam.beamType, '軒桁');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('【統合・ステップ5】autoFillStructuralGrid: 在来木造の屋根専用平面はautoFillRoofBeamsではなくautoFillWoodWallBeams（壁線方式）を通す', () => {
@@ -5563,9 +5476,7 @@ test('【Major-2・統合】recomputeStructuralForGraph: 在来→S造へ切替�
   // floorSwapManagerはIndexedDBに依存するため、テスト用に一時的に差し替える（他のrecomputeStructuralForGraph
   // 統合テストと同じパターン。3bの上階柱peek(peekAboveGraph)がg2を実IDB無しで読めるようにする）。
   const peekMap = { [g1.plane.id]: g1, [g2.plane.id]: g2 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     const autoSills = g1.beams.filter(b => b.role === 'sill');
     assert.ok(autoSills.length > 0, '前提: 在来木造で土台が生成されている');
@@ -5581,9 +5492,7 @@ test('【Major-2・統合】recomputeStructuralForGraph: 在来→S造へ切替�
     assert.deepEqual(remainingSills.map(b => b.id), [lockedId], 'auto分の土台は撤去され、locked分だけが残る');
     assert.equal(remainingSills[0].dimensionStatus, 'locked');
     assert.equal(remainingSills[0].materialType, materialBefore, 'locked分の材種は変換対象外のため不変（convertMembersToEffectiveMaterialがrole:sillを触らない）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('【Major-2】convertMembersToEffectiveMaterial: role:sillの梁は材種変換の対象外', () => {
@@ -5769,9 +5678,7 @@ test('【統合】recomputeStructuralForGraph: 在来木造の文書は 1 回の
   const gy1 = g1.addCenterLine(CenterLineType.HORIZONTAL, 1820, { labeled: true, discipline: Discipline.STRUCT });
   const room = g1.addRoom(new Set([`${gx0.id}:${gy0.id}:${gx1.id}:${gy1.id}`]), 'A');
   generateRoomWallsFromOutline(g1, room);
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => (plane.id === 'p1' ? g1 : null);
-  try {
+  await withPeek(async (plane) => (plane.id === 'p1' ? g1 : null), async () => {
     const first = await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(first.changed, true);
     const framing = g1.beams.filter(b => b.materialType === StructuralMaterialType.WOOD && ['primary', 'secondary', 'floor', 'sill'].includes(b.role));
@@ -5779,9 +5686,7 @@ test('【統合】recomputeStructuralForGraph: 在来木造の文書は 1 回の
     for (const b of framing) assert.equal(b.levelOffset, -100, `${b.role} ${b.beamType} の天端は FL−100`);
     const second = await recomputeStructuralForGraph(g1, project, TRADITIONAL_WOOD_STRUCTURE);
     assert.equal(second.changed, false, '収束（天端の conform が毎回 changed を立てない）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('autoFillWoodSillBeams: 断面は生成時rules.defaultSections.beam（120角）で作られ、conformWoodSectionsで階の柱寸（woodColumnWidthMm）へ揃う', () => {

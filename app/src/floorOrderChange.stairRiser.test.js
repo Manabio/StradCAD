@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { Project, PlanGraph } from './core.js';
 import { applyFloorOrderChange, floorOrderFollowers, FLOOR_ORDER_KIND } from './floorOrderChange.js';
 import { computeFloorHeightEdit } from './floorHeights.js';
-import { floorSwapManager } from './storage/FloorSwapManager.js';
+import { withPeek } from './storage/floorSwapTestFixtures.js';
 import { serializeGraph, restoreGraph } from './graphSnapshot.js';
 import { stairRiserKey, stairRiserChangesForEdit, announceRiserChanges } from './finish/stair/stairRiserFollow.js';
 import { collectFloorSettingsFacts } from './floorSettingsFacts.js';
@@ -72,13 +72,11 @@ async function confirm(project, store, heights, { followers = onlyRiser, stairIt
   const io = makeIo(project, store, counts);
   const toasts = [];
   const ui = { notify: m => toasts.push(m), switchFloor: async () => true, onFloorSyncChanged() {} };
-  const orig = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => io.peekFn(plane);
-  try {
+  await withPeek(async (plane) => io.peekFn(plane), async () => {
     const applied = await applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.HEIGHTS, updates: edit.updates, ui, floorIo: io, stairItems, skipActiveWalls }, followers);
     // App.jsx runFloorHeights と同じ: 通知と印は全追従の成功後（withFloorOpUndo の await の後）にだけ行う
     announceRiserChanges(project, applied.riserChanges, ui.notify);
-  } finally { floorSwapManager.peek = orig; }
+  });
   return { edit, counts, toasts };
 }
 
@@ -205,14 +203,12 @@ test('【失敗系】蹴上の書き換え後に wallRefresh が失敗: 通知�
   const io = { peekFn: base.peekFn, saveFloorFn: async (id, b) => { if (id === 'p1') throw new Error('保存失敗'); return base.saveFloorFn(id, b); } };
   const toasts = [];
   const ui = { notify: m => toasts.push(m), switchFloor: async () => true, onFloorSyncChanged() {} };
-  const orig = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => io.peekFn(plane);
-  try {
+  await withPeek(async (plane) => io.peekFn(plane), async () => {
     await assert.rejects(async () => {
       const applied = await applyFloorOrderChange(project, { kind: FLOOR_ORDER_KIND.HEIGHTS, updates: edit.updates, ui, floorIo: io }, floorOrderFollowers);
       announceRiserChanges(project, applied.riserChanges, ui.notify); // 到達しない
     }, /保存失敗/);
-  } finally { floorSwapManager.peek = orig; }
+  });
   assert.equal(decodeStair(project, store, 'p3', 's3').riser, 200, '失敗時点では p3 の IDB は書き換え済み');
   assert.deepEqual(toasts, [], '通知は出ない');
   assert.equal(project.riserAutoUpdated.size, 0, '印は 0 件');

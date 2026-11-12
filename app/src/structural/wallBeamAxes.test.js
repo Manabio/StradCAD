@@ -17,7 +17,7 @@ import { BeamAxisOrigin } from '../core/centerLine.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { MATERIALS } from '../finish/materials/materialData.js';
 import { materialThickness } from '../finish/edgeComposition.js';
-import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { makePlanGraph as makeGraph } from '../graphTestFixtures.js';
 
@@ -288,15 +288,11 @@ test('collectWallBeamSources: 条件(c) 木造（在来）は1つ下の実体階
 
   // floorSwapManager.peek はIndexedDBに依存するため、テスト用に一時的に差し替える
   // （floorSwapManagerはシングルトンインスタンス。実IDBを使わずロジックだけ検証する）。
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => (plane.id === belowGraph.plane.id ? belowGraph : null);
-  try {
+  await withPeek(async (plane) => (plane.id === belowGraph.plane.id ? belowGraph : null), async () => {
     const sources = await collectWallBeamSources(selfGraph, project);
     assert.equal(sources.length, 1);
     assert.equal(sources[0].coord, 1800);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('collectWallBeamSources: 第3引数に既peek済みのgraph（またはnull）を渡すと自前peekしない（structuralRecompute.jsのpeek共有）', async () => {
@@ -305,9 +301,7 @@ test('collectWallBeamSources: 第3引数に既peek済みのgraph（またはnull
   addBackingWall(belowGraph, { axisValue: 1800, clStart: belowX1, clEnd: belowX3, isVertical: false });
   selfGraph.structureOverride = '木造（在来）';
   const project = { planes: [belowGraph.plane, selfGraph.plane], structuralInfo: { mainStructure: '未定' } };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async () => { throw new Error('belowGraphを明示した場合は自前peekしてはいけない'); };
-  try {
+  await withPeek(async () => { throw new Error('belowGraphを明示した場合は自前peekしてはいけない'); }, async () => {
     // 既にpeek済みのgraphを渡す＝呼び出し側の結果をそのまま使う。
     const sources = await collectWallBeamSources(selfGraph, project, belowGraph);
     assert.equal(sources.length, 1);
@@ -315,23 +309,17 @@ test('collectWallBeamSources: 第3引数に既peek済みのgraph（またはnull
     // nullを明示＝「下階なし」。selfAndBelowでも下階分は足されない。
     const noBelow = await collectWallBeamSources(selfGraph, project, null);
     assert.equal(noBelow.length, 0);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('peekBelowGraph: belowPlaneOf＋floorSwapManager.peekの合成。1つ下の実体階が無ければnull（自前peekしない）', async () => {
   const { graph: selfGraph } = makeGridGraph('p2', 3000);
   const { graph: belowGraph } = makeGridGraph('p1', 0);
   const project = { planes: [belowGraph.plane, selfGraph.plane] };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => (plane.id === belowGraph.plane.id ? belowGraph : null);
-  try {
+  await withPeek(async (plane) => (plane.id === belowGraph.plane.id ? belowGraph : null), async () => {
     assert.equal(await peekBelowGraph(selfGraph, project), belowGraph);
     assert.equal(await peekBelowGraph(belowGraph, project), null, '最下階は下に実体階が無い');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 小屋伏図にも梁・柱ルールを適用する計画（ステップ4）: peekRoofBelowGraph / peekRoofGraphAbove ----
@@ -343,13 +331,9 @@ test('peekRoofBelowGraph: 屋根専用平面のroofForPlaneIdが指す実体階�
   const { graph: topGraph } = makeGridGraph('p2', 3000);
   const roofGraph = new PlanGraph(makeRoofPlane('roof1', 'p2'));
   const project = { planes: [topGraph.plane], structGraph: {} };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => (plane.id === topGraph.plane.id ? topGraph : null);
-  try {
+  await withPeek(async (plane) => (plane.id === topGraph.plane.id ? topGraph : null), async () => {
     assert.equal(await peekRoofBelowGraph(roofGraph, project), topGraph);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('peekRoofBelowGraph: 屋根専用平面でなければnull（通常階はpeekBelowGraphを使う）', async () => {
@@ -369,13 +353,9 @@ test('peekRoofGraphAbove: graphが屋根専用平面の直下の実体階（roof
   const roofPlane = makeRoofPlane('roof1', 'p2');
   const roofGraph = new PlanGraph(roofPlane);
   const project = { roofPlane, structGraph: {} };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => (plane.id === roofPlane.id ? roofGraph : null);
-  try {
+  await withPeek(async (plane) => (plane.id === roofPlane.id ? roofGraph : null), async () => {
     assert.equal(await peekRoofGraphAbove(topGraph, project), roofGraph);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('peekRoofGraphAbove: graphが最上階でない（roofForPlaneId不一致）・屋根専用平面が無ければnull', async () => {
@@ -394,14 +374,10 @@ test('collectWallBeamSources: RC造は1つ下の実体階を対象にしない�
   selfGraph.interiorWallBacking = RC_WALL_BACKING_CODES[0];
 
   const project = { planes: [belowGraph.plane, selfGraph.plane], structuralInfo: { mainStructure: '未定' } };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async () => { throw new Error('RC造では下階peekを呼んではいけない'); };
-  try {
+  await withPeek(async () => { throw new Error('RC造では下階peekを呼んではいけない'); }, async () => {
     const sources = await collectWallBeamSources(selfGraph, project);
     assert.equal(sources.length, 0);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('collectWallBeamSources: 同一バッチ内で座標が重なる複数の壁は1本にまとめ、extentは和集合になる', async () => {
@@ -1317,13 +1293,9 @@ function makeRcWallProject(structure = 'RC造(ラーメン)') {
 
 async function recomputeN(graph, project, n = 1) {
   const structure = graph.structureOverride;
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
-  try {
+  await withPeek(async (plane) => project.graphMap.get(plane.id) ?? null, async () => {
     for (let i = 0; i < n; i++) await recomputeStructuralForGraph(graph, project, structure, null);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 }
 
 const hAxesAt = (graph, y) => graph.centerLines.filter(cl =>

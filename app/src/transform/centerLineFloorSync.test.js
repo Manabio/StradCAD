@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
 import { Project, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, decodeFloorSnapshot } from '../graphSnapshot.js';
 import {
   findFloorsWithCounterpartCL, findFloorsWhereFootprintBoundary, findFloorsBlockingGridDeletion,
@@ -239,13 +240,9 @@ test('findFloorsWhereFootprintBoundary: 他階に部屋が無ければ空配列'
 test('【失敗系】findFloorsWhereFootprintBoundary: peekがthrowしたらrejectする', async () => {
   const { project, activeGraph } = makeProjectWithTwoFloors();
   const left = project.structGraph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: true, discipline: Discipline.STRUCT });
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async () => { throw new Error('IDB read failed'); };
-  try {
+  await withPeek(async () => { throw new Error('IDB read failed'); }, async () => {
     await assert.rejects(() => findFloorsWhereFootprintBoundary(project, activeGraph, left), /IDB read failed/);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- findFloorsBlockingGridDeletion（ステップ4・ルール2。findFloorsWhereFootprintBoundaryと

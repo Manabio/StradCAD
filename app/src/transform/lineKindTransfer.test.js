@@ -15,6 +15,7 @@ import { worldToCell } from '../finish/gridCells.js';
 import { undoManager } from '../undoManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { scanProjectLineIds } from '../lineIdUniqueness.js';
 import {
   addCenterLineFromDialog, promoteCenterToGridWithUndo, demoteGridToCenterWithUndo, bakeCLValue,
@@ -474,16 +475,12 @@ test(
     const p1cl = p1.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false });
     const clId = p1cl.id;
     const beforeTop = undoManager.peekUndo();
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async () => { throw new Error('peek failed'); };
-    try {
+    await withPeek(async () => { throw new Error('peek failed'); }, async () => {
       await assert.rejects(
         () => addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null),
         /peek failed/,
       );
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
     assert.equal(p1.centerLines.some(c => c.id === clId && c.labeled === false), true, '期待: 1階の中心線は同id・labeled:falseのまま');
     assert.equal(project.structGraph.centerLines.length, 0, '期待: 共有グラフに通り芯は無い');
     assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
@@ -997,16 +994,12 @@ test(
     const { project, p1, p2 } = makeTwoFloors();
     p2.addCenterLine(CenterLineType.VERTICAL, 3000, { labeled: false });
     const beforeTop = undoManager.peekUndo();
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async () => { throw new Error('peek failed'); };
-    try {
+    await withPeek(async () => { throw new Error('peek failed'); }, async () => {
       await assert.rejects(
         () => addCenterLineFromDialog(p1, project, dialogPayloadV(3000), null),
         /peek failed/,
       );
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
     assert.equal(project.structGraph.centerLines.length, 0, '期待: 通り芯は追加されない');
     assert.equal(undoManager.peekUndo(), beforeTop, '期待: undoは積まれない');
   },

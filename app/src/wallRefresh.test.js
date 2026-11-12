@@ -17,6 +17,7 @@ import { runInAction } from 'mobx';
 import { Project, CenterLineType, Discipline, StructuralMaterialType, RoomFeature, centerLineKind } from './core.js';
 import { undoManager } from './undoManager.js';
 import { floorSwapManager } from './storage/FloorSwapManager.js';
+import { withPeek } from './storage/floorSwapTestFixtures.js';
 import { refreshWallsAllFloors, refreshWallsForGraph, hasNeverBuiltWalls, viewNeighborPlaneIds, refreshWallsForViewEntry, refreshWallsForFacadeEntry } from './wallRefresh.js';
 import { regenerateWalls, loadMaterialMap } from './finish/wallRegeneration.js';
 import { wallFreshnessKey, WALL_KEY_VERSION } from './finish/wallFreshnessKey.js';
@@ -374,9 +375,7 @@ test('refreshWallsAllFloors【他階】: 木造・側面・e=0 の階段を持�
   const peek = async (plane) => peekMap[plane.id] ?? null;
   const store = new Map();
   const saveFloorFn = async (planeId, bytes) => { store.set(planeId, bytes); };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const result = await refreshWallsAllFloors(project, { pushUndo: false, peek, saveFloorFn });
     assert.ok(result.changedPlaneIds.includes('p2'), JSON.stringify(result.changedPlaneIds));
     assert.ok(store.has('p2'), 'p2 が saveFloorFn で保存された');
@@ -384,9 +383,7 @@ test('refreshWallsAllFloors【他階】: 木造・側面・e=0 の階段を持�
     assert.equal(decoded.stairs.length, 1);
     assert.equal(decoded.stairs[0].entryTurnSteps, 1, '保存を復元すると e=1');
     assert.equal(stair.entryTurnSteps, 1);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 test('【失敗系】refreshWallsForGraph: 鉄骨の階段の平場 0 はそのまま、鍵一致なら何もしない', async () => {
@@ -515,9 +512,7 @@ test('refreshWallsAllFloors【他階】: 鍵不一致の非アクティブ階だ
   const savedFloors = [];
   const saveFloorFn = async (planeId) => { savedFloors.push(planeId); };
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     // warmup: 全階の鍵を揃える（実運用の「一度は境界を通った状態」に相当）。
     await refreshWallsAllFloors(project, { pushUndo: false, peek, saveFloorFn });
     savedFloors.length = 0;
@@ -528,9 +523,7 @@ test('refreshWallsAllFloors【他階】: 鍵不一致の非アクティブ階だ
 
     assert.deepEqual(result.changedPlaneIds, ['p2']);
     assert.deepEqual(savedFloors, ['p2'], '鍵不一致のp2だけsaveFloorされ、p3（一致）は保存されない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 4. 在来へ切替→conformWoodBackingで下地コードが柱同寸×30になり、壁厚が柱寸法に一致 ----
@@ -627,18 +620,14 @@ test('【S4-1回帰・他階】refreshWallsAllFloors: 他階が部屋0件・壁0
   const peek = async (plane) => peekMap[plane.id] ?? null;
   const savedFloors = [];
   const saveFloorFn = async (planeId) => { savedFloors.push(planeId); };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const result = await refreshWallsAllFloors(project, { pushUndo: false, peek, saveFloorFn });
     assert.deepEqual(result.changedPlaneIds, [], 'p1は鍵一致・p2は未脱出階のためどちらもchangedPlaneIdsに含まれない');
     assert.deepEqual(savedFloors, [], 'p2はsaveFloorされない');
     assert.equal(g2.walls.length, 0, 'p2の壁は生成されない');
     assert.equal(g2.columns.length, 1, 'p2の既存auto柱は保全される');
     assert.equal(g2.wallFreshnessKey, null, 'p2の鍵も書かれない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 2026-09-30再裁定: 他階の自動処理（昇降機の上階自動設置・階段吹抜けの整合等）が部屋だけを書いた階はsweep対象になる ----
@@ -733,9 +722,7 @@ test('【S4-2】refreshWallsAllFloors: pushUndo:falseでもpushActiveStructuralU
   const peekMap = { p1: g1, p2: g2 };
   const peek = async (plane) => peekMap[plane.id] ?? null;
   const saveFloorFn = async () => {};
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     await seedInitialWalls(g1, project);
     await seedInitialWalls(g2, project);
     // g2の構造（auto柱）を実IDB保存を経由せず暖機する（recomputeInactiveStructuralのsaveFloor
@@ -778,9 +765,7 @@ test('【S4-2】refreshWallsAllFloors: pushUndo:falseでもpushActiveStructuralU
     assert.equal(g2.columns.length, columnsStable, '柱自体は再計算で復元される（undoの有無とは別軸）');
     assert.equal(undoManager.peekUndo(), undoBeforeB,
       'pushActiveStructuralUndo:falseなら自階の構造再計算のundoは積まれない');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- ステップ5: store.js bootReady と同じ組合せ（pushUndo:false・pushActiveStructuralUndo:false）
@@ -878,15 +863,11 @@ test('【QAステップ5】refreshWallsAllFloors: 鍵一致のみの全階では
     const loadMaterialMapFn = async () => { loadCalls++; return loadMaterialMap(); };
     const peekMap = { p1: g1, p2: g2 };
     const peek = async (plane) => peekMap[plane.id] ?? null;
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-    try {
+    await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
       const result = await refreshWallsAllFloors(project, { pushUndo: false, peek, loadMaterialMapFn });
       assert.deepEqual(result.changedPlaneIds, [], '前提: 全階鍵一致で無変化');
       assert.equal(loadCalls, 0, '鍵一致のみならmaterialMapは一度もロードされない');
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
   }
 
   // (b) 複数階が鍵不一致 → loadMaterialMapFnは1回だけ呼ばれる（メモ化）
@@ -909,15 +890,11 @@ test('【QAステップ5】refreshWallsAllFloors: 鍵一致のみの全階では
     const peekMap = { p1: g1, p2: g2, p3: g3 };
     const peek = async (plane) => peekMap[plane.id] ?? null;
     const saveFloorFn = async () => {};
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-    try {
+    await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
       const result = await refreshWallsAllFloors(project, { pushUndo: false, peek, saveFloorFn, loadMaterialMapFn });
       assert.deepEqual(result.changedPlaneIds.sort(), ['p1', 'p2', 'p3'], '前提: 3階とも鍵不一致で再生成される');
       assert.equal(loadCalls, 1, '複数階が不一致でもmaterialMapのロードは1回だけ（メモ化）');
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
   }
 });
 
@@ -977,9 +954,7 @@ test('【S4-5回帰】refreshWallsAllFloors: peekがthrowする階もnull同様�
   // 同じ理由で実構造入力は変えず鍵だけ人工的に不一致にする。
 
   const fullPeekMap = { p1: g1, p2: g2, p3: g3 };
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => fullPeekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => fullPeekMap[plane.id] ?? null, async () => {
     const peek = async (plane) => {
       if (plane.id === 'p3') throw new Error('peek boom');
       return fullPeekMap[plane.id] ?? null;
@@ -994,9 +969,7 @@ test('【S4-5回帰】refreshWallsAllFloors: peekがthrowする階もnull同様�
     assert.ok(result.changedPlaneIds.includes('p2'), 'p2は続行して再生成される');
     assert.deepEqual(savedFloors, ['p2']);
     assert.equal(g3.walls.length, 0, 'p3はスキップされ壁に触れられない（throwを捕捉して継続するため）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- QA V2回帰: saveFloorFnがthrowする階もpeek同様スキップし、他の鍵不一致階は続行する（rejectしない）----
@@ -1010,9 +983,7 @@ test('【QA V2回帰】refreshWallsAllFloors: saveFloorFnがthrowする階はski
 
   const peekMap = { p1: g1, p2: g2, p3: g3 };
   const peek = async (plane) => peekMap[plane.id] ?? null;
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => peekMap[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => peekMap[plane.id] ?? null, async () => {
     const savedFloors = [];
     const saveFloorFn = async (planeId) => {
       if (planeId === 'p2') throw new Error('save boom');
@@ -1026,9 +997,7 @@ test('【QA V2回帰】refreshWallsAllFloors: saveFloorFnがthrowする階はski
     assert.ok(!result.changedPlaneIds.includes('p2'), '保存に失敗したp2はchangedPlaneIdsに含まれない（鍵未更新のまま次回再試行）');
     assert.ok(result.changedPlaneIds.includes('p3'), 'p3は続行して再生成・保存される');
     assert.deepEqual(savedFloors, ['p3']);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- 不変条件: App.jsx の runStructuralExitBoundary が refreshWallsAllFloors を呼んでいる ----

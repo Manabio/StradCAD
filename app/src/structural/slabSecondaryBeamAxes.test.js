@@ -8,6 +8,7 @@ import { Plane, PlanGraph, Project, CenterLineType, Discipline, RoomFeature, cen
 import { getAllCells } from '../finish/gridCells.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { SlabBayFillSkip, STEEL_SECONDARY_BEAM_MAX_PITCH_MM, CL_OVERLAP_TOL_MM } from '../core/constants.js';
@@ -346,11 +347,9 @@ async function recomputeS2F(voidCellsOf) {
   const voidKeys = new Set(voidCellsOf.map(keyOf));
   g2.addRoom(new Set(cells.map(c => c.key).filter(k => !voidKeys.has(k))));
   g1.addRoom(new Set(getAllCells(g1).map(c => c.key)));
-  const original = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => ({ p1: g1, p2: g2 })[plane.id] ?? null;
-  try {
+  await withPeek(async (plane) => ({ p1: g1, p2: g2 })[plane.id] ?? null, async () => {
     for (let i = 0; i < 3; i++) await recomputeStructuralForGraph(g2, project, 'S造');
-  } finally { floorSwapManager.peek = original; }
+  });
   return g2;
 }
 const slabBeamAxisYs =(g) => g.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.SLAB_BEAM)
@@ -1104,13 +1103,11 @@ test('【S2b】同じ座標に通り芯と OPENING 由来梁芯が並ぶ辺は�
 // 本番の移動範囲（resolveMoveRange。通り芯は他階を peek して障害物を集める）を、peek を2階分だけ差し替えて呼ぶ。
 async function moveRangeOf(p, cl) {
   const { resolveMoveRange } = await import('../transform/followerGraph.js');
-  const original = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => ({ p1: p.g1, p2: p.g2 })[plane.id] ?? null;
-  try {
+  return withPeek(async (plane) => ({ p1: p.g1, p2: p.g2 })[plane.id] ?? null, async () => {
     const r = await resolveMoveRange(p.project, p.g2, cl);
     assert.ok(r.range, '随伴探査の上限を超えない');
     return r.range;
-  } finally { floorSwapManager.peek = original; }
+  });
 }
 
 test('【S2d・配線】通り芯 y=7000 の移動範囲は SLAB_BEAM の子梁芯（2333・4667）で止まらず、辺の通り芯 y=0 までになる。y=0 の上側も 7000 まで', async () => {

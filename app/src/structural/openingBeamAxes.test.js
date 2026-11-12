@@ -13,6 +13,7 @@ import { autoFillWallBeamAxes, wallBeamSourcesFor, wallBeamAxisExcludeKey } from
 import { recomputeStructuralForGraph } from './structuralRecompute.js';
 import { autoFillStructuralGrid, autoFillStairLandingBeams, autoFillSecondaryBeams } from './structuralAutoFill.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
+import { withPeek } from '../storage/floorSwapTestFixtures.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
@@ -458,13 +459,9 @@ test('【S3-5 S4・配線】recomputeStructuralForGraph: 範囲の離れた壁�
       labeled: false, discipline: Discipline.FUSE, beamAxisOrigin: BeamAxisOrigin.USER,
       extentLo: 4000, extentHi: 6000,
     });
-    const originalPeek = floorSwapManager.peek;
-    floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
-    try {
+    await withPeek(async (plane) => project.graphMap.get(plane.id) ?? null, async () => {
       await recomputeStructuralForGraph(graph, project, structure, null);
-    } finally {
-      floorSwapManager.peek = originalPeek;
-    }
+    });
     return graph.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING
       && cl.centerLineType === CenterLineType.VERTICAL && cl.value === 2000).length;
   };
@@ -732,13 +729,9 @@ test('【Major-2是正・T2】recomputeStructuralForGraph: 上階（同フット
   // 通す）。buildStructuralWallGateは別経路でfloorSwapManager.peekを呼ぶため、実IndexedDBの代わりに
   // project.graphMapをそのまま返す簡易peekへ差し替える（wallBeamAxes.test.js・structAnchorProbe.mjs
   // と同じ方式）。
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
-  try {
+  await withPeek(async (plane) => project.graphMap.get(plane.id) ?? null, async () => {
     await recomputeStructuralForGraph(g2, project, 'S造', g1);
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 
   const openingCL = g2.centerLines.find(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING);
   assert.ok(openingCL, '上階(g2)に由来openingの梁芯が生成される（下階g1の到達元階段から）');
@@ -783,9 +776,7 @@ test('【ステップ7】踊り場受け梁(LG)と開口由来梁芯(規則O)は
   addSteelSwitchbackStair(g2);
   addOuterGrid(g2, [-1000, 3500, -1000, 5000]); // S2: 規則Oの辺を支える通り芯（上階g2のみ）
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
-  try {
+  await withPeek(async (plane) => project.graphMap.get(plane.id) ?? null, async () => {
     await recomputeStructuralForGraph(g1, project, 'S造', null);
     await recomputeStructuralForGraph(g2, project, 'S造', g1);
 
@@ -826,9 +817,7 @@ test('【ステップ7】踊り場受け梁(LG)と開口由来梁芯(規則O)は
     assert.equal(g2.beams.filter(b => b.role === 'landing').length, before.landing, 'LGの本数は不変');
     assert.equal(g2.centerLines.filter(cl => cl.beamAxisOrigin === BeamAxisOrigin.OPENING).length, before.opening,
       '開口由来梁芯の本数は不変');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- QA指摘: 上のテストはg1(LG)とg2(開口)という階が違うグラフ間の平面座標比較——同一graph内
@@ -874,9 +863,7 @@ test('【ステップ7・同一graph内】recomputeStructuralForGraph: 3階建�
   addSteelSwitchbackStairWithFootprint(g1, project.structGraph);
   addSteelSwitchbackStairWithFootprint(g2, project.structGraph);
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
-  try {
+  await withPeek(async (plane) => project.graphMap.get(plane.id) ?? null, async () => {
     await recomputeStructuralForGraph(g1, project, 'S造', null);
     await recomputeStructuralForGraph(g2, project, 'S造', g1);
 
@@ -906,9 +893,7 @@ test('【ステップ7・同一graph内】recomputeStructuralForGraph: 3階建�
       assert.ok(valueSeparated || rangeDisjoint,
         `LG(axisValue=${lg.axisCL.value})と小梁(axisValue=${b.axisCL.value})は平面上重ならない`);
     }
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // ---- QA指摘F1再確認・2026-09-29: 撤去・更新段（autoFillStairLandingBeams）がrecomputeStructuralForGraph
@@ -923,9 +908,7 @@ test('【QA指摘F1再確認】recomputeStructuralForGraph: 到達階のauto LG�
   addSteelSwitchbackStairWithFootprint(g1, project.structGraph);
   addSteelSwitchbackStairWithFootprint(g2, project.structGraph);
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
-  try {
+  await withPeek(async (plane) => project.graphMap.get(plane.id) ?? null, async () => {
     await recomputeStructuralForGraph(g1, project, 'S造', null);
     await recomputeStructuralForGraph(g2, project, 'S造', g1); // 収束させる
 
@@ -940,9 +923,7 @@ test('【QA指摘F1再確認】recomputeStructuralForGraph: 到達階のauto LG�
     // landingZ=n1(6)*riser(3000/12=250)=1500。設置階〜到達階の階高=3000。
     // levelOffset(到達階FL基準)=1500-3000-300-10=-1810
     assert.equal(lg.levelOffset, -1810, 'levelOffsetは最新値(-1810)へ更新されるはず');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
 });
 
 // 最上階の自動指定を模す: 階段実体は持たず、addSteelSwitchbackStairと同じfootprintの
@@ -1174,15 +1155,11 @@ test('【Minor-QA追加・T8】recomputeStructuralForGraph: 2階にVOID1部屋�
   g2.addRoom(new Set([centerKey])).setFeature(RoomFeature.VOID);
 
   let peekCount = 0;
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => { peekCount++; return project.graphMap.get(plane.id) ?? null; };
-  try {
+  await withPeek(async (plane) => { peekCount++; return project.graphMap.get(plane.id) ?? null; }, async () => {
     // precomputedBelowGraphを渡さない（undefined）——belowGraph解決はstructuralRecompute.js自身の
     // 分岐（needsBelowForOpenings。Minor-4是正）に委ねる。
     await recomputeStructuralForGraph(g2, project, 'S造');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
   // 実測値2（regime Oに起因するpeekは0）: buildStructuralWallGateの足元連続性チェック
   // （wallGate.js footprintProbe。基準階=g2にVOIDの部屋があるため直下のg1までpeekする。
   // 部屋が無い階なら早期returnで発生しない）1回 + resolveLowestGraph（最下階g1の柱芯オフセット
@@ -1593,9 +1570,7 @@ test('【T7・M-1\'是正】recomputeStructuralForGraph: 2階建て・RC造(ラ�
   // （wallGate）が全グリッドを覆うようにし、梁が実際に生成される構成にする。
   const outerRoom = g2.addRoom(new Set([extraKey, ...otherKeys]));
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
-  try {
+  await withPeek(async (plane) => project.graphMap.get(plane.id) ?? null, async () => {
     await recomputeStructuralForGraph(g2, project, 'RC造(ラーメン)', g1);
     // 【S2で期待値を変更】旧: 垂直辺(短辺)が水平辺(通し)を参照し、開口拡大でextentHi 3000→3500へ張り直る。
     // 新: 垂直辺は通り芯(Y)で通し、拡大してもextentは変わらない。変わるのは水平辺が先の垂直辺を参照する関係で、
@@ -1637,9 +1612,7 @@ test('【T7・M-1\'是正】recomputeStructuralForGraph: 2階建て・RC造(ラ�
 
     const result2 = await recomputeStructuralForGraph(g2, project, 'RC造(ラーメン)', g1, { captureSnapshots: true });
     assert.equal(result2.changed, false, '2回目はchanged:falseになる（すでに収束している。利用者の操作なしに再計算が繰り返されない）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
   void x0; void xa; void xb; void x1; void y0; void ya; void yb; void yc; void y1;
 });
 
@@ -1660,9 +1633,7 @@ test('【T8・m-1是正】recomputeStructuralForGraph: 通し辺のextentの張�
   const centerKey = cells.find(c => c.x1 === 2000 && c.x2 === 5000 && c.y1 === 1000 && c.y2 === 3000).key;
   graph.addRoom(new Set([centerKey])).setFeature(RoomFeature.VOID);
 
-  const originalPeek = floorSwapManager.peek;
-  floorSwapManager.peek = async (plane) => project.graphMap.get(plane.id) ?? null;
-  try {
+  await withPeek(async (plane) => project.graphMap.get(plane.id) ?? null, async () => {
     await recomputeStructuralForGraph(graph, project, 'RC造(ラーメン)');
     // 【S2で期待値を変更】旧: 水平辺が通しで通り芯X(6500)追加によりextentHiRefが張り直る。新: 通しは垂直辺（通り芯Y）。
     // 通り芯Y(4500)を追加して垂直辺のextentHiRefだけが張り直る（新規生成・撤去なし）。
@@ -1679,9 +1650,7 @@ test('【T8・m-1是正】recomputeStructuralForGraph: 通し辺のextentの張�
     const throughTopAfter = graph.shapeMap.get(throughTopId);
     assert.equal(throughTopAfter.extentHiRef?.clId, x2.id, '前提: 通し辺のextentHiRefが新しい通り芯(y=4500)へ張り直っている（retargetのみ）');
     assert.ok(result.changed, 'm-1是正: 張り直しだけが起きた再計算でもchanged:trueになる（changedOpeningBeamAxesがchangedに乗っている）');
-  } finally {
-    floorSwapManager.peek = originalPeek;
-  }
+  });
   void x0; void xa; void xb; void x1; void y0; void ya; void yb;
 });
 
