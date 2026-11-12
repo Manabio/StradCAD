@@ -603,3 +603,6 @@ S造スラブ（`SteelSlab`）のセルキー。梁で囲まれた区画（ベ�
 
 ## 建具一式 / 部品（役割）/ 合成キー
 部分詳細図の分類`fitting`。最上位は空で、`parts`に役割（`jamb`・`slideLatch`など13種）ごとの埋め込みの単一図を持つ。部品は合成キー「<一式のキー>#<役割>」で単一図として引ける（図のキー自体に`#`は使えない）。引き戸は組込みの一式`df-builtin-fitting-sliding`。設計意図は`.claude/detail-figure-model.md`「建具一式」。
+
+## 見せ分けの視点（structSlotView／slotView）
+在来木造・2"×4"で1階の同じ平面に乗る基礎伏図と1階伏図を、描画・タグ・構造リスト・柱の長クリックで描き分けるための frozen `{slotKey, planeId, figureType}`（2026-11-12。同じ平面に両スロットが無ければnull＝絞らない）。生成・削除の分類とは別軸で、述語は`structural/structuralClassification.js`C節（`sharedPlane*`）。設計意図は`.claude/structural-model.md`「同じ平面に基礎伏図と1階伏図が乗る構造は『視点』で見せ分ける」。

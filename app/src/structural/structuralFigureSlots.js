@@ -11,7 +11,8 @@
 //   slotType : SLOT_TYPE。出現可否（SLOT_PRESENCE）と呼称の決定に使う。
 //   figureType : 部材の出し分け軸（FIGURE_TYPE。地中梁図/屋根の細分）。
 //
-// 【スコープ】合成図面（地中梁図・1階伏図追加・小屋伏図）は専用の部材データを持たない（次フェーズ）。
+// 【スコープ】合成図面（地中梁図・小屋伏図）は専用の部材データを持たない（次フェーズ）。
+// 同じ平面の基礎伏図／1階伏図は部材データを分けず、視点で見せ分ける（structuralClassification.js C節）。
 // そのため専用平面は作らず、最も近い実体/屋根平面に対応づける（key で区別）。専用平面の実体化は
 // 部材データ再編フェーズで行う（空の専用平面は再利用と区別がつかず、coreデータモデル改変の risk だけが残るため）。
 
@@ -77,7 +78,7 @@ export function designationForSlot(slot, isActive = false) {
     case SLOT_TYPE.UNDERGROUND_BEAM: return '地中梁図';
     case SLOT_TYPE.UNDERGROUND_BODY: return `B${Math.abs(sf)}躯体図`;
     case SLOT_TYPE.FOUNDATION:       return '基礎伏図';
-    case SLOT_TYPE.GROUND_FLOOR:     return `${makeFloorName(sf, 1)}伏図`; // 木造1階の床伏（土台/大引は次フェーズ）
+    case SLOT_TYPE.GROUND_FLOOR:     return `${makeFloorName(sf, 1)}伏図`; // 木造1階の床伏（土台は描く・大引は次フェーズ）
     case SLOT_TYPE.FLOOR:            return `${makeFloorName(sf, 1)}伏図`;
     case SLOT_TYPE.ROOF_SLAB:        return 'R階伏図';
     case SLOT_TYPE.ROOF_FRAME:       return isActive ? '小屋伏図' : '屋根+';
