@@ -194,8 +194,10 @@ test('【不変条件・QA指摘F2】StructuralLayer.jsx: 梁本体の3分岐（
     '単線（width==null）分岐のLineが{...pickShapeProps}を受け取っていない');
   assert.ok(/<Rect key=\{b\.id\} \{\.\.\.bandRect\(b, lo, hi, width \/ 2\)\}[\s\S]*?\{\.\.\.pickShapeProps\}/.test(src),
     'ピン接合（isPinJoint）分岐のRectが{...pickShapeProps}を受け取っていない');
-  assert.ok(/bandLines\(`beam:\$\{b\.id\}`,[^)]*,\s*pickShapeProps\)/.test(src),
+  assert.ok(/bandLines\(`beam:\$\{b\.id\}`,[^\n]*,\s*pickShapeProps\)/.test(src),
     '既定（bandLines）分岐がpickShapePropsを渡していない');
+  assert.ok(/<Line key=\{`outline:\$\{b\.id\}:\$\{i\}`\}[^/]*\{\.\.\.pickShapeProps\}/.test(src),
+    '基礎梁の外形線（outline）分岐のLineが{...pickShapeProps}を受け取っていない');
 });
 
 test('【不変条件】StructuralLayer.jsx: 土台帯（sillBandSpec/sillHalf）は現れない——土台はrole:sillの実体梁として一般の帯描画に乗る（2026-09-18裁定）', () => {
@@ -211,15 +213,16 @@ test('【不変条件・B-3】StructuralLayer.jsx: beamDrawSpansはresolveBeamJu
   // baseSpans（spanForColumns由来）→ junctions（resolveBeamJunctionSpans）→ beamDrawSpans（junctionsで
   // 上書き）という3段構成——resolveBeamJunctionSpansの結果を経由せずbeamDrawSpansを組み立てる回帰
   // （実体スパンをそのまま描画に使ってしまい、在来木造の交点処理が効かなくなる）を検出する。
-  const junctionsMatch = /const\s+(\w+)\s*=\s*resolveBeamJunctionSpans\(\s*figureRules\.drawing\s*,/.exec(src);
-  assert.ok(junctionsMatch, 'resolveBeamJunctionSpans(figureRules.drawing, ...) の呼び出し・代入が見つからない');
+  // 解決は大梁（primary）と土台（sill）の2回を1つの Map に合わせる（const junctions = new Map([...解決1, ...解決2])）。
+  const junctionsMatch = /const\s+(\w+)\s*=\s*new Map\(\[\s*\.\.\.resolveBeamJunctionSpans\(\s*figureRules\.drawing\s*,/.exec(src);
+  assert.ok(junctionsMatch, 'const junctions = new Map([...resolveBeamJunctionSpans(figureRules.drawing, ...), ...]) の呼び出し・代入が見つからない');
   const junctionsVar = junctionsMatch[1];
   const beamDrawSpansMatch = new RegExp(`const beamDrawSpans = baseSpans\\.map\\(\\w+ => \\{[\\s\\S]*?${junctionsVar}\\.get\\(`).exec(src);
   assert.ok(beamDrawSpansMatch, `beamDrawSpans が baseSpans.map(...) の中で ${junctionsVar}.get(...) を参照していない（交点処理の結果で上書きしていない回帰）`);
   // 梁本体の描画（bandLines分岐）でends（beamDrawSpansの分割代入）を受け取り、cappedな端だけ
   // bandCapLine(を呼んでいるか。1分岐でも落とすと検出できる形で固定する。
-  assert.ok(/visibleBeamSpans\.flatMap\(\(\{\s*beam:\s*b,\s*coord1,\s*coord2,\s*ends\s*\}\)/.test(src),
-    'beamDrawSpans（を絞ったvisibleBeamSpans）のflatMapがendsを分割代入していない（交点処理の結果を読んでいない回帰）');
+  assert.ok(/visibleBeamSpans\.flatMap\(\(\{\s*beam:\s*b,\s*coord1,\s*coord2,\s*ends,\s*gaps\s*\}\)/.test(src),
+    'beamDrawSpans（を絞ったvisibleBeamSpans）のflatMapがends・gapsを分割代入していない（交点処理の結果を読んでいない回帰）');
   const capMatch = /const capLines = \(ends \?\? \[\]\)\.flatMap\(\(e, i\) => \(e\?\.capped[\s\S]{0,120}?bandCapLine\(/.exec(src);
   assert.ok(capMatch, 'capLines が e?.capped でゲートされたbandCapLine(呼び出しになっていない（capped=falseの端に誤ってキャップ線を描く／すべての端に描く回帰）');
   assert.ok(/\.\.\.capLines,/.test(src), 'capLinesがbandLines分岐の描画配列に含まれていない');
@@ -298,7 +301,8 @@ const UNCHANGED_BODY_LINES = [
   'const color = cautionAxisIds?.has(b.axisCL.id) ? CAUTION_COLOR : colorOf(b.materialType);',
   'const baseSpans = (beam?.graph?.beams ?? []).map(b => {',
   '<Line key={b.id} points={[p1.x, p1.y, p2.x, p2.y]} stroke={color} strokeWidth={thin} dash={beamDash} {...pickShapeProps} />,',
-  '...bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, [[lo, hi]], color, medium, beamDash, pickShapeProps),',
+  // 土台の通しどうしの十字の切れ目（gaps）を引く segmentsMinusGaps を通す（2026-11-12。gaps が無ければ [[lo, hi]] と同じ）。
+  '...bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, segmentsMinusGaps(lo, hi, gaps ?? []), color, medium, beamDash, pickShapeProps),',
   'const colorOf = m => framingColor(figureRules.drawing, COLOR_BY_MATERIAL[m]);',
   '<Line key={`depthPar:${mark.id}`} points={mark.parallel} stroke={color} strokeWidth={beamDepthMarkStrokeWidth} listening={false} />,',
   '<Line key={`depthS0:${mark.id}`} points={mark.slopes[0]} stroke={color} strokeWidth={beamDepthMarkStrokeWidth} listening={false} />,',
@@ -423,7 +427,7 @@ test('【不変条件・D1】StructuralLayer.jsx: 屋根の外形線の Line は
 test('【配線】StructuralLayer.jsx: 下屋・主屋根の軒の梁が出隅で勝つ角（eaveCorners）は roofFramingEaveCorners で求め、resolveBeamJunctionSpans の第3引数 { eaveCorners } に渡す（1行まるごと。判断は純モジュール）', () => {
   // コメント行を除いた本体に対し、m フラグの行頭・行末アンカーで照合する（行末コメントで式を無効化する変異を検出）
   const body = readSource().split(/\r?\n/).filter(line => !line.trim().startsWith('//')).join('\n');
-  assert.match(body, /^\s*\}\)\), \{ eaveCorners \}\);\s*$/m, 'resolveBeamJunctionSpans の呼び出しが `})), { eaveCorners });` で閉じていない');
+  assert.match(body, /^\s*\.\.\.resolveBeamJunctionSpans\(figureRules\.drawing, junctionInput, \{ eaveCorners \}\),\s*$/m, '大梁の解決が `...resolveBeamJunctionSpans(figureRules.drawing, junctionInput, { eaveCorners }),` の行でない');
   assert.match(body, /^\s*const eaveCorners = roofFramingEaveCorners\(\{\s*$/m);
   assert.match(body, /^\s*rules: figureRules, lod, isRoofPlane: composition\.subjectPlane\?\.isRoofPlane === true,\s*$/m);
   assert.match(body, /^\s*subjectGraph: figureGraph, topGraph: column\?\.graph \?\? null, project, memo: graphComputed,\s*$/m);

@@ -1,13 +1,14 @@
 import { observer } from 'mobx-react-lite';
 import { Line, Rect, Circle, Group, Text } from 'react-konva';
 import { StructuralMaterialType, LINE_WEIGHT_MM } from '../core.js';
-import { CAUTION_COLOR, BRACE_LINE_COLOR, BAY_PICK_FILL, BAY_PICK_STROKE, BAY_PICK_STROKE_PX } from '../core/constants.js'; // BRACE_*＝ブレースの×（S8）・BAY_PICK_*＝ベイ選択（S4）
+import { BeamRole, CAUTION_COLOR, BRACE_LINE_COLOR, BAY_PICK_FILL, BAY_PICK_STROKE, BAY_PICK_STROKE_PX } from '../core/constants.js'; // BRACE_*＝ブレースの×（S8）・BAY_PICK_*＝ベイ選択（S4）
 import { braceCrossSegments } from '../structural/braceFigure.js';
 import { nearUserSlabAxisIds } from '../structural/slabSecondaryBeamAxes.js';
 import { cellBoundsFromKey } from '../finish/gridCells.js';
 import { findSectionEntry, diaphragmProjection } from '../structural/sectionCatalog.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { resolveBeamJunctionSpans } from '../structural/beamJunction.js';
+import { unionBandOutline, segmentsMinusGaps, foundationBandInputs } from '../structural/bandOutline.js';
 import {
   framingColumnGroups, framingColor, framingColorOverride, columnSectionSize, framingColumnLineWeight,
   FRAMING_MONO_COLOR, beamDepthMarks, pickMembersOnFigure, pickColumnsOnFigure, columnRenderSize, ROOF_FRAMING_DASH,
@@ -114,17 +115,8 @@ function wallSegments(wall, openings) {
   const hi = Math.max(wall.coord1, wall.coord2);
   const gaps = openings
     .filter(o => o.wall.id === wall.id)
-    .map(o => [Math.max(lo, Math.min(o.coord1, o.coord2)), Math.min(hi, Math.max(o.coord1, o.coord2))])
-    .sort((a, b) => a[0] - b[0]);
-
-  const segments = [];
-  let cur = lo;
-  for (const [gapLo, gapHi] of gaps) {
-    if (gapLo > cur) segments.push([cur, gapLo]);
-    cur = Math.max(cur, gapHi);
-  }
-  if (hi > cur) segments.push([cur, hi]);
-  return segments;
+    .map(o => [Math.max(lo, Math.min(o.coord1, o.coord2)), Math.min(hi, Math.max(o.coord1, o.coord2))]);
+  return segmentsMinusGaps(lo, hi, gaps);
 }
 
 // isVertical方向、segments区間ごとに axisValue±half の境界線2本を描く（壁・耐力壁・梁の帯表現で共用）。
@@ -165,9 +157,9 @@ function bandCapLine(key, isVertical, axisValue, half, coord, stroke, strokeWidt
 
 // 木造基礎伏図の「ベース」帯の寸法。1階壁芯（＝基礎梁の軸）から幅600
 // （foundation.sectionDefaults.baseWidth）を振り分けて描く。角でトリム（直交する基礎梁に突き当たる端を
-// 半幅だけ控えて突合せにする）。土台（幅150の中線）は role:'sill' の実体梁だが、基礎伏図／1階伏図の
-// 見せ分けでは土台の帯はどの伏図にも描かない（structuralClassification.js C節。ユーザー裁定2026-11-12。
-// 実体生成は structural/woodAutoFill.js autoFillWoodSillBeams）。
+// 半幅だけ控えて突合せにする）。土台（幅150の中線）は role:'sill' の実体梁で、基礎伏図／1階伏図の
+// 見せ分けでは1階伏図の梁として一般の帯描画に乗る（基礎伏図には描かない。structuralClassification.js C節。
+// ユーザー裁定2026-11-12。実体生成は structural/woodAutoFill.js autoFillWoodSillBeams）。
 const BAND_COORD_TOL = 1; // 端点一致判定の許容(mm)
 
 // 基礎梁(role:'foundation')の軸に沿った帯1本のRect props（isVertical=軸がX方向）。lo/hi は span方向の座標。
@@ -438,20 +430,39 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
     rules: figureRules, lod, isRoofPlane: composition.subjectPlane?.isRoofPlane === true,
     subjectGraph: figureGraph, topGraph: column?.graph ?? null, project, memo: graphComputed,
   });
-  const junctions = resolveBeamJunctionSpans(figureRules.drawing, baseSpans.map(({ beam: b, coord1, coord2 }) => ({
+  // 大梁（primary）と土台（sill）は別の組で解く（混ぜない。id は梁ごとに一意で衝突しない）。土台は通しどうしの十字へ
+  // 切れ目（gaps）も与える（structural/beamJunction.js の opts.role・crossings。ユーザー裁定2026-11-12）。
+  const junctionInput = baseSpans.map(({ beam: b, coord1, coord2 }) => ({
     id: b.id, role: b.role, isVertical: b.isVertical, axisValue: b.axisValue,
     end1: b.clStart.effectiveValue, end2: b.clEnd.effectiveValue,
     base1: coord1, base2: coord2,
     halfWidth: (beamRenderWidth(b, lod) ?? 0) / 2,
     sectionKey: b.sectionDefId,
-  })), { eaveCorners });
+  }));
+  const junctions = new Map([
+    ...resolveBeamJunctionSpans(figureRules.drawing, junctionInput, { eaveCorners }),
+    ...resolveBeamJunctionSpans(figureRules.drawing, junctionInput, { role: BeamRole.SILL, crossings: true }),
+  ]);
   const beamDrawSpans = baseSpans.map(s => {
     const j = junctions.get(s.beam.id);
-    return j ? { beam: s.beam, coord1: j.coord1, coord2: j.coord2, ends: j.ends } : s;
+    return j ? { beam: s.beam, coord1: j.coord1, coord2: j.coord2, ends: j.ends, gaps: j.gaps } : s;
   });
   // 基礎伏図／1階伏図の見せ分け（slotView。null＝絞らない）。スパン・交点は全梁で解いたまま、
   // 帯の描画と非正角標記の入力だけを絞る（選択強調・開口の×は全梁のまま）。
   const visibleBeamSpans = beamDrawSpans.filter(s => sharedPlaneDrawsMember(slotView, 'beamMap', s.beam));
+
+  // 木造基礎伏図の基礎梁は、同じ面で一体に打つので帯ごとに2本線を描かず、和集合の外形だけを描く
+  // （structural/bandOutline.js。交点の中に線を通さない。ユーザー裁定2026-11-12）。入力は見せ分けで描く基礎梁だけ
+  // （foundationBeams の id で絞る。1階伏図では 0 本＝呼ばない）。単線LOD（帯で描かない）は対象外。計算は1回。
+  const foundationBeamIds = new Set(foundationBeams.map(b => b.id));
+  // 帯の入力の写像・幅 null（単線LOD）の除外は純関数 foundationBandInputs（structural/bandOutline.js）。
+  const foundationBands = woodFoundation
+    ? foundationBandInputs(
+      visibleBeamSpans.filter(({ beam: b }) => foundationBeamIds.has(b.id) && !b.isPinJoint),
+      b => beamRenderWidth(b, lod),
+    )
+    : [];
+  const foundationOutlines = foundationBands.length > 0 ? unionBandOutline(foundationBands) : null;
 
   // 非正角材（成≠幅）の梁の標記（在来木造のみ。structural/framingDrawing.js beamDepthMarks が
   // 対象選定・幾何を丸ごと決める）。標記は寸法線に見立てる（ユーザー裁定2026-09-16）——文字サイズ・
@@ -587,7 +598,7 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
         })}
       </Group>
       <Group {...groupPropsForStyle(beam?.spec.style)}>
-        {visibleBeamSpans.flatMap(({ beam: b, coord1, coord2, ends }) => {
+        {visibleBeamSpans.flatMap(({ beam: b, coord1, coord2, ends, gaps }) => {
           const color = cautionAxisIds?.has(b.axisCL.id) ? CAUTION_COLOR : colorOf(b.materialType);
           // 詳細描画では梁を柱断面ではなくダイヤフラム端まで（鋼管柱のみ e 分だけ手前で止まる）。
           // スパン(coord1/coord2)は上でbeamDrawSpansとして解決済み（ここは見せ分けで絞った visibleBeamSpans）——非正角材の標記（beamDepthMarks）と
@@ -646,6 +657,19 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
                 stroke={color} strokeWidth={medium} dash={beamDash} {...pickShapeProps} />,
             ]);
           }
+          // 木造基礎伏図の基礎梁は帯の2本線の代わりに、一体の外形線の線分を描く（梁の <Group> の内側＝タップは今のまま）。
+          // 外形の線分が 0 本になった梁（他の帯に完全に含まれる等。節点で分割された通常の形では起きない）は空の beam-symbol になりタップできず、
+          // 共有する線は入力の先の帯に付くので色（注意色）・タップの帰属が隣の梁へ移ることがある。受容する（リード裁定）。
+          const outlineSegments = foundationOutlines?.get(b.id);
+          if (outlineSegments) {
+            return wrapPick([
+              ...outlineSegments.map((s, i) => (
+                <Line key={`outline:${b.id}:${i}`} points={[s.x1, s.y1, s.x2, s.y2]}
+                  stroke={color} strokeWidth={medium} dash={beamDash} {...pickShapeProps} />
+              )),
+              ...jointMarks,
+            ]);
+          }
           // 在来木造の梁の交点処理（B-3。structural/beamJunction.js resolveBeamJunctionSpans）で
           // 出隅の勝者側が敗者半幅ぶん控えられた端（ends[i].capped）だけ、控えた端を閉じるキャップ線を
           // 追加する——単線LOD（width==null。上で早期returnする分岐）は対象外。非在来・非L字端は
@@ -654,7 +678,8 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
             ? [bandCapLine(`cap:${b.id}:${i}`, b.isVertical, b.axisValue, width / 2, i === 0 ? coord1 : coord2, color, medium, beamDash, pickShapeProps)]
             : []));
           return wrapPick([
-            ...bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, [[lo, hi]], color, medium, beamDash, pickShapeProps),
+            // 土台の通しどうしの十字は、負けた方向の通しに切れ目（gaps）が付く（勝者の面どうしの間は線を引かない）。
+            ...bandLines(`beam:${b.id}`, b.isVertical, b.axisValue, width / 2, segmentsMinusGaps(lo, hi, gaps ?? []), color, medium, beamDash, pickShapeProps),
             ...capLines,
             ...jointMarks,
           ]);

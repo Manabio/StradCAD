@@ -63,7 +63,7 @@ function makeViews() {
 const T = true, F = false;
 const SHARED_TABLE = [
   ['基礎梁',             'beamMap',    { role: 'foundation' }, T, F, T, F],
-  ['土台',               'beamMap',    { role: 'sill' },       F, F, T, F],
+  ['土台(一般規則で1階伏図)', 'beamMap', { role: 'sill' },     F, T, F, T],
   ['柱',                 'columnMap',  { role: 'primary' },    F, T, F, T],
   ['柱(roleなし)',       'columnMap',  {},                     F, T, F, T],
   ['独立フーチング',     'footingMap', {},                     T, F, T, F],
@@ -97,6 +97,7 @@ test('【C】見せ分け: 例外表に無く表Aの対象になる部材は、2
   const { fView, gView } = makeViews();
   const reps = [
     ['beamMap', { role: 'foundation' }], ['beamMap', { role: 'primary' }], ['beamMap', { role: 'floor' }],
+    ['beamMap', { role: 'sill' }],
     ['columnMap', { role: 'primary' }], ['footingMap', {}], ['footingMap', { baseType: 'x' }],
     ['slabMap', { role: 'slab' }], ['wallMap', {}],
     ['columnMap', { role: 'foundation' }], // 杭は柱グループと同じ図（一般規則に補完される）
@@ -213,6 +214,15 @@ test('【C】SHARED_PLANE_MEMBER_OVERRIDES は内側まで frozen', () => {
     assert.equal(Object.isFrozen(byRole), true);
     for (const o of Object.values(byRole)) assert.equal(Object.isFrozen(o), true);
   }
+});
+
+test('【C】例外表に土台(sill)は無い（一般規則で1階伏図の梁。基礎伏図には描かず出さない）', () => {
+  assert.equal(Object.hasOwn(SHARED_PLANE_MEMBER_OVERRIDES.beamMap, 'sill'), false);
+  const { fView, gView } = makeViews();
+  assert.equal(sharedPlaneDrawsMember(fView, 'beamMap', { role: 'sill' }), false);
+  assert.equal(sharedPlaneListsMember(fView, 'beamMap', { role: 'sill' }), false);
+  assert.equal(sharedPlaneDrawsMember(gView, 'beamMap', { role: 'sill' }), true);
+  assert.equal(sharedPlaneListsMember(gView, 'beamMap', { role: 'sill' }), true);
 });
 
 test('【C】sharedPlaneViewFor: view が null なら null、planeId 一致なら view そのもの、不一致なら null', () => {

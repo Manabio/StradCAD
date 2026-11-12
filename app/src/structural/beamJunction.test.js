@@ -409,3 +409,157 @@ test('(s) primary 同士が交わる入力に、同じ位置を通る foundation
   assert.equal(withOthers.size, only.size);
   for (const id of ['F1', 'F2', 'S1', 'S2']) assert.equal(withOthers.has(id), false, id);
 });
+
+// ---------------------------------------------------------------
+// 土台（role:'sill'）の交点処理（ユーザー裁定2026-11-12「土台どうしも通しが勝つ」）。opts.role・opts.crossings。
+// ---------------------------------------------------------------
+const SILL = { role: 'sill' };
+const sillOpts = { role: 'sill' };
+const sillCross = { role: 'sill', crossings: true };
+const sb = (id, isVertical, axisValue, end1, end2, o = {}) => beam(id, isVertical, axisValue, end1, end2, { ...SILL, halfWidth: 75, ...o });
+
+test('(t1) 土台: 通し＋突合せの T（突合せ端は勝者の面で止まる）', () => {
+  const j = resolveBeamJunctionSpans(THROUGH, [sb('P', false, 0, -1000, 1000), sb('V', true, 0, 0, 500)], sillOpts);
+  assert.equal(j.has('P'), false);
+  assert.equal(j.get('V').coord1, 75);
+  assert.equal(j.get('V').ends[0].kind, 'winnerFace');
+  assert.equal(j.get('V').ends[0].capped, false);
+});
+
+test('(t2) 土台: L は長い方が勝ち（cap あり・敗者の半幅だけ控える）、短い方は勝者の面で止まる', () => {
+  const j = resolveBeamJunctionSpans(THROUGH, [sb('H', false, 0, 0, 1000), sb('V', true, 0, 0, 800)], sillOpts);
+  assert.equal(j.get('H').ends[0].kind, 'cornerClose');
+  assert.equal(j.get('H').ends[0].capped, true);
+  assert.equal(j.get('H').coord1, -75);
+  assert.equal(j.get('V').coord1, 75);
+  assert.equal(j.get('V').ends[0].kind, 'winnerFace');
+});
+
+test('(t3) 土台: 端 4 本が芯で出会う十字は X が通し・Y が X の面で止まる（切れ目は無し）', () => {
+  const beams = [sb('H1', false, 0, -1000, 0), sb('H2', false, 0, 0, 1000), sb('V1', true, 0, -1000, 0), sb('V2', true, 0, 0, 1000)];
+  const j = resolveBeamJunctionSpans(THROUGH, beams, sillCross);
+  assert.equal(j.get('H1').ends[1].kind, 'through');
+  assert.equal(j.get('V1').coord2, -75);
+  assert.equal(j.get('V2').coord1, 75);
+  for (const id of ['H1', 'H2', 'V1', 'V2']) assert.equal(Object.hasOwn(j.get(id), 'gaps'), false, id);
+});
+
+test('(t4) 土台: 通し×通しの十字は crossings:true で Y に切れ目（勝者の面どうしの間）・X は無傷。crossings:false なら何も返さない', () => {
+  const beams = [sb('H', false, 0, -1000, 1000, { halfWidth: 60 }), sb('V', true, 0, -1000, 1000, { halfWidth: 45 })];
+  const on = resolveBeamJunctionSpans(THROUGH, beams, sillCross);
+  assert.equal(on.has('H'), false, '勝者 X は無傷');
+  const v = on.get('V');
+  assert.deepEqual(v.gaps, [[-60, 60]]);
+  assert.equal(v.coord1, -1000);
+  assert.equal(v.coord2, 1000);
+  assert.equal(v.ends[0].kind, 'base');
+  assert.equal(v.ends[1].kind, 'base');
+  assert.equal(v.ends[0].capped, false);
+  const off = resolveBeamJunctionSpans(THROUGH, beams, sillOpts);
+  assert.equal(off.size, 0);
+});
+
+test('(t5) 土台: 端点クラスタのある交点でも、負けた方向を途中で通る梁に切れ目が付く（勝者は端どうしの通し）', () => {
+  const beams = [sb('H1', false, 0, -1000, 0, { halfWidth: 60 }), sb('H2', false, 0, 0, 1000, { halfWidth: 60 }), sb('V', true, 0, -1000, 1000, { halfWidth: 45 })];
+  const on = resolveBeamJunctionSpans(THROUGH, beams, sillCross);
+  assert.deepEqual(on.get('V').gaps, [[-60, 60]]);
+  assert.equal(on.get('H1').ends[1].kind, 'through');
+  assert.equal(Object.hasOwn(on.get('H1'), 'gaps'), false);
+  const off = resolveBeamJunctionSpans(THROUGH, beams, sillOpts);
+  assert.equal(off.has('V'), false, 'crossings:false では切れ目も無い');
+});
+
+test('(t6) 土台: Y 軸方向の切れ目は交点の y 座標を中心にし、近い 2 つの交点の切れ目は併合される（昇順）', () => {
+  const beams = [
+    sb('H1', false, 0, -1000, 1000, { halfWidth: 60 }),
+    sb('H2', false, 100, -1000, 1000, { halfWidth: 60 }),
+    sb('V', true, 0, -1000, 1000, { halfWidth: 45 }),
+  ];
+  const on = resolveBeamJunctionSpans(THROUGH, beams, sillCross);
+  assert.deepEqual(on.get('V').gaps, [[-60, 160]]);
+  const far = resolveBeamJunctionSpans(THROUGH, [beams[0], sb('H3', false, 500, -1000, 1000, { halfWidth: 60 }), beams[2]], sillCross);
+  assert.deepEqual(far.get('V').gaps, [[-60, 60], [440, 560]]);
+});
+
+test('(t7) 土台: 同じ入力に primary が混ざっていても土台の結果は同じ。primary は混ざっても返らない', () => {
+  const sills = () => [sb('SH', false, 0, -1000, 1000), sb('SV', true, 0, -1000, 1000), sb('SL', false, 3000, 3000, 4000), sb('SM', true, 3000, 3000, 3800)];
+  const primaries = () => [beam('H', false, 0, -1000, 1000), beam('V', true, 0, 0, 500), beam('LH', false, 3000, 3000, 4000), beam('LV', true, 3000, 3000, 3800)];
+  const only = resolveBeamJunctionSpans(THROUGH, sills(), sillCross);
+  const mixed = resolveBeamJunctionSpans(THROUGH, [...primaries(), ...sills()], sillCross);
+  const key = (j, id) => JSON.stringify(j.get(id) ?? null);
+  assert.equal(only.has('SV'), true, '前提: 土台の解決が効いている');
+  for (const id of ['SH', 'SV', 'SL', 'SM']) assert.equal(key(mixed, id), key(only, id), id);
+  for (const id of ['H', 'V', 'LH', 'LV']) assert.equal(mixed.has(id), false, id);
+});
+
+test('(t8) primary を既定の opts で解いた結果は、追加前と同じ（gaps キーは現れない・土台は混ざっても影響しない）', () => {
+  const primaries = () => [
+    beam('H', false, 0, -1000, 1000, { halfWidth: 60 }),
+    beam('V', true, 0, 0, 500, { halfWidth: 45, sectionKey: 'T' }),
+    beam('XH', false, 5000, -1000, 1000), beam('XV', true, 0, 4000, 6000), // 通し×通し（primary では切れ目を作らない）
+  ];
+  const plain = resolveBeamJunctionSpans(THROUGH, primaries());
+  const withSills = resolveBeamJunctionSpans(THROUGH, [...primaries(), sb('SH', false, 0, -1000, 1000), sb('SV', true, 0, -1000, 1000)]);
+  assert.equal(JSON.stringify([...plain]), JSON.stringify([...withSills]));
+  assert.equal(plain.get('V').coord1, 60);
+  for (const [id, e] of plain) assert.equal(Object.hasOwn(e, 'gaps'), false, id);
+  // 十字（通し×通し）が primary の既定では何も返さない
+  assert.equal(resolveBeamJunctionSpans(THROUGH, [beam('P', false, 0, -1000, 1000), beam('Q', true, 0, -1000, 1000)]).size, 0);
+});
+
+test("【失敗系】(t9) drawing.beamJunction!=='throughWins' は role・crossings を渡しても常に空 Map", () => {
+  const beams = [sb('H', false, 0, -1000, 1000), sb('V', true, 0, -1000, 1000)];
+  for (const d of [{ beamJunction: 'columnFace' }, { beamJunction: 'x' }, {}, null, undefined]) {
+    assert.equal(resolveBeamJunctionSpans(d, beams, sillCross).size, 0);
+  }
+});
+
+test('【失敗系】(t10) 土台 role で解くとき、土台でない梁（foundation）だけの入力は crossings:true でも空 Map', () => {
+  const beams = [beam('F1', false, 0, -1000, 1000, { role: 'foundation' }), beam('F2', true, 0, -1000, 1000, { role: 'foundation' })];
+  assert.equal(resolveBeamJunctionSpans(THROUGH, beams, sillCross).size, 0);
+});
+
+test('(t11) 連続長: role を渡すとその role の梁だけをつなぐ（既定は primary のまま）', () => {
+  const beams = [sb('A', false, 0, 0, 1000), sb('B', false, 0, 1000, 2500), beam('P', false, 0, 0, 700)];
+  const m = continuousBeamLengths(beams, TOL, 'sill');
+  assert.equal(m.get('A'), 2500);
+  assert.equal(m.get('B'), 2500);
+  assert.equal(m.has('P'), false);
+  const d = continuousBeamLengths(beams, TOL);
+  assert.equal(d.get('P'), 700);
+  assert.equal(d.has('A'), false);
+});
+
+test('(t12) 土台: 切れ目と端の処理が同じ梁に併存する（crossings:true。Y は途中を X が横切り、端は XL の勝者の面で止まる）', () => {
+  // Y: x=0・y 0..2000（半幅45）。X: y=1000・x -1000..1000（半幅60）が途中を横切る＝切れ目 [1000-60, 1000+60]。
+  // XL: y=0・x 0..3000（半幅60）が Y の端 (0,0) と L で出会い、Y（2000）より長いので勝つ＝Y の端は 0+60=60 で止まる。
+  const beams = [
+    sb('Y', true, 0, 0, 2000, { halfWidth: 45 }),
+    sb('X', false, 1000, -1000, 1000, { halfWidth: 60 }),
+    sb('XL', false, 0, 0, 3000, { halfWidth: 60 }),
+  ];
+  const j = resolveBeamJunctionSpans(THROUGH, beams, sillCross);
+  assert.deepEqual(j.get('Y').gaps, [[940, 1060]], '端の処理があっても切れ目は捨てない');
+  assert.equal(j.get('Y').ends[0].kind, 'winnerFace');
+  assert.equal(j.get('Y').coord1, 60);
+  assert.equal(j.get('Y').coord2, 2000);
+});
+
+test('(t13) 土台: crossings:true の T（幹の端が通しの途中に当たる）で、通し（勝者）には何も返らない。向き・端の側（lo/hi）を入れ替えても同じ', () => {
+  const cases = [
+    // 通し＝横、幹＝縦・幹の lo 端（y=0）が通しに当たる → coord1 = 75
+    { beams: [sb('P', false, 0, -1000, 1000), sb('V', true, 0, 0, 500)], trunk: 'V', key: 'coord1', value: 75 },
+    // 幹の hi 端（y=0）が通しに当たる（幹は y -500..0）→ coord2 = -75
+    { beams: [sb('P', false, 0, -1000, 1000), sb('V', true, 0, -500, 0)], trunk: 'V', key: 'coord2', value: -75 },
+    // 通し＝縦、幹＝横・幹の lo 端 → coord1 = 75
+    { beams: [sb('P', true, 0, -1000, 1000), sb('H', false, 0, 0, 500)], trunk: 'H', key: 'coord1', value: 75 },
+    // 通し＝縦、幹＝横・幹の hi 端 → coord2 = -75
+    { beams: [sb('P', true, 0, -1000, 1000), sb('H', false, 0, -500, 0)], trunk: 'H', key: 'coord2', value: -75 },
+  ];
+  for (const { beams, trunk, key, value } of cases) {
+    const j = resolveBeamJunctionSpans(THROUGH, beams, sillCross);
+    assert.equal(j.has('P'), false, `${trunk}: 通し（勝者）に何も返らない`);
+    assert.equal(j.get(trunk)[key], value, `${trunk}.${key}`);
+    assert.equal(Object.hasOwn(j.get(trunk), 'gaps'), false, `${trunk}: 幹に切れ目は無い`);
+  }
+});

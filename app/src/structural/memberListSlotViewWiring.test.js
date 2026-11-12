@@ -48,7 +48,19 @@ test('【配線】MemberListTab.jsx: computeTagGroups は自分の平面にだ�
   assert.equal(count(list, 'of byStructure'), 0, '絞り込み前の列をまとめに使わない');
   assert.equal(count(list, 'sharedPlaneListsMember('), 1);
   assert.equal(count(list, 'sharedPlaneDrawsMember'), 0, 'リストは Draws を使わない');
-  assert.equal(count(list, 'sharedPlaneDrawsKind'), 0);
+  assert.equal(count(list, 'sharedPlaneDrawsKind('), 1, '使うのは土台基礎の見出し条件だけ（1 か所）');
+});
+
+test('【配線】MemberListTab.jsx: 土台基礎の見出し（isWoodFoundationBeamGroup）は基礎梁を描く視点でだけ出す（1階伏図は group.label）', () => {
+  const m = list.match(/const isWoodFoundationBeamGroup = [^;]*;/);
+  assert.ok(m, 'isWoodFoundationBeamGroup の定義が読める');
+  assert.ok(m[0].includes('sharedPlaneDrawsKind(sharedPlaneViewFor(slotView, graph.plane.id), MEMBER_KIND.FOUNDATION_BEAM)'), '見出し条件');
+  assert.match(list, /structureMode, slabMaterials, slotView,\s*\}\) => \{/, 'MemberGroupSection が slotView を props で受ける');
+  assert.equal(count(list, 'slotView={slotView}'), 1, 'MemberGroupSection へ渡す（1 か所）');
+  const el = list.slice(list.indexOf('<MemberGroupSection'), list.indexOf('onToggleMergeTag={toggleMergeTag}'));
+  assert.ok(el.includes('slotView={slotView}'), 'MemberGroupSection 要素の内側');
+  // 判定の外側の枝: 条件が偽なら group.label を使う
+  assert.ok(list.includes('const groupLabel = isWoodFoundationBeamGroup ? foundationBeamGroupLabel : group.label;'));
 });
 
 test('【配線】MemberListTab.jsx: sections の組み立てで sharedPlaneSectionVisible が false なら continue', () => {

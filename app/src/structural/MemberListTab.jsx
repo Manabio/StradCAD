@@ -49,7 +49,7 @@ import {
   BAY_PICK_BUTTON_FONT_PX, BAY_PICK_BUTTON_MIN_HEIGHT_PX, BAY_PICK_BUTTON_PADDING,
   BAY_PICK_BUTTON_DISABLED_COLOR, BAY_PICK_BUTTON_TEXT_COLOR,
 } from '../core/constants.js';
-import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE, sharedPlaneListsMember, sharedPlaneViewFor, sharedPlaneSectionVisible } from './structuralClassification.js';
+import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE, sharedPlaneListsMember, sharedPlaneDrawsKind, sharedPlaneViewFor, sharedPlaneSectionVisible } from './structuralClassification.js';
 import { foundationOptionsFor, rulesFor, effectiveStructure, woodColumnWidthMm, columnWidthMm, resolvedBeamColumnWidthMm } from './structureRules.js';
 import { columnListCategory } from './framingDrawing.js';
 import { resolveColumnWidthEdit, normalizeColumnOverridesToFloor, allowedColumnWidths, isUpsizedWidth, columnWidthChangeNotice } from './columnWidthScope.js';
@@ -528,6 +528,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               mergeAnchorMaterialType={isMergingHere ? mergeState.anchorMaterialType : null}
               onSelectMembers={onSelectMembers}
               structureMode={structureMode}
+              slotView={slotView}
               mergeSelectedTags={isMergingHere ? mergeState.selectedTags : null}
               onStartMerge={(tag, materialType) => setMergeState({ group, graph: g, structure: gStructure, figureType, slotView, anchorTag: tag, anchorMaterialType: materialType, selectedTags: new Set([tag]) })}
               onToggleMergeTag={toggleMergeTag}
@@ -818,7 +819,7 @@ const SlabPickControls = observer(({ structureMode, graph, composition, project,
 const MemberGroupSection = observer(({
   group, graph, composition, project, structure, readOnly, tagGroups, openCard, onToggleCard, onExpandMembers, onRequestDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, mergeAnchorTag, mergeAnchorMaterialType, mergeSelectedTags, onStartMerge, onToggleMergeTag,
-  onSelectMembers, onStructureChanged, onPendingFocus, onColumnWidthNotice, structureMode, slabMaterials,
+  onSelectMembers, onStructureChanged, onPendingFocus, onColumnWidthNotice, structureMode, slabMaterials, slotView,
 }) => {
   // tagGroups は MemberListTab が computeTagGroups で組んだもの（構造種別が持たない部材種別（×）の個体の除外・
   // R階伏図の figureType=ROOF での取捨も computeTagGroups の中）。
@@ -827,9 +828,11 @@ const MemberGroupSection = observer(({
 
   // 木造系の基礎伏図の梁＝土台基礎。見出しを「土台基礎」に改め、基礎種別（なし/ベタ基礎/土間コン）を右横に置く。
   // 基礎種別は基礎梁の断面に効く建物全体設定（project.structuralInfo.foundationType）を直接編集する。
+  // 1階伏図（基礎梁を描かない視点）では出さない（基礎は基礎伏図のもの。見出しは group.label の「梁」で土台のカードが並ぶ）。
   const foundationBeamGroupLabel = rulesFor(structure).foundation.beamGroupLabel; // 木造='土台基礎'／他=null
   const isWoodFoundationBeamGroup = group.mapName === 'beamMap' && group.key === 'beam'
-    && foundationBeamGroupLabel != null && isFoundationPlane(graph.plane, project);
+    && foundationBeamGroupLabel != null && isFoundationPlane(graph.plane, project)
+    && sharedPlaneDrawsKind(sharedPlaneViewFor(slotView, graph.plane.id), MEMBER_KIND.FOUNDATION_BEAM);
   const groupLabel = isWoodFoundationBeamGroup ? foundationBeamGroupLabel : group.label;
   // 「各階柱寸法」欄はこの見出しには置かない——一覧の先頭（MemberListTab の woodColumnWidthGraph）参照。
 

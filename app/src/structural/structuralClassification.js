@@ -204,10 +204,10 @@ export function slotPresent(slotType, structure) {
 export const SHARED_PLANE_SLOT_TYPES = Object.freeze([SLOT_TYPE.FOUNDATION, SLOT_TYPE.GROUND_FLOOR]);
 
 // 一般規則（所属図面＝GOVERNING_FIGURE）で決まらない部材だけの例外。mapName → role → { list, draw }。
+// 土台（role:'sill'）は梁の一般規則どおり1階伏図の部材（基礎伏図には描かない・出さない）なので、ここに載せない。
 // 値は FIGURE_TYPE か null（null＝どの図にも出さない）。
 export const SHARED_PLANE_MEMBER_OVERRIDES = Object.freeze({
   beamMap: Object.freeze({
-    [BeamRole.SILL]:      Object.freeze({ list: FIGURE_TYPE.FOUNDATION, draw: null }),
     // 小屋梁（下屋の小屋組）は1階伏図に出し、基礎伏図からは外す（ユーザー裁定 2026-11-12）。
     [BeamRole.ROOF_BEAM]: Object.freeze({ list: FIGURE_TYPE.ABOVEGROUND, draw: FIGURE_TYPE.ABOVEGROUND }),
   }),

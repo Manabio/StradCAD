@@ -49,9 +49,42 @@ test('【配線】StructuralLayer.jsx: 絞らないもの（全梁の基礎梁�
   assert.ok(!/foundationBeams[^\n]*sharedPlane/.test(layer), 'foundationBeams は絞り込み前の全梁');
   assert.match(layer, /beams:\s+beamDrawSpans\.map\(/, '選択強調は絞らない');
   assert.ok(!/beams:\s+visibleBeamSpans/.test(layer));
-  assert.match(layer, /resolveBeamJunctionSpans\(figureRules\.drawing, baseSpans\.map\(/, '交点処理は全梁');
+  assert.match(layer, /const junctionInput = baseSpans\.map\(/, '交点処理の入力は全梁（baseSpans 由来。見せ分けで絞らない）');
+  assert.equal(count(layer, 'resolveBeamJunctionSpans(figureRules.drawing, junctionInput,'), 2, '交点処理は全梁を入力に大梁・土台の2回');
   assert.match(layer, /openingCrossSegments\(components, beam\.graph\.beams,/, '開口の×は全梁');
-  assert.equal(count(layer, 'visibleBeamSpans'), 3, '定義1＋梁帯1＋非正角標記1だけ（他へ広げない）');
+  assert.equal(count(layer, 'visibleBeamSpans'), 4, '定義1＋基礎梁の外形の入力1＋梁帯1＋非正角標記1だけ（他へ広げない）');
+});
+
+test('【配線】StructuralLayer.jsx: 基礎梁の外形（unionBandOutline）は 1 か所・見せ分けで描く基礎梁だけを入力にし・woodFoundation の内側・梁の Group の内側で描く', () => {
+  assert.equal(count(layer, 'unionBandOutline('), 1, '呼び出しは 1 か所（梁ごとに呼ばない）');
+  assert.match(layer, /import \{ unionBandOutline, segmentsMinusGaps, foundationBandInputs \} from '\.\.\/structural\/bandOutline\.js';/);
+  assert.match(layer, /const foundationBeamIds = new Set\(foundationBeams\.map\(b => b\.id\)\);/);
+  assert.match(layer, /const foundationBands = woodFoundation\s*\?\s*foundationBandInputs\(\s*visibleBeamSpans\.filter\(\(\{ beam: b \}\) => foundationBeamIds\.has\(b\.id\) && !b\.isPinJoint\),\s*b => beamRenderWidth\(b, lod\),\s*\)/,
+    '入力は visibleBeamSpans（絞り込み後）由来・基礎梁の id・woodFoundation の内側。幅は beamRenderWidth（null＝単線LODは純関数が除く）');
+  assert.ok(!/unionBandOutline\(beamDrawSpans/.test(layer) && !/foundationBands = [^;]*beamDrawSpans/.test(layer), '入力に絞り込み前の beamDrawSpans を使わない');
+  assert.match(layer, /const foundationOutlines = foundationBands\.length > 0 \? unionBandOutline\(foundationBands\) : null;/);
+  // 写像・区間の引き算は純モジュールへ移した（.jsx の中に写しを置かない）
+  assert.ok(!/function segmentsMinusGaps|half: beamRenderWidth/.test(layer), 'segmentsMinusGaps・帯の入力の写像は structural/bandOutline.js にだけある');
+  // 描画: 梁ごとの wrapPick（＝ beam-symbol の Group）の中で、帯の2本線（bandLines）より前に分岐する
+  const iOutline = layer.indexOf('const outlineSegments = foundationOutlines?.get(b.id);');
+  const iBand = layer.indexOf('...bandLines(`beam:${b.id}`');
+  assert.ok(iOutline > 0 && iBand > iOutline, '外形の分岐が bandLines より前');
+  const branch = layer.slice(iOutline, iBand);
+  assert.match(branch, /if \(outlineSegments\) \{\s*return wrapPick\(\[/);
+  assert.ok(branch.includes('stroke={color} strokeWidth={medium} dash={beamDash} {...pickShapeProps}'));
+  assert.ok(branch.includes('...jointMarks,'));
+});
+
+test('【配線】StructuralLayer.jsx: 土台は大梁と別の組で解く（2 回目は role: BeamRole.SILL, crossings: true・eaveCorners を渡さない）。gaps が梁の帯の segments に効く', () => {
+  assert.match(layer, /\.\.\.resolveBeamJunctionSpans\(figureRules\.drawing, junctionInput, \{ role: BeamRole\.SILL, crossings: true \}\),/);
+  assert.match(layer, /const junctions = new Map\(\[\s*\.\.\.resolveBeamJunctionSpans\(figureRules\.drawing, junctionInput, \{ eaveCorners \}\),/);
+  assert.match(layer, /\{ beam: s\.beam, coord1: j\.coord1, coord2: j\.coord2, ends: j\.ends, gaps: j\.gaps \}/, 'beamDrawSpans が gaps を通す');
+  assert.match(layer, /visibleBeamSpans\.flatMap\(\(\{ beam: b, coord1, coord2, ends, gaps \}\) => \{/);
+  assert.match(layer, /\.\.\.bandLines\(`beam:\$\{b\.id\}`, b\.isVertical, b\.axisValue, width \/ 2, segmentsMinusGaps\(lo, hi, gaps \?\? \[\]\), /, 'gaps を segments から引く');
+  assert.match(layer, /return segmentsMinusGaps\(lo, hi, gaps\);/, '耐力壁（wallSegments）も同じ segmentsMinusGaps で開口を引く');
+  assert.match(layer, /import \{ BeamRole, CAUTION_COLOR,/);
+  // 非正角標記・選択強調（beams: beamDrawSpans.map(...)）は gaps を読まない
+  assert.ok(!/beamDepthMarks\([^;]*gaps/.test(layer), '非正角標記の入力が gaps を読んでいる');
 });
 
 test('【配線】両レイヤ: 述語を迂回する slotView 直読み・スロット種別の比較を足していない', () => {

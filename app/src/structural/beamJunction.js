@@ -14,17 +14,18 @@
 // 同一直線上で両側の断面（成）が異なる交点は現行どおり柱面で止める（sectionBreak＝「梁成が変わる
 // 交点は描画上そう解釈する」）。
 //
-// 参加集合は role==='primary' のみ（QA裁定・2026-09-17）。床梁・小梁（core/structuralEntities.js
-// PIN_ROLES）は既にホスト梁の縁で止まる（clearance 0）ため対象外。基礎梁（foundation）は
-// renderer/StructuralLayer.jsx の woodFoundationBands が別系統（土台・ベース帯）で処理するため対象外。
+// 参加集合は呼び出しが渡す role の梁だけ（既定 primary。QA裁定・2026-09-17）。role が違う梁は混ぜず、role ごとに
+// 別の組として解く。床梁・小梁（core/structuralEntities.js PIN_ROLES）は既にホスト梁の縁で止まる（clearance 0）ため
+// 対象外。基礎梁（foundation）は renderer/StructuralLayer.jsx が外形で一体に描く（structural/bandOutline.js）ため対象外。
 // 軒桁（eaves）・屋根材（roof）は小屋伏図の別ステップ（3f以降）で裁定するため今回は対象外——
-// いずれも将来 primary 相当の交点処理が要る場面が出ても、この関数の対象role集合を広げる形で
-// 個別に裁定してから追加する（「primary以外はまとめて対象外」を今の唯一の境界線にする）。
+// 将来 primary 相当の交点処理が要る場面が出ても、対象role を個別に裁定してから追加する。
+// 土台（sill）はユーザー裁定2026-11-12「土台の交点も通しが勝つ」で追加した（土台どうしだけで解く）。土台は通しの
+// 材どうしが十字に交わるため、opts.crossings で「端の無い十字」も交点にし、負けた方向の通しへ切れ目（gaps）を与える。
 //
 // core.js非依存の純モジュール（node:testから単体importできる。team-lessons「抽出モジュールは
 // node:testから単体import可能に保つ」）。import は CL_OVERLAP_TOL_MM のみ。
 // ================================================================
-import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
+import { CL_OVERLAP_TOL_MM, BeamRole } from '../core/constants.js';
 
 // 方向キー。StructuralBeam.isVertical=true は通り芯X（垂直材＝coord1/2がY座標）に沿う——
 // 「X方向」＝isVertical=false（水平材。coord1/2がX座標）、「Y方向」＝isVertical=true。
@@ -53,7 +54,7 @@ function clusterPoints(points, tol) {
 }
 
 /**
- * 同じ軸の上で端と端がつながる梁（role==='primary'）を合わせた全長（連続長）を梁ごとに返す純関数。
+ * 同じ軸の上で端と端がつながる梁（role が一致するもの。既定 primary）を合わせた全長（連続長）を梁ごとに返す純関数。
  * 出隅（L字）の勝者を「辺の長さ」で決めるために使う——梁は下階柱の位置で分割されるため、1本の材長では
  * 辺の長さを表せない（ユーザー裁定2026-10-02「短手と長手が出会うとき、長手勝ち」）。
  * つながる＝同じ向き・同じ軸座標（tol未満）で、一方の hi 端ともう一方の lo 端の差が tol 未満。
@@ -64,13 +65,14 @@ function clusterPoints(points, tol) {
  * 成分の「最大hi − 最小lo」なので二重には数えない）。1回の呼び出しで軸ごとにまとめて作る（O(n log n)）。
  * @param {Array<{id:string, role:string, isVertical:boolean, axisValue:number, end1:number, end2:number}>} beams
  * @param {number} tol
- * @returns {Map<string, number>} id -> 連続長。primary でない梁・座標が有限でない梁は含まない。
+ * @param {string} [role] 対象の梁 role（既定 primary）。
+ * @returns {Map<string, number>} id -> 連続長。role が違う梁・座標が有限でない梁は含まない。
  */
-export function continuousBeamLengths(beams, tol) {
+export function continuousBeamLengths(beams, tol, role = BeamRole.PRIMARY) {
   const lengths = new Map();
   const groups = new Map(); // 向き -> [{b, lo, hi}]
   for (const b of beams ?? []) {
-    if (b?.role !== 'primary') continue;
+    if (b?.role !== role) continue;
     if (![b.axisValue, b.end1, b.end2].every(Number.isFinite)) continue;
     const key = dirKey(b.isVertical);
     if (!groups.has(key)) groups.set(key, []);
@@ -126,14 +128,18 @@ function runLengthsOnAxis(items, tol, lengths) {
  *   通しでなければ、短い方でも軒の側が勝ち、端を max(敗者の半幅, extendMm)（けらばの出幅）だけ外へ延ばす（kind 'eaveExtend'・
  *   capped）。けらば側に梁が無くても延ばす。軒の側が通しの角・軒の側に梁の端が無い角は通常の決定のまま。
  *   渡さない・空なら今までと完全に同じ結果。
- * @returns {Map<string, {coord1:number, coord2:number, ends:[{kind:string,capped:boolean},{kind:string,capped:boolean}]}>}
- *   変化した梁（少なくとも片端が base 以外になった梁）だけを収める。'columnFace'/未知値/undefined は
- *   常に空Map（恒等の根拠をここに置く——呼び出し側は分岐しない）。
+ *   role＝参加させる梁の role（既定 primary。別 role は混ぜず別の呼び出しで解く）。
+ *   crossings＝true のときだけ、(1) 端がひとつも無い十字（どちらの方向も途中を通る点）も交点として扱い（勝者は十字の既定X）、
+ *   (2) どの交点でも、負けた方向を途中で通る梁へ、勝者の面どうしの間の切れ目（gaps）を与える。既定 false＝今までと完全に同じ結果。
+ * @returns {Map<string, {coord1:number, coord2:number, ends:[{kind:string,capped:boolean},{kind:string,capped:boolean}], gaps?:Array<[number,number]>}>}
+ *   変化した梁（少なくとも片端が base 以外になった梁）だけを収める。gaps は crossings が真で切れ目のある梁にだけ付く
+ *   （昇順・重なりは併合。切れ目だけの梁は coord1/coord2 が base・ends が base×2）。crossings が偽なら gaps キーは現れない。
+ *   'columnFace'/未知値/undefined は常に空Map（恒等の根拠をここに置く——呼び出し側は分岐しない）。
  */
-export function resolveBeamJunctionSpans(drawing, beams, { tol = CL_OVERLAP_TOL_MM, eaveCorners = [] } = {}) {
+export function resolveBeamJunctionSpans(drawing, beams, { tol = CL_OVERLAP_TOL_MM, eaveCorners = [], role = BeamRole.PRIMARY, crossings = false } = {}) {
   const result = new Map();
   if (drawing?.beamJunction !== 'throughWins') return result;
-  const primaries = (beams ?? []).filter(b => b.role === 'primary');
+  const primaries = (beams ?? []).filter(b => b.role === role);
   if (primaries.length === 0) return result;
 
   // 全参加梁の両端点を集めてクラスタリング（交点候補）。
@@ -145,7 +151,9 @@ export function resolveBeamJunctionSpans(drawing, beams, { tol = CL_OVERLAP_TOL_
     points.push({ ...p2, beam: b, endIndex: 1, dir: Math.sign(b.end1 - b.end2) || 1, along: b.end2 });
   }
   const clusters = clusterPoints(points, tol);
-  const runLengths = continuousBeamLengths(primaries, tol); // 出隅の勝者用（軸ごとに1回だけ作る）
+  if (crossings) addPassThroughCrossings(clusters, primaries, tol);
+  const runLengths = continuousBeamLengths(primaries, tol, role); // 出隅の勝者用（軸ごとに1回だけ作る）
+  const gapsById = new Map(); // id -> [[lo, hi], ...]（crossings のときだけ積む）
 
   // 端ごとの解決結果を id -> [end0, end1] へ積む（両端が別の交点で解決されうるため先に用意する）。
   const perBeam = new Map();
@@ -207,6 +215,16 @@ export function resolveBeamJunctionSpans(drawing, beams, { tol = CL_OVERLAP_TOL_
       ...armsByDir[winner].map(a => a.beam.halfWidth),
     );
 
+    // 負けた方向を途中で通る梁には、勝者の面どうしの間（その梁の軸方向の座標）の切れ目を与える。
+    if (crossings) {
+      const loser = otherDir(winner);
+      const at = loser === 'X' ? cluster.x : cluster.y;
+      for (const b of passingByDir[loser]) {
+        if (!gapsById.has(b.id)) gapsById.set(b.id, []);
+        gapsById.get(b.id).push([at - winnerHalfWidth, at + winnerHalfWidth]);
+      }
+    }
+
     for (const d of ['X', 'Y']) {
       for (const arm of armsByDir[d]) {
         const b = arm.beam;
@@ -237,20 +255,51 @@ export function resolveBeamJunctionSpans(drawing, beams, { tol = CL_OVERLAP_TOL_
 
   for (const b of primaries) {
     const [e0, e1] = perBeam.get(b.id);
-    if (!e0 && !e1) continue; // 両端とも交点処理の対象外＝base（出力しない）
+    const gaps = gapsById.has(b.id) ? mergeGaps(gapsById.get(b.id)) : null;
+    if (!e0 && !e1 && !gaps) continue; // 両端とも交点処理の対象外で切れ目も無い＝base（出力しない）
     // base側の座標は必ず base1/base2（spanForColumns済みの実体スパン）を使う——end1/end2（AXIS・
     // 未トリム）を使うと、柱面トリムを無視して下階柱を突き抜けた座標を返してしまう（beamJunction.test.js
     // (l)がこの取り違えを検出する）。
     const end0 = e0 ?? { kind: 'base', capped: false, coord: b.base1 };
     const end1 = e1 ?? { kind: 'base', capped: false, coord: b.base2 };
-    result.set(b.id, {
+    const entry = {
       coord1: end0.coord,
       coord2: end1.coord,
       ends: [
         { kind: end0.kind, capped: end0.capped },
         { kind: end1.kind, capped: end1.capped },
       ],
-    });
+    };
+    if (gaps) entry.gaps = gaps;
+    result.set(b.id, entry);
   }
   return result;
+}
+
+// 端がひとつも無い十字（X 方向の梁と Y 方向の梁がどちらも base スパンの内部を通る点）を、端点クラスタに無ければ交点として足す。
+// 足したクラスタは arm を持たない（passing の判定は各クラスタ共通の処理で行う）。
+function addPassThroughCrossings(clusters, beams, tol) {
+  const inside = (v, b) => v > Math.min(b.base1, b.base2) + tol && v < Math.max(b.base1, b.base2) - tol;
+  const xs = beams.filter(b => !b.isVertical);
+  const ys = beams.filter(b => b.isVertical);
+  for (const bx of xs) {
+    for (const by of ys) {
+      if (!inside(by.axisValue, bx) || !inside(bx.axisValue, by)) continue;
+      const x = by.axisValue, y = bx.axisValue;
+      if (clusters.some(c => Math.abs(c.x - x) < tol && Math.abs(c.y - y) < tol)) continue;
+      clusters.push({ x, y, items: [] });
+    }
+  }
+}
+
+// 切れ目（[lo, hi] の列）を昇順にし、重なる・接する区間を併合する。
+function mergeGaps(gaps) {
+  const sorted = gaps.map(g => [g[0], g[1]]).sort((p, q) => p[0] - q[0]);
+  const merged = [sorted[0]];
+  for (const g of sorted.slice(1)) {
+    const last = merged[merged.length - 1];
+    if (g[0] <= last[1]) last[1] = Math.max(last[1], g[1]);
+    else merged.push(g);
+  }
+  return merged;
 }
