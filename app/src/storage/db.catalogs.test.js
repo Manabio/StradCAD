@@ -10,8 +10,7 @@ import {
   saveDocumentCatalog, loadDocumentCatalogs, deleteDocumentCatalogs,
   saveUserCatalog, loadUserCatalogs, clearAllStores,
 } from './db.js';
-
-class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
+import { FakeRequest, installFakeIndexedDbWithTransaction } from './fakeIndexedDbTestFixtures.js';
 
 class FakeStore {
   constructor(keyPath) { this.keyPath = keyPath; this.data = new Map(); }
@@ -76,15 +75,7 @@ const fakeTransaction = () => {
   setTimeout(() => tx.oncomplete?.(), 0);
   return tx;
 };
-globalThis.indexedDB = {
-  open() {
-    const req = new FakeRequest();
-    queueMicrotask(() => req.onsuccess?.({
-      target: { result: { transaction: fakeTransaction, objectStoreNames: { contains: (name) => name in fakeStores } } },
-    }));
-    return req;
-  },
-};
+installFakeIndexedDbWithTransaction(fakeStores, fakeTransaction);
 
 // ---- saveDocumentCatalog/loadDocumentCatalogs（文書同梱。projectsストアの範囲取得）----
 

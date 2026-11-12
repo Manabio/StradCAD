@@ -13,13 +13,13 @@ import { StairType, RoomFeature } from '@core';
 import { PlanGraph } from '../../core.js';
 import { serializeGraph, restoreGraph } from '../../graphSnapshot.js';
 import { saveFloor, loadFloor } from '../../storage/db.js';
+import { FakeRequest, installFakeIndexedDb } from '../../storage/fakeIndexedDbTestFixtures.js';
 import { applyFloorOrderChange, floorOrderFollowers, FLOOR_ORDER_KIND } from '../../floorOrderChange.js';
 import { makeStorePeek, makeStoreSave } from '../equipment/equipmentTestFixtures.js';
 import { syncUpperFloors } from './stairFloorSync.js';
 import { setupProject, addPerFloorV, placeStair, keyAt, LEFT_HALF } from './stairRemovalTestFixtures.js';
 
 // ---- module-level fake IndexedDB（このファイルで1個だけ）----
-class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
 const putLog = []; // floors ストアへの保存の記録（planeId）
 class FakeStore {
   constructor(isFloors) { this.data = new Map(); this.isFloors = isFloors; }
@@ -44,17 +44,7 @@ class FakeStore {
   }
 }
 const fakeStores = { floors: new FakeStore(true), projects: new FakeStore(false), savedFloors: new FakeStore(false) };
-const fakeDb = {
-  objectStoreNames: { contains: (n) => n in fakeStores },
-  transaction(name) { const store = fakeStores[name]; return { objectStore: () => store }; },
-};
-globalThis.indexedDB = {
-  open() {
-    const req = new FakeRequest();
-    queueMicrotask(() => req.onsuccess?.({ target: { result: fakeDb } }));
-    return req;
-  },
-};
+installFakeIndexedDb(fakeStores);
 
 const ui = { notify() {}, switchFloor: async () => true, onFloorSyncChanged() {} };
 // DELETE に適用される実物 follower のうち構造反映・昇降機の再採番だけを除く（他階の階段を消す follower の再登録を検出するため許可リストにしない）

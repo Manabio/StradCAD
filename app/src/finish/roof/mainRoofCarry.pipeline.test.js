@@ -14,6 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project, PlanGraph, CenterLineType, Discipline, RoofSpec, isDefaultRoofSpec } from '../../core.js';
 import { saveFloor, loadFloor } from '../../storage/db.js';
+import { FakeRequest, installFakeIndexedDb } from '../../storage/fakeIndexedDbTestFixtures.js';
 import { serializeGraph, restoreGraph, decodeFloorSnapshot } from '../../graphSnapshot.js';
 import { applyFloorOrderChange, floorOrderFollowers, FLOOR_ORDER_KIND } from '../../floorOrderChange.js';
 import { computeFloorInsert } from '../../floorOps.js';
@@ -24,7 +25,6 @@ import { NON_DEFAULT_ROOF_SPEC } from '../roofTestFixtures.js';
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
 // ---- module-level fake IndexedDB（このファイルで1個だけ）----
-class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
 // floors ストアへの保存の記録 [その時走っていた follower 名, planeId]
 const putLog = [];
 let currentFollower = '(setup)';
@@ -55,17 +55,7 @@ const fakeStores = {
   projects: new FakeStore(false),
   savedFloors: new FakeStore(false),
 };
-const fakeDb = {
-  objectStoreNames: { contains: (n) => n in fakeStores },
-  transaction(name) { const store = fakeStores[name]; return { objectStore: () => store }; },
-};
-globalThis.indexedDB = {
-  open() {
-    const req = new FakeRequest();
-    queueMicrotask(() => req.onsuccess?.({ target: { result: fakeDb } }));
-    return req;
-  },
-};
+installFakeIndexedDb(fakeStores);
 
 /** 1階だけの在来木造プロジェクト（1階に主屋根 TOPVALUE を設定）。 */
 function buildProject(suffix, { mainRoof }) {

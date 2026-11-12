@@ -34,6 +34,7 @@ import { runInAction } from 'mobx';
 import { Project, CenterLineType, Discipline } from '../core.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { saveFloor } from '../storage/db.js';
+import { FakeRequest, installFakeIndexedDb } from '../storage/fakeIndexedDbTestFixtures.js';
 import { serializeGraph } from '../graphSnapshot.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
@@ -41,7 +42,6 @@ import { reflectStructuralToOtherFloors } from './structuralOrchestration.js';
 import { addDefaultDimensionLines, buildWoodFloorForB1, dumpB1AllFloorsAllFields } from './structuralOrchestrationFixtures.js';
 
 // ---- module-level fake IndexedDB（このファイルで1個だけ。storage/floorWriteGeneration.db.test.jsと同じ方針）----
-class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
 // 差し替え可能な干渉フック——各 test が自分のシナリオの間だけセットし、finally で必ず null に戻す。
 let onFloorsPutHook = null;
 class FakeStore {
@@ -64,17 +64,7 @@ const fakeStores = {
   projects: new FakeStore(false),
   savedFloors: new FakeStore(false),
 };
-const fakeDb = {
-  objectStoreNames: { contains: (n) => n in fakeStores },
-  transaction(name) { const store = fakeStores[name]; return { objectStore: () => store }; },
-};
-globalThis.indexedDB = {
-  open() {
-    const req = new FakeRequest();
-    queueMicrotask(() => req.onsuccess?.({ target: { result: fakeDb } }));
-    return req;
-  },
-};
+installFakeIndexedDb(fakeStores);
 
 // 各 test の先頭で呼ぶ——fakeDb インスタンス自体は使い回すが、中身は test ごとに空にする
 // （コーディネーター指示: 「テストごとに plane id を変えるか、開始時に floors ストアを空にする」の両方）。

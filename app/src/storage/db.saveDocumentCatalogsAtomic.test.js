@@ -7,8 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { saveDocumentCatalogs } from './db.js';
-
-class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
+import { FakeRequest } from './fakeIndexedDbTestFixtures.js';
 
 // committed: 実際に「コミットされた」レコードだけが入る（put時点では入らない）。
 const committed = new Map();

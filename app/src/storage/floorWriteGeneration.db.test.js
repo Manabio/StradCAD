@@ -12,8 +12,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { saveFloor, deleteFloor, clearAllStores, seedFloorsFromDocument } from './db.js';
 import { floorWriteGeneration } from './floorWriteGeneration.js';
+import { FakeRequest, installFakeIndexedDbWithTransaction } from './fakeIndexedDbTestFixtures.js';
 
-class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
 class FakeStore {
   constructor() { this.data = new Map(); }
   clear() { this.data.clear(); }
@@ -46,15 +46,7 @@ const fakeTransaction = () => {
   setTimeout(() => tx.oncomplete?.(), 0);
   return tx;
 };
-globalThis.indexedDB = {
-  open() {
-    const req = new FakeRequest();
-    queueMicrotask(() => req.onsuccess?.({
-      target: { result: { transaction: fakeTransaction, objectStoreNames: { contains: (name) => name in fakeStores } } },
-    }));
-    return req;
-  },
-};
+installFakeIndexedDbWithTransaction(fakeStores, fakeTransaction);
 
 test('saveFloor: floorsストアへの書込みに成功するとfloorWriteGenerationの世代が進む', async () => {
   const planeId = 'p-save-ok';

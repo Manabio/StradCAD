@@ -9,6 +9,7 @@ import { CenterLineType, RoomFeature } from '@core';
 import { PlanGraph } from '../../core.js';
 import { serializeGraph, restoreGraph } from '../../graphSnapshot.js';
 import { saveFloor, loadFloor } from '../../storage/db.js';
+import { FakeStore, installFakeIndexedDb } from '../../storage/fakeIndexedDbTestFixtures.js';
 import { applyFloorOrderChange, floorOrderFollowers, FLOOR_ORDER_KIND } from '../../floorOrderChange.js';
 import { computeFloorInsert } from '../../floorOps.js';
 import { refreshCells } from '../gridCells.js';
@@ -19,39 +20,8 @@ import { COPIED_STAIR_FIELDS } from './stairFloorCopy.js';
 import { setupProject, addPerFloorV, placeStair, keyAt } from './stairRemovalTestFixtures.js';
 
 // ---- module-level fake IndexedDB（このファイルで1個だけ）----
-class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
-class FakeStore {
-  constructor() { this.data = new Map(); }
-  put(value) {
-    const req = new FakeRequest();
-    this.data.set(value.planeId ?? value.projectId, value);
-    queueMicrotask(() => req.onsuccess?.({ target: { result: undefined } }));
-    return req;
-  }
-  get(key) {
-    const req = new FakeRequest();
-    queueMicrotask(() => req.onsuccess?.({ target: { result: this.data.get(key) } }));
-    return req;
-  }
-  delete(key) {
-    const req = new FakeRequest();
-    this.data.delete(key);
-    queueMicrotask(() => req.onsuccess?.({ target: { result: undefined } }));
-    return req;
-  }
-}
 const fakeStores = { floors: new FakeStore(), projects: new FakeStore(), savedFloors: new FakeStore() };
-const fakeDb = {
-  objectStoreNames: { contains: (n) => n in fakeStores },
-  transaction(name) { const store = fakeStores[name]; return { objectStore: () => store }; },
-};
-globalThis.indexedDB = {
-  open() {
-    const req = new FakeRequest();
-    queueMicrotask(() => req.onsuccess?.({ target: { result: fakeDb } }));
-    return req;
-  },
-};
+installFakeIndexedDb(fakeStores);
 
 const NAMES = ['roofPlaneHeight', 'elevatorCopy', 'stairCopy', 'exteriorRoom', 'stairVoidReconcile', 'switchToAddedFloor'];
 const followersFor = (...omit) => floorOrderFollowers.filter(f => NAMES.includes(f.name) && !omit.includes(f.name));

@@ -12,38 +12,14 @@ import { Project, CenterLineType, Discipline, StairType, RoomFeature } from '../
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { serializeGraph } from '../graphSnapshot.js';
 import { saveFloor } from '../storage/db.js';
+import { installLoggingFakeIndexedDb } from '../storage/fakeIndexedDbTestFixtures.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finishBoundary.js';
 import { loadMaterialMap } from './wallRegeneration.js';
 import { stairPortEdges } from './stair/stairGeometry.js';
 import { stripBlockAndCommentLines as stripComments } from '../uiBusySourceScan.js';
 
 const putLog = []; // floors ストアへの put の planeId
-function installFakeIndexedDB() {
-  class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
-  class FakeStore {
-    constructor(name) { this.name = name; this.data = new Map(); }
-    put(value) {
-      const req = new FakeRequest();
-      if (this.name === 'floors') putLog.push(value.planeId);
-      this.data.set(value.planeId ?? value.projectId ?? value.key, value);
-      queueMicrotask(() => req.onsuccess?.({ target: { result: undefined } }));
-      return req;
-    }
-    get(key) { const req = new FakeRequest(); queueMicrotask(() => req.onsuccess?.({ target: { result: this.data.get(key) } })); return req; }
-    getAll() { const req = new FakeRequest(); queueMicrotask(() => req.onsuccess?.({ target: { result: [...this.data.values()] } })); return req; }
-  }
-  class FakeDB {
-    constructor() {
-      this.stores = new Map();
-      this.objectStoreNames = { contains: (n) => this.stores.has(n) };
-      for (const name of ['floors', 'projects', 'savedFloors', 'catalogs']) this.stores.set(name, new FakeStore(name));
-    }
-    transaction(name) { const store = this.stores.get(name); return { objectStore: () => store }; }
-  }
-  const fakeDb = new FakeDB();
-  globalThis.indexedDB = { open() { const req = new FakeRequest(); queueMicrotask(() => req.onsuccess?.({ target: { result: fakeDb } })); return req; } };
-}
-installFakeIndexedDB();
+installLoggingFakeIndexedDb(putLog);
 
 const X = [-3000, 0, 1000, 4000];
 const Y = [-3000, 0, 1500, 3000, 6000];

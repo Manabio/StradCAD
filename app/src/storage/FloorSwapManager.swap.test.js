@@ -16,6 +16,7 @@ import { FloorSwapManager, MAX_SWAP_SAVE_ATTEMPTS } from './FloorSwapManager.js'
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { noteFloorWrite } from './floorWriteGeneration.js';
 import { saveFloor } from './db.js';
+import { FakeRequest, installFakeIndexedDbWithTransaction } from './fakeIndexedDbTestFixtures.js';
 import { isDirty, clearDirty } from '../dirtyState.js';
 import { ERR_FLOOR_SWITCH_UNSTABLE } from '../error.js';
 
@@ -23,8 +24,6 @@ function makeGraph(planeId) {
   const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
   return { plane, graph: new PlanGraph(plane) };
 }
-
-class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
 
 class FakeStore {
   constructor() { this.data = new Map(); this.putCount = 0; this.getCount = 0; }
@@ -91,15 +90,7 @@ const fakeTransaction = () => ({
   oncomplete: null, onerror: null,
   objectStore: (name) => fakeStores[name],
 });
-globalThis.indexedDB = {
-  open() {
-    const req = new FakeRequest();
-    queueMicrotask(() => req.onsuccess?.({
-      target: { result: { transaction: fakeTransaction, objectStoreNames: { contains: (name) => name in fakeStores } } },
-    }));
-    return req;
-  },
-};
+installFakeIndexedDbWithTransaction(fakeStores, fakeTransaction);
 
 test('swap: 保存が保留されている間（隙間A）に割り込んだ編集を検知して再保存する（put 2回・保存内容に編集後の点が入る）', async () => {
   const mgr = new FloorSwapManager();

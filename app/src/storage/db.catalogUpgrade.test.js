@@ -17,10 +17,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { saveDocumentCatalog, DB_VERSION } from './db.js';
+import { FakeRequest } from './fakeIndexedDbTestFixtures.js';
 
 const EXISTING_STORE_NAMES = ['floors', 'projects', 'savedFloors']; // v5時点で既に存在するストア
 
-class FakeRequest { constructor() { this.onsuccess = null; this.onerror = null; } }
 class FakeStore {
   constructor(keyPath) { this.keyPath = keyPath; this.data = new Map(); }
   put(value) {
