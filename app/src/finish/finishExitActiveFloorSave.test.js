@@ -15,6 +15,7 @@ import { saveFloor } from '../storage/db.js';
 import { runFinishEntryBoundary, runFinishExitBoundary } from './finishBoundary.js';
 import { loadMaterialMap } from './wallRegeneration.js';
 import { stairPortEdges } from './stair/stairGeometry.js';
+import { stripBlockAndCommentLines as stripComments } from '../uiBusySourceScan.js';
 
 const putLog = []; // floors ストアへの put の planeId
 function installFakeIndexedDB() {
@@ -154,7 +155,6 @@ test('saveActiveFloorFn は stamps で省いた脱出では呼ばれない', asy
 
 // ---- 配線（ソース走査。コメント行・/* */ は除いて検査） ----
 const readSrc = (rel) => fs.readFileSync(path.resolve(import.meta.dirname, '..', rel), 'utf8');
-const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).filter(l => !l.trim().startsWith('//')).join('\n');
 
 test('【配線】App.jsx: finish.exit は saveActiveFloorFn: saveFloor を渡す（App.jsx 内で runFinishExitBoundary を呼ぶのは1箇所）', () => {
   const code = stripComments(readSrc('App.jsx'));

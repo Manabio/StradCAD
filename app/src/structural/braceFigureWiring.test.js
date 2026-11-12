@@ -4,8 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripBlockAndTrailingComments as stripComments } from '../uiBusySourceScan.js';
 
-const stripComments = text => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 const read = rel => stripComments(fs.readFileSync(path.resolve(import.meta.dirname, rel), 'utf8'));
 
 test('【配線】StructuralLayer: braceCrossSegments の結果をスラブ塗りの後ろの listening={false} の Group で細線に描く', () => {

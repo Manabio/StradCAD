@@ -10,15 +10,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripCommentLikeLines as stripComments } from '../uiBusySourceScan.js';
 
 const filePath = path.resolve(import.meta.dirname, 'OpeningEditor.jsx');
 const src = fs.readFileSync(filePath, 'utf8');
-
-function stripComments(text) {
-  return text.split(/\r?\n/)
-    .filter(line => !line.trim().startsWith('//') && !line.trim().startsWith('*') && !line.trim().startsWith('/*'))
-    .join('\n');
-}
 
 const codeOnly = stripComments(src);
 

@@ -6,14 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readAppSrc, stripCommentLines } from '../uiBusySourceScan.js';
+import { readAppSrc, stripCommentLines, stripBlockAndCommentLines as stripComments } from '../uiBusySourceScan.js';
 
-function stripComments(text) {
-  const withoutBlockComments = text.replace(/\/\*[\s\S]*?\*\//g, '');
-  return withoutBlockComments.split(/\r?\n/)
-    .filter(line => !line.trim().startsWith('//'))
-    .join('\n');
-}
 const read = name => stripComments(fs.readFileSync(path.resolve(import.meta.dirname, name), 'utf8'));
 
 const layer = read('PlanSolidsLayer.jsx');

@@ -6,13 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripBlockAndCommentLines as stripComments } from '../uiBusySourceScan.js';
 
-function stripComments(text) {
-  const withoutBlockComments = text.replace(/\/\*[\s\S]*?\*\//g, '');
-  return withoutBlockComments.split(/\r?\n/)
-    .filter(line => !line.trim().startsWith('//'))
-    .join('\n');
-}
 const codeOnly = stripComments(fs.readFileSync(path.resolve(import.meta.dirname, 'RoomLabelsLayer.jsx'), 'utf8'));
 
 test('【配線】RoomLabelsLayer は室名ラベルを if (!showsRoomNameLabel(room)) return null; で出し分ける（1行まるごと・room.name 直読みの経路を残さない）', () => {

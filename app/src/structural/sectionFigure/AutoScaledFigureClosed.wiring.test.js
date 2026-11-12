@@ -8,12 +8,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripCommentLikeLines } from '../../uiBusySourceScan.js';
 
 const SRC = fs.readFileSync(path.join(import.meta.dirname, 'AutoScaledFigure.jsx'), 'utf8').replace(/\r\n/g, '\n');
-
-function stripCommentLines(text) {
-  return text.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-}
 
 function polylineCaseBody(text) {
   const start = text.indexOf("case 'polyline':");
@@ -24,17 +21,17 @@ function polylineCaseBody(text) {
 }
 
 test('【不変条件】AutoScaledFigure: closed の polyline は <polygon>、開いたものは <polyline> で描く', () => {
-  const body = polylineCaseBody(stripCommentLines(SRC));
+  const body = polylineCaseBody(stripCommentLikeLines(SRC));
   assert.match(body, /const Tag = p\.closed \? 'polygon' : 'polyline';/, 'closed で polygon/polyline を切り替える');
   assert.match(body, /<Tag key=\{i\} points=/, '切り替えた Tag で描く');
   assert.doesNotMatch(body, /<polyline key=/, '固定の <polyline> が残っている（closed が線で閉じない）');
 });
 
 test('【検出力】本体を <polyline> 固定に戻した文字列では落ちる・コメントに書いただけでは通らない', () => {
-  const body = polylineCaseBody(stripCommentLines(SRC));
+  const body = polylineCaseBody(stripCommentLikeLines(SRC));
   const broken = body.replace("const Tag = p.closed ? 'polygon' : 'polyline';", '').replace('<Tag key={i} points=', '<polyline key={i} points=');
   assert.doesNotMatch(broken, /const Tag = p\.closed \? 'polygon' : 'polyline';/);
   assert.match(broken, /<polyline key=/);
-  const commentOnly = stripCommentLines("case 'polyline':\n      // const Tag = p.closed ? 'polygon' : 'polyline';\n      return <polyline key={i} points={x} />;\n    case 'hSection':");
+  const commentOnly = stripCommentLikeLines("case 'polyline':\n      // const Tag = p.closed ? 'polygon' : 'polyline';\n      return <polyline key={i} points={x} />;\n    case 'hSection':");
   assert.doesNotMatch(polylineCaseBody(commentOnly), /const Tag = p\.closed/);
 });

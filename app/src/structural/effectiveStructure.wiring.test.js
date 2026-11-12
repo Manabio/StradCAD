@@ -8,12 +8,9 @@ import path from 'node:path';
 import {
   effectiveStructure, isBasementPlane, normalizeBasementStructure, BASEMENT_STRUCTURE_OPTIONS,
 } from './structureRules.js';
+import { stripBlockAndTrailingComments as stripComments } from '../uiBusySourceScan.js';
 
 const srcRoot = path.resolve(import.meta.dirname, '..');
-
-function stripComments(text) {
-  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-}
 
 function walk(dir, out = []) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {

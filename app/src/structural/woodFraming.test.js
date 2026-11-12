@@ -14,6 +14,7 @@ import {
 } from './woodFraming.js';
 import { WOOD_BEAM_DEPTH_TABLE, TRADITIONAL_WOOD_FRAMING, TRADITIONAL_WOOD_BACKING, rulesFor, TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { findSectionEntry, woodRectSectionKey, SECTION_CATALOG } from './sectionCatalog.js';
+import { stripCommentsKeepStrings as stripComments } from '../uiBusySourceScan.js';
 
 test('woodBeamDepthMm: 梁成表（最終行は中間荷重3か所＝ユーザー確認済み）を距離区分×中間荷重数で引く', () => {
   // 1820以下
@@ -1137,38 +1138,10 @@ test('SUPPORT_SPAN_PRIORITY_ORDER: 現行の並びは通り芯＞意匠中心線
 // 「同じ型の不良が走査地点ごとに1つずつ発覚する」——ヘルパを直接呼ぶテストだけでは、
 // woodFraming.js自身が二重書きへ戻っていないかは検証できない）。
 
-// 文字列リテラル（'..'・".."・`..`）の中身は保持し、それ以外の//行コメント・/* */ブロックコメント
-// （JSDoc含む）だけを取り除く簡易ストリッパー（フルパーサではない。本ファイルの構文範囲で十分——
-// 正規表現リテラルは無く、テンプレートリテラルの中身に対象キーワードは含まれない）。
-function stripComments(src) {
-  let out = '';
-  for (let i = 0; i < src.length;) {
-    const two = src.slice(i, i + 2);
-    if (two === '//') {
-      const nl = src.indexOf('\n', i);
-      i = nl === -1 ? src.length : nl;
-      continue;
-    }
-    if (two === '/*') {
-      const end = src.indexOf('*/', i + 2);
-      i = end === -1 ? src.length : end + 2;
-      continue;
-    }
-    const ch = src[i];
-    if (ch === '\'' || ch === '"' || ch === '`') {
-      let j = i + 1;
-      while (j < src.length && src[j] !== ch) {
-        j += src[j] === '\\' ? 2 : 1;
-      }
-      out += src.slice(i, Math.min(j + 1, src.length));
-      i = j + 1;
-      continue;
-    }
-    out += ch;
-    i += 1;
-  }
-  return out;
-}
+// stripComments（uiBusySourceScan.js の stripCommentsKeepStrings）: 文字列リテラル（'..'・".."・`..`）の
+// 中身は保持し、それ以外の//行コメント・/* */ブロックコメント（JSDoc含む）だけを取り除く簡易ストリッパー
+// （フルパーサではない。本ファイルの構文範囲で十分——正規表現リテラルは無く、テンプレートリテラルの
+// 中身に対象キーワードは含まれない）。
 
 test('【不変条件】woodFraming.js: 支持長超過の優先順ループが SUPPORT_SPAN_PRIORITY_ORDER だけを走り、種別リテラルの配列を再定義していない', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, './woodFraming.js'), 'utf8');

@@ -5,43 +5,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripCommentsKeepStrings as stripComments, extractBalancedBody } from '../uiBusySourceScan.js';
 
 const appSrc = path.resolve(import.meta.dirname, '..');
 const readSrc = rel => fs.readFileSync(path.join(appSrc, rel), 'utf8');
-
-// 文字列リテラルは保持し、// と /* */ のコメントだけを取り除く（コメント中の言及で「配線されている」と誤検知しない）。
-function stripComments(src) {
-  let out = '';
-  for (let i = 0; i < src.length;) {
-    const two = src.slice(i, i + 2);
-    if (two === '//') { const nl = src.indexOf('\n', i); i = nl === -1 ? src.length : nl; continue; }
-    if (two === '/*') { const end = src.indexOf('*/', i + 2); i = end === -1 ? src.length : end + 2; continue; }
-    const ch = src[i];
-    if (ch === '\'' || ch === '"' || ch === '`') {
-      let j = i + 1;
-      while (j < src.length && src[j] !== ch) j += src[j] === '\\' ? 2 : 1;
-      out += src.slice(i, Math.min(j + 1, src.length));
-      i = j + 1;
-      continue;
-    }
-    out += ch;
-    i += 1;
-  }
-  return out;
-}
-
-// signature は関数本体開始の '{' で終わる完全な文字列。波かっこの深さで本体を切り出す。
-function extractBalancedBody(src, signature) {
-  const startIdx = src.indexOf(signature);
-  if (startIdx < 0) return null;
-  const braceStart = startIdx + signature.length - 1;
-  let depth = 0, i = braceStart;
-  for (; i < src.length; i++) {
-    if (src[i] === '{') depth++;
-    else if (src[i] === '}') { depth--; if (depth === 0) break; }
-  }
-  return src.slice(braceStart, i + 1);
-}
 
 // ---- 判定（本体文字列 → 真偽。検出力テストにも同じ関数を渡す）----
 const hasMenuItem = src => /id:\s*'detail-helper'\s*,\s*label:\s*'部分詳細'/.test(src);

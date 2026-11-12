@@ -4,10 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripBlockAndTrailingComments as stripComments } from '../uiBusySourceScan.js';
 
-function stripComments(text) {
-  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-}
 const read = name => stripComments(fs.readFileSync(path.resolve(import.meta.dirname, name), 'utf8'));
 
 test('【配線】StructuralPanel.jsx: タブ「外部」（id roof）を持ち、RoofSpecTab に graph・composition・project・onStructureChanged を渡す', () => {

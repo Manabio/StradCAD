@@ -6,16 +6,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripBlockAndCommentLines as stripComments } from '../uiBusySourceScan.js';
 
 const filePath = path.resolve(import.meta.dirname, 'EquipmentSymbolLayer.jsx');
 const src = fs.readFileSync(filePath, 'utf8');
-
-function stripComments(text) {
-  const withoutBlockComments = text.replace(/\/\*[\s\S]*?\*\//g, '');
-  return withoutBlockComments.split(/\r?\n/)
-    .filter(line => !line.trim().startsWith('//'))
-    .join('\n');
-}
 
 const codeOnly = stripComments(src);
 

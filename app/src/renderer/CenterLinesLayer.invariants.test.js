@@ -7,16 +7,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+// 行頭コメント（`//`・`*`・`/*`で始まる行）を除外する（OpeningsLayer.wiring.test.jsと同じ方針）。
+import { stripCommentLikeLines as stripComments } from '../uiBusySourceScan.js';
 
 function readSource() {
   return fs.readFileSync(path.resolve(import.meta.dirname, 'CenterLinesLayer.jsx'), 'utf8');
-}
-
-// 行頭コメント（`//`・`*`・`/*`で始まる行）を除外する（OpeningsLayer.wiring.test.jsと同じ方針）。
-function stripComments(text) {
-  return text.split(/\r?\n/)
-    .filter(line => !line.trim().startsWith('//') && !line.trim().startsWith('*') && !line.trim().startsWith('/*'))
-    .join('\n');
 }
 
 // CenterLinesLayer本体（`export const CenterLinesLayer = observer((...) => {` から、対応する

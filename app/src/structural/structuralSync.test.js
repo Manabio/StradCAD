@@ -16,6 +16,7 @@ import { TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from './structureRu
 import { placeOpeningWithDefaults, removeOpeningWithUndo, setOpeningGeometryListener, openingGeometryChanged } from '../openings/openingEdit.js';
 import { createStructuralSync, structuralSync, SYNC_SCOPES, OPENING_STRUCTURAL_SYNC } from './structuralSync.js';
 import { CL_KINDS, structuralSyncScopeOfKind } from '../core/centerLineKindPolicy.js';
+import { extractFunctionBody, stripCommentLines } from '../uiBusySourceScan.js';
 
 // ================================================================
 // openingGeometryChanged
@@ -599,26 +600,10 @@ test('統合: 1回目のrequestが実行中（recompute未完了）に位置を�
 // （波括弧の対応数で関数本体を抽出し、行コメントを落としてから判定する）。
 // ================================================================
 
-function extractFunctionBody(src, functionStartNeedle) {
-  const startIdx = src.indexOf(functionStartNeedle);
-  assert.ok(startIdx >= 0, `${functionStartNeedle} が見つからない`);
-  const parenCloseIdx = src.indexOf(') {', startIdx);
-  const braceStart = src.indexOf('{', parenCloseIdx);
-  let depth = 0, i = braceStart;
-  for (; i < src.length; i++) {
-    if (src[i] === '{') depth++;
-    else if (src[i] === '}') { depth--; if (depth === 0) break; }
-  }
-  const body = src.slice(braceStart, i + 1);
-  return stripCommentLines(body);
-}
-
+// extractFunctionBody・stripCommentLines は uiBusySourceScan.js から import する（stripCommentLines は
 // コメント行（行頭が // のもの）を落とす——ソース文字列検査がコメント中の言及にも一致して
-// 変異を見逃さないようにする（team-lessons 2026-09-23「配線テストがコメント文にも一致して変異を
+// 変異を見逃さないようにする。team-lessons 2026-09-23「配線テストがコメント文にも一致して変異を
 // 見逃す」）。
-function stripCommentLines(src) {
-  return src.split(/\r?\n/).filter(line => !line.trim().startsWith('//')).join('\n');
-}
 
 function assertWhenIdleBefore(body, targetNeedle, label) {
   const idleIdx = body.indexOf('structuralSync.whenIdle()');

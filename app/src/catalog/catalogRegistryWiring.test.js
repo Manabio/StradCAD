@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { extractBodyAfterParams } from '../uiBusySourceScan.js';
 
 const appSrc = path.resolve(import.meta.dirname, '..');
 
@@ -104,32 +105,10 @@ test('【不変条件・ステップ4】store.js: exportDocumentはIDBから読�
 
 // ---- 波括弧の対応を数えて関数本体を取り出す（wallRefresh.test.js の bootReady 抽出と同型。
 // ネストしたブロック（if/for等）を含む本体を非貪欲正規表現で誤って途中打ち切りしないため）----
-// 通常の関数（isArrowIife:false）は、まず引数リストの丸括弧を対応させて閉じ位置を求めてから
-// その後の最初の { を本体開始とする——分割代入引数（`({ a, b } = {}) {`）を持つ関数で、
-// 引数側のオブジェクトパターンの { を本体開始と誤認しないため（2026-09-22 再QA対応で追加した
+// extractBodyAfterParams（uiBusySourceScan.js）: 通常の関数（isArrowIife:false）は、まず引数リストの丸括弧を
+// 対応させて閉じ位置を求めてからその後の最初の { を本体開始とする——分割代入引数（`({ a, b } = {}) {`）を持つ
+// 関数で、引数側のオブジェクトパターンの { を本体開始と誤認しないため（2026-09-22 再QA対応で追加した
 // loadCatalogOverlaysFromIDB({ ... } = {}) のような形を正しく扱うために必要）。
-function extractBalancedBody(src, signatureOrConstName, { isArrowIife = false } = {}) {
-  const startIdx = src.indexOf(signatureOrConstName);
-  if (startIdx < 0) return null;
-  let braceStart;
-  if (isArrowIife) {
-    braceStart = src.indexOf('{', src.indexOf('=> {', startIdx));
-  } else {
-    const parenStart = src.indexOf('(', startIdx);
-    let pdepth = 0, j = parenStart;
-    for (; j < src.length; j++) {
-      if (src[j] === '(') pdepth++;
-      else if (src[j] === ')') { pdepth--; if (pdepth === 0) break; }
-    }
-    braceStart = src.indexOf('{', j);
-  }
-  let depth = 0, i = braceStart;
-  for (; i < src.length; i++) {
-    if (src[i] === '{') depth++;
-    else if (src[i] === '}') { depth--; if (depth === 0) break; }
-  }
-  return src.slice(braceStart, i + 1);
-}
 
 // 2026-09-22 QA指摘C: bootReadyがloadCatalogOverlaysFromIDBを呼び、setupStructGraph（最初の
 // restoreGraph=floorSwapManager.activateより前）より前であることを固定する。
@@ -137,7 +116,7 @@ function extractBalancedBody(src, signatureOrConstName, { isArrowIife = false } 
 // なってしまうため、両方が存在すること自体も個別に assert する）。
 test('【不変条件・ステップ4】store.js: bootReadyがloadCatalogOverlaysFromIDBをsetupStructGraphより前に呼んでいる', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export const bootReady', { isArrowIife: true });
+  const body = extractBodyAfterParams(src, 'export const bootReady', { isArrowIife: true });
   assert.ok(body, 'store.js に bootReady のIIFE本体が見つからない');
   const overlayIdx = body.indexOf('loadCatalogOverlaysFromIDB(');
   const structIdx  = body.indexOf('setupStructGraph(');
@@ -154,7 +133,7 @@ test('【不変条件・ステップ4】store.js: bootReadyがloadCatalogOverlay
 // 構造復元より前に文書同梱・ユーザーライブラリの整合を取る）。
 test('【不変条件・ステップ6-1】store.js: bootReadyがreconcileIncomingCatalogsをloadCatalogOverlaysFromIDBの直後・setupStructGraphより前に呼んでいる', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export const bootReady', { isArrowIife: true });
+  const body = extractBodyAfterParams(src, 'export const bootReady', { isArrowIife: true });
   assert.ok(body, 'store.js に bootReady のIIFE本体が見つからない');
   const overlayIdx = body.indexOf('loadCatalogOverlaysFromIDB(');
   const reconcileIdx = body.indexOf('reconcileIncomingCatalogs(');
@@ -193,7 +172,7 @@ test('【不変条件・ステップ7d→8f→10d→12d→部分詳細図S2→S6
     /const RECONCILE_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.DETAIL_FIGURE, CatalogKind\.OPENING_SUB_TYPE, CatalogKind\.FIXTURE_SYMBOL\];/.test(src),
     'store.js に RECONCILE_KINDS（7種別）が見つからない',
   );
-  const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
+  const body = extractBodyAfterParams(src, 'export async function reconcileIncomingCatalogs() {');
   assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
   assert.ok(/for\s*\(\s*const kind of RECONCILE_KINDS\s*\)\s*\{/.test(body), 'reconcileIncomingCatalogs が RECONCILE_KINDS をforループしていない（種別ループへの一般化が欠落）');
 
@@ -210,7 +189,7 @@ test('【不変条件・ステップ7d→8f→10d→12d→部分詳細図S2→S6
 
   const docGuardMatch = /if\s*\(\s*doc\.length\s*>\s*0\s*\)\s*\{/.exec(body);
   assert.ok(docGuardMatch, 'doc固有処理（planIncomingReconcile等）を if (doc.length > 0) で分岐していない');
-  const docBlock = extractBalancedBody(body, 'if (doc.length > 0) {');
+  const docBlock = extractBodyAfterParams(body, 'if (doc.length > 0) {');
   assert.ok(docBlock, 'if (doc.length > 0) { ... } ブロックの中身を取得できない');
   assert.ok(!/detectLibraryConflicts\(/.test(docBlock), 'detectLibraryConflicts がif (doc.length > 0)ブロックの中にある（docが空だと呼ばれない退行）');
   const afterDocBlock = body.slice(body.indexOf(docBlock) + docBlock.length);
@@ -224,7 +203,7 @@ test('【不変条件・ステップ7d→8f→10d→12d→部分詳細図S2→S6
 // project.setCatalogError を「。」区切りで1回だけ呼ぶ。
 test('【不変条件・ステップ7d Minor-3】store.js: reconcileIncomingCatalogsは種別ごとにtry/catchで失敗をKIND_LABELS付きでfailureNoticesへ積み、ループの外でfailureNoticesを先頭にしてproject.setCatalogErrorを1回だけ呼ぶ', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
+  const body = extractBodyAfterParams(src, 'export async function reconcileIncomingCatalogs() {');
   assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
   assert.ok(/\btry\s*\{/.test(body), 'reconcileIncomingCatalogs が try を持っていない');
   const catchMatch = /catch\s*\(\s*e\s*\)\s*\{([\s\S]*?)\n {4}\}/.exec(body);
@@ -236,7 +215,7 @@ test('【不変条件・ステップ7d Minor-3】store.js: reconcileIncomingCata
 
   // ループの外（forブロックの後）でfailureNotices/successNoticesを合流し1回だけjoinしてsetCatalogErrorする
   // （extractBalancedBodyでforループ自体の本体を切り出し、その後続だけを見る。改行コードに依存しない）。
-  const forBodyText = extractBalancedBody(body, 'for (const kind of RECONCILE_KINDS) {');
+  const forBodyText = extractBodyAfterParams(body, 'for (const kind of RECONCILE_KINDS) {');
   assert.ok(forBodyText, 'for (const kind of RECONCILE_KINDS) { ... } の中身を取得できない');
   const afterLoop = body.slice(body.indexOf(forBodyText) + forBodyText.length);
   assert.ok(/project\.setCatalogResolveRows\(/.test(afterLoop), 'forループの直後にproject.setCatalogResolveRowsが続いていない（種別ループの外で1回だけ行う契約）');
@@ -256,7 +235,7 @@ test('【不変条件・ステップ7d Minor-3】store.js: reconcileIncomingCata
   // 種別ごとの通知はfailureNotices/successNoticesへpushするだけ——ループの中でproject.setCatalogErrorを
   // 呼ぶと（種別数ぶん複数回＋最後の1回で）計2回以上呼ばれてしまう（変異=notice検出時にその場で
   // setCatalogErrorも呼ぶ、で赤）。
-  const loopBodyText = extractBalancedBody(body, 'for (const kind of RECONCILE_KINDS) {');
+  const loopBodyText = extractBodyAfterParams(body, 'for (const kind of RECONCILE_KINDS) {');
   assert.ok(loopBodyText, 'for (const kind of RECONCILE_KINDS) { ... } の中身を取得できない');
   assert.ok(
     !/project\.setCatalogError\(/.test(loopBodyText),
@@ -270,7 +249,7 @@ test('【不変条件・ステップ7d Minor-3】store.js: reconcileIncomingCata
 // 誤って報告しないため）。
 test('【不変条件・ステップ6-1・QA指摘2】store.js: reconcileIncomingCatalogsはformatReconcileNoticeにresult.addedKeys.length/result.skipped.lengthを渡している', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
+  const body = extractBodyAfterParams(src, 'export async function reconcileIncomingCatalogs() {');
   assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
   const noticeCallMatch = /formatReconcileNotice\(plan,\s*\{([\s\S]*?)\}\)/.exec(body);
   assert.ok(noticeCallMatch, 'formatReconcileNotice(plan, {...}) 呼び出しが見つからない（第2引数省略への退行）');
@@ -307,7 +286,7 @@ test('【不変条件・ステップ4】catalog/catalogOverlayLoader.js: validat
 // ガードにcatalogErrorが使われていないことも合わせて固定する（ガードをcatalogErrorに戻す退行を検知）。
 test('【不変条件・ステップ4・Major-D→7c改名・Major-1】store.js: saveCatalogDocumentはproject.catalogOverlayUntrustedが立っている間、saveDocumentCatalogsを呼ばない（catalogErrorはガードに使わない）', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  const body = extractBodyAfterParams(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
   const guardMatch = /if\s*\(\s*project\.catalogOverlayUntrusted\s*\)/.exec(body);
   assert.ok(guardMatch, 'saveCatalogDocument の先頭に catalogOverlayUntrusted ガード（if (project.catalogOverlayUntrusted)）が無い');
@@ -324,7 +303,7 @@ test('【不変条件・ステップ4・Major-D→7c改名・Major-1】store.js:
 // catalogOverlayUntrustedとcatalogErrorの両方を立てることを固定する。
 test('【不変条件・ステップ4・Major-D】store.js: loadCatalogOverlaysFromIDBのonErrorはcatalogOverlayUntrustedとcatalogErrorの両方を立てる', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function loadCatalogOverlaysFromIDB(');
+  const body = extractBodyAfterParams(src, 'export async function loadCatalogOverlaysFromIDB(');
   assert.ok(body, 'store.js に loadCatalogOverlaysFromIDB が見つからない');
   const onErrorMatch = /onError:\s*\([^)]*\)\s*=>\s*\{([\s\S]*?)\},?\s*\}\);/.exec(body);
   assert.ok(onErrorMatch, 'loadCatalogOverlaysFromIDB の onError コールバックが見つからない');
@@ -344,7 +323,7 @@ test('【不変条件・ステップ4・Major-D】store.js: loadCatalogOverlaysF
 // ＝reconcileIncomingCatalogsのformatReconcileNoticeと同じ口）。
 test('【不変条件・ステップ14-S】store.js: loadCatalogOverlaysFromIDBはonNoticeをproject.setCatalogErrorへ配線している', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function loadCatalogOverlaysFromIDB(');
+  const body = extractBodyAfterParams(src, 'export async function loadCatalogOverlaysFromIDB(');
   assert.ok(body, 'store.js に loadCatalogOverlaysFromIDB が見つからない');
   const onNoticeMatch = /onNotice:\s*\([^)]*\)\s*=>\s*project\.setCatalogError\(/.exec(body);
   assert.ok(onNoticeMatch, 'loadCatalogOverlaysFromIDB が onNotice: (msg) => project.setCatalogError(...) を渡していない');
@@ -373,7 +352,7 @@ test('【不変条件・ステップ4・Major-D】App.jsx: project.catalogError�
   // bootReady.then(...) のコールバック本体「だけ」を波括弧の対応で切り出して検査する——
   // 素朴な非貪欲正規表現（[\s\S]*?）だとコールバックの閉じ括弧を越えて後続の reaction
   // コールバックまで拾ってしまい、削除済みの旧チェックが「無い」ことを正しく検出できない。
-  const thenBody = extractBalancedBody(src, 'bootReady.then(', { isArrowIife: true });
+  const thenBody = extractBodyAfterParams(src, 'bootReady.then(', { isArrowIife: true });
   assert.ok(thenBody, 'App.jsx に bootReady.then(...) が見つからない');
   assert.ok(
     !/if \(project\.catalogError\) setToast/.test(thenBody),
@@ -396,7 +375,7 @@ test('【不変条件・ステップ4・Major-D】App.jsx: project.catalogError�
 // （recoverUnresolvedEntries）してから保存していることを固定する（黙って落とす退行を検知）。
 test('【不変条件・ステップ4・QA指摘A→7c改名】store.js: saveCatalogDocumentはunresolvedKeysをrecoverUnresolvedEntriesで既存レコードから回収してから保存している', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  const body = extractBodyAfterParams(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
   assert.ok(/\bunresolvedKeys\b/.test(body), 'saveCatalogDocument が buildDocumentBundle の unresolvedKeys を使っていない');
   const recoverIdx = body.indexOf('recoverUnresolvedEntries(');
@@ -410,7 +389,7 @@ test('【不変条件・ステップ4・QA指摘A→7c改名】store.js: saveCat
 // 推移展開をやり直し、不足分を解決して追記していることを固定する（回収分の材が漏れる退行を検知）。
 test('【不変条件・ステップ7c・Minor-2】store.js: saveCatalogDocumentはrecoverUnresolvedEntriesの後にreexpandTransitiveMaterialsで回収分の推移展開をやり直している', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  const body = extractBodyAfterParams(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
   const recoverIdx = body.indexOf('recoverUnresolvedEntries(');
   const reexpandIdx = body.indexOf('reexpandTransitiveMaterials(');
@@ -427,7 +406,7 @@ test('【不変条件・ステップ7c・Minor-2】store.js: saveCatalogDocument
 // コメント行に一致しないよう、全行コメントの行を除いたコードだけを検査する。
 test('【不変条件・部分詳細図S2】store.js: saveCatalogDocumentの回収後は recoverUnresolvedEntries(draftBundle) → reexpandTransitiveDetailFigures → recoverUnresolvedEntries(DETAIL_FIGURE) → reexpandTransitiveMaterials の順に並ぶ', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  const body = extractBodyAfterParams(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
   const code = body.split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
   const anchors = [
@@ -450,7 +429,7 @@ test('【不変条件・部分詳細図S2】store.js: saveCatalogDocumentの回�
 // （splitBundleByKind側の「非空のときだけ添える」判定に一本化する。QA指摘Minor-4=P5）。
 test('【不変条件・ステップ7c・Minor-4/P5】store.js: saveCatalogDocumentはBUNDLED_KINDSの各種別ぶんcurrentDocumentAliases(kind)を集めてbuildDocumentBundleへ渡し、空の種別を個別にはふるい落とさない', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  const body = extractBodyAfterParams(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
   assert.ok(
     /const aliases = Object\.fromEntries\(BUNDLED_KINDS\.map\(kind => \[kind, currentDocumentAliases\(kind\)\]\)\);/.test(body),
@@ -480,7 +459,7 @@ test('【不変条件・ステップ7c→8f→10d→12d→部分詳細図S2】st
     /^const BUNDLED_KINDS = \[CatalogKind\.MATERIAL, CatalogKind\.INTERIOR_MASTER, CatalogKind\.BOUNDARY_MASTER, CatalogKind\.SECTION, CatalogKind\.OPENING_SUB_TYPE, CatalogKind\.FIXTURE_SYMBOL, CatalogKind\.DETAIL_FIGURE\];/m.test(src),
     'store.js に BUNDLED_KINDS = [CatalogKind.MATERIAL, CatalogKind.INTERIOR_MASTER, CatalogKind.BOUNDARY_MASTER, CatalogKind.SECTION, CatalogKind.OPENING_SUB_TYPE, CatalogKind.FIXTURE_SYMBOL, CatalogKind.DETAIL_FIGURE] が見つからない',
   );
-  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  const body = extractBodyAfterParams(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
   assert.ok(
     /kindDef\(\s*kind\s*\)\.loadBuiltin\(\)/.test(body),
@@ -503,7 +482,7 @@ test('【不変条件・ステップ7c→8f→10d→12d→部分詳細図S2】st
 // （QA指摘Major-1: 収集ロジック自体はusedEntries.test.js側の単体テストで検証する）。
 test('【不変条件・ステップ7c・Major-1】store.js: collectCatalogUsageAcrossFloorsはdecodeFloorSnapshotしてcollectUsedKeysByKind(snapshots, BUNDLED_KINDS)へ委譲し、saveCatalogDocumentから呼ばれている', () => {
   const src = readSrc('store.js');
-  const collectBody = extractBalancedBody(src, 'async function collectCatalogUsageAcrossFloors(floorRecords) {');
+  const collectBody = extractBodyAfterParams(src, 'async function collectCatalogUsageAcrossFloors(floorRecords) {');
   assert.ok(collectBody, 'store.js に collectCatalogUsageAcrossFloors が見つからない');
   assert.ok(/decodeFloorSnapshot\(/.test(collectBody), 'collectCatalogUsageAcrossFloors が decodeFloorSnapshot を呼んでいない');
   assert.ok(
@@ -511,7 +490,7 @@ test('【不変条件・ステップ7c・Major-1】store.js: collectCatalogUsage
     'collectCatalogUsageAcrossFloors が collectUsedKeysByKind(snapshots, BUNDLED_KINDS) へ委譲していない（純ロジックの二重実装への退行）',
   );
 
-  const saveBody = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  const saveBody = extractBodyAfterParams(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(saveBody, 'store.js に saveCatalogDocument が見つからない');
   assert.ok(
     /collectCatalogUsageAcrossFloors\(/.test(saveBody),
@@ -524,7 +503,7 @@ test('【不変条件・ステップ7c・Major-1】store.js: collectCatalogUsage
 test('【不変条件】store.js: 同梱の使用キー収集（collectCatalogUsageAcrossFloors・collectCurrentCatalogUsage）は構造スナップショットも snapshots に加える', () => {
   const src = readSrc('store.js');
   for (const head of ['async function collectCatalogUsageAcrossFloors(floorRecords) {', 'async function collectCurrentCatalogUsage() {']) {
-    const body = extractBalancedBody(src, head);
+    const body = extractBodyAfterParams(src, head);
     assert.ok(body, `store.js に ${head} が見つからない`);
     assert.ok(
       /snapshots\.push\(\s*snapshotStructForCatalogUsage\(/.test(body),
@@ -541,7 +520,7 @@ test('【不変条件】store.js: 同梱の使用キー収集（collectCatalogUs
 // ここではsaveCatalogDocumentがその共有関数を経由していることだけを固定する）。
 test('【不変条件・ステップ7c→12b改訂】store.js: saveCatalogDocumentはexpandUsedMaterialsTransitively(rawUsedKeysByKind, resolvedByKind)経由でmaterialの推移展開を行う（interiorMasters/boundaryMastersの二重実装への退行を検知）', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  const body = extractBodyAfterParams(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
   assert.ok(
     /^\s*const usedKeysByKind = expandUsedMaterialsTransitively\(\s*expandUsedDetailFiguresTransitively\(\s*rawUsedKeysByKind,\s*resolvedByKind,\s*\{ excludeImported: true \}\s*\),\s*resolvedByKind\s*\);/m.test(body),
@@ -557,7 +536,7 @@ test('【不変条件・ステップ7c→12b改訂】store.js: saveCatalogDocume
 
 test('【不変条件・QA指摘M1・2026-09-24再報告】store.js: collectCurrentCatalogUsageが存在し、flushEditablePeek→アクティブ階のsaveFloor→全階のloadFloor→collectUsedKeysByKind→expandUsedMaterialsTransitivelyの手順で「未保存を含む現在の」使用キーを返す', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function collectCurrentCatalogUsage() {');
+  const body = extractBodyAfterParams(src, 'export async function collectCurrentCatalogUsage() {');
   assert.ok(body, 'store.js に collectCurrentCatalogUsage が見つからない（exportされていない可能性）');
   assert.ok(/floorSwapManager\.flushEditablePeek\(\)/.test(body), 'collectCurrentCatalogUsage が floorSwapManager.flushEditablePeek() を呼んでいない');
   assert.ok(/saveFloor\(\s*activePlane\.id,\s*serializeGraph\(activeGraph\)\s*\)/.test(body), 'collectCurrentCatalogUsage がアクティブ階を saveFloor で作業領域へ書き出していない（未保存編集が漏れる）');
@@ -583,7 +562,7 @@ test('【不変条件・QA指摘M1・2026-09-24再報告】store.js: collectCurr
 // リスクを持ち込む退行の両方を検知）。
 test('【不変条件・ステップ7c・Major-1】store.js: saveCatalogDocumentはsplitBundleByKindの結果を無条件にbytesByKindへ写し、単一のsaveDocumentCatalogs呼び出しで保存する（種別ごとの個別saveDocumentCatalogループへの退行を検知）', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'async function saveCatalogDocument(floorRecords) {');
+  const body = extractBodyAfterParams(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
   assert.ok(
     /const bytesByKind = new Map\(\s*\[\.\.\.splitBundleByKind\(finalBundle\)\]\.map\(\(\[kind, subBundle\]\) => \[kind, encodeCatalogBundle\(subBundle\)\]\),?\s*\);/.test(body),

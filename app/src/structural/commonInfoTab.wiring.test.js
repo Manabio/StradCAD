@@ -4,11 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readAppSrc, stripCommentLines, extractFunctionBody } from '../uiBusySourceScan.js';
-
-function stripComments(text) {
-  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-}
+import { readAppSrc, stripCommentLines, extractFunctionBody, stripBlockAndTrailingComments as stripComments } from '../uiBusySourceScan.js';
 const tabSrc = () => stripComments(fs.readFileSync(path.resolve(import.meta.dirname, 'CommonInfoTab.jsx'), 'utf8'));
 
 test('【S5d・配線】CommonInfoTab.jsx は行の分岐を commonTabStructureRow に任せ、チェックは row.showOverrideToggle のときだけ出す', () => {

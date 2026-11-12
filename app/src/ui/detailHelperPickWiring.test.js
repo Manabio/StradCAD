@@ -4,38 +4,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripCommentsKeepStrings as stripComments, topLevelBlock } from '../uiBusySourceScan.js';
 
 const appSrc = path.resolve(import.meta.dirname, '..');
 const readSrc = rel => fs.readFileSync(path.join(appSrc, rel), 'utf8');
-
-// 文字列リテラルは保持し、// と /* */ のコメントだけを取り除く。
-function stripComments(src) {
-  let out = '';
-  for (let i = 0; i < src.length;) {
-    const two = src.slice(i, i + 2);
-    if (two === '//') { const nl = src.indexOf('\n', i); i = nl === -1 ? src.length : nl; continue; }
-    if (two === '/*') { const end = src.indexOf('*/', i + 2); i = end === -1 ? src.length : end + 2; continue; }
-    const ch = src[i];
-    if (ch === '\'' || ch === '"' || ch === '`') {
-      let j = i + 1;
-      while (j < src.length && src[j] !== ch) j += src[j] === '\\' ? 2 : 1;
-      out += src.slice(i, Math.min(j + 1, src.length));
-      i = j + 1;
-      continue;
-    }
-    out += ch;
-    i += 1;
-  }
-  return out;
-}
-
-// 関数全体（次のトップレベル宣言の直前まで）。波括弧の数え合わせは JSX の {} で崩れないよう、開始位置から次の「\n}\n」まで。
-function topLevelBlock(src, startMarker) {
-  const s = src.indexOf(startMarker);
-  if (s < 0) return null;
-  const e = src.indexOf('\n}\n', s);
-  return e < 0 ? null : src.slice(s, e + 3);
-}
 
 // ---- 判定（本体文字列 → 真偽。検出力テストにも同じ関数を渡す）----
 // ジェスチャー層（S7d-2 で PickLayer から置き換え）は図読込み・ペン入力の両タブで渡す。矩形を引けるのは図読込みで scene があるときだけ（canPick）。

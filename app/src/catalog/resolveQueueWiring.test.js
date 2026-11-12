@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { extractBodyAfterParams } from '../uiBusySourceScan.js';
 
 const appSrc = path.resolve(import.meta.dirname, '..');
 
@@ -12,34 +13,10 @@ function readSrc(rel) {
   return fs.readFileSync(path.join(appSrc, rel), 'utf8');
 }
 
-// catalogRegistryWiring.test.js と同じ方式（バランスの取れた波括弧で関数本体を抜き出す）。
-function extractBalancedBody(src, signatureOrConstName, { isArrowIife = false } = {}) {
-  const startIdx = src.indexOf(signatureOrConstName);
-  if (startIdx < 0) return null;
-  let braceStart;
-  if (isArrowIife) {
-    braceStart = src.indexOf('{', src.indexOf('=> {', startIdx));
-  } else {
-    const parenStart = src.indexOf('(', startIdx);
-    let pdepth = 0, j = parenStart;
-    for (; j < src.length; j++) {
-      if (src[j] === '(') pdepth++;
-      else if (src[j] === ')') { pdepth--; if (pdepth === 0) break; }
-    }
-    braceStart = src.indexOf('{', j);
-  }
-  let depth = 0, i = braceStart;
-  for (; i < src.length; i++) {
-    if (src[i] === '{') depth++;
-    else if (src[i] === '}') { depth--; if (depth === 0) break; }
-  }
-  return src.slice(braceStart, i + 1);
-}
-
 // ---- store.js: reconcileIncomingCatalogs（(a)/(c)/propose の行組み立て） ----
 test('【不変条件・ステップ6-3】store.js: reconcileIncomingCatalogsはbuildResolveRowsの結果をreplaceRowsByScenario経由でproject.setCatalogResolveRowsへ積む', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function reconcileIncomingCatalogs() {');
+  const body = extractBodyAfterParams(src, 'export async function reconcileIncomingCatalogs() {');
   assert.ok(body, 'store.js に reconcileIncomingCatalogs が見つからない');
   assert.ok(/\bbuildResolveRows\(/.test(body), 'reconcileIncomingCatalogs が buildResolveRows を呼んでいない');
   assert.ok(
@@ -56,7 +33,7 @@ test('【不変条件・ステップ6-3】store.js: reconcileIncomingCatalogsは
 // kindsをrowsから集めてkindDef(kind).loadBuiltin()経由でvalidKeysByKindを種別ごとに組み立てる） ----
 test('【不変条件・ステップ7d QA指摘Major-2】store.js: applyCatalogResolutionsはrowsからkindの集合を集め、kindDef(kind).loadBuiltin()経由でcomposeCatalogしたvalidKeysByKind（Map<kind,Set>）をapplyResolveDecisionsの前に組み立てて渡す（単一Setへ合流しない）', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
+  const body = extractBodyAfterParams(src, 'export async function applyCatalogResolutions(decisions) {');
   assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
   assert.ok(
     /const kinds = \[\.\.\.new Set\(\s*rows\.map\(r => r\.kind\)\s*\)\]/.test(body),
@@ -68,7 +45,7 @@ test('【不変条件・ステップ7d QA指摘Major-2】store.js: applyCatalogR
   );
   const loopMatch = /for\s*\(\s*const kind of kinds\s*\)\s*\{/.exec(body);
   assert.ok(loopMatch, 'applyCatalogResolutions が kinds をforループしていない');
-  const loopBody = extractBalancedBody(body, loopMatch[0]);
+  const loopBody = extractBodyAfterParams(body, loopMatch[0]);
   assert.ok(loopBody, 'for (const kind of kinds) { ... } の中身を取得できない');
   assert.ok(/kindDef\(\s*kind\s*\)\.loadBuiltin\(\)/.test(loopBody), 'kindごとのbuiltin取得がkindDef(kind).loadBuiltin()経由になっていない（本体標準マスタを直接importする退行）');
   assert.ok(
@@ -91,11 +68,11 @@ test('【不変条件・ステップ7d QA指摘Major-2】store.js: applyCatalogR
 
 test('【不変条件・ステップ6-3・QA指摘Major-1】store.js: applyCatalogResolutionsはrejectedが非空ならproject.setCatalogErrorで通知する', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
+  const body = extractBodyAfterParams(src, 'export async function applyCatalogResolutions(decisions) {');
   assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
   const guardMatch = /if\s*\(\s*rejected\.length\s*>\s*0\s*\)\s*\{/.exec(body);
   assert.ok(guardMatch, 'applyCatalogResolutions が rejected.length > 0 を分岐していない');
-  const guardBody = extractBalancedBody(body, guardMatch[0]);
+  const guardBody = extractBodyAfterParams(body, guardMatch[0]);
   assert.ok(guardBody, 'if (rejected.length > 0) { ... } の中身を取得できない');
   assert.ok(
     /project\.setCatalogError\(\s*`指定した代替が見つかりません/.test(guardBody),
@@ -108,11 +85,11 @@ test('【不変条件・ステップ6-3・QA指摘Major-1】store.js: applyCatal
 // rejectedもあるため、理由を捨てると利用者に嘘の説明になる） ----
 test('【不変条件・ステップ10e QA指摘Minor-2】store.js: applyCatalogResolutionsのrejected通知メッセージはr.reasonを併記する', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
+  const body = extractBodyAfterParams(src, 'export async function applyCatalogResolutions(decisions) {');
   assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
   const guardMatch = /if\s*\(\s*rejected\.length\s*>\s*0\s*\)\s*\{/.exec(body);
   assert.ok(guardMatch, 'applyCatalogResolutions が rejected.length > 0 を分岐していない');
-  const guardBody = extractBalancedBody(body, guardMatch[0]);
+  const guardBody = extractBodyAfterParams(body, guardMatch[0]);
   assert.ok(guardBody, 'if (rejected.length > 0) { ... } の中身を取得できない');
   assert.ok(
     /rejected\.map\(\s*r\s*=>\s*`\$\{r\.key\}（\$\{r\.reason\}）`\s*\)/.test(guardBody),
@@ -122,12 +99,12 @@ test('【不変条件・ステップ10e QA指摘Minor-2】store.js: applyCatalog
 
 test('【不変条件・ステップ6-3・QA指摘Minor-2】store.js: applyCatalogResolutionsのアクティブ階往復はaliasPairs.length > 0のときだけ行い、markDirtyはuserOps/aliasPairsそれぞれで独立して立つ', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
+  const body = extractBodyAfterParams(src, 'export async function applyCatalogResolutions(decisions) {');
   assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
 
   const userOpsGuardMatch = /if\s*\(\s*userOps\.length\s*>\s*0\s*\)\s*\{/.exec(body);
   assert.ok(userOpsGuardMatch, 'if (userOps.length > 0) { ... } ブロックが見つからない');
-  const userOpsBlock = extractBalancedBody(body, userOpsGuardMatch[0]);
+  const userOpsBlock = extractBodyAfterParams(body, userOpsGuardMatch[0]);
   assert.ok(userOpsBlock, 'userOpsブロックの中身を取得できない');
   assert.ok(/commitUserEntries\(/.test(userOpsBlock), 'userOpsブロックがcommitUserEntriesを呼んでいない');
   assert.ok(/markDirty\(\)/.test(userOpsBlock), 'userOpsブロックがmarkDirty()を呼んでいない（ライブラリ変更のdirty化）');
@@ -135,7 +112,7 @@ test('【不変条件・ステップ6-3・QA指摘Minor-2】store.js: applyCatal
 
   const aliasGuardMatch = /if\s*\(\s*aliasPairs\.length\s*>\s*0\s*\)\s*\{/.exec(body);
   assert.ok(aliasGuardMatch, 'if (aliasPairs.length > 0) { ... } ブロックが見つからない');
-  const aliasBlock = extractBalancedBody(body, aliasGuardMatch[0]);
+  const aliasBlock = extractBodyAfterParams(body, aliasGuardMatch[0]);
   assert.ok(aliasBlock, 'aliasPairsブロックの中身を取得できない');
   assert.ok(/addDocumentAliases\(/.test(aliasBlock), 'aliasPairsブロックがaddDocumentAliasesを呼んでいない');
   assert.ok(
@@ -162,11 +139,11 @@ test('【不変条件・QA指摘Major-1・2026-09-23】store.js: applyCatalogRes
     /\{[^}]*\bremoveDocEntry\b[^}]*\}\s*from\s*['"]\.\/catalog\/catalogRegistry\.js['"]/.test(src),
     'store.js が removeDocEntry を catalog/catalogRegistry.js から import していない',
   );
-  const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
+  const body = extractBodyAfterParams(src, 'export async function applyCatalogResolutions(decisions) {');
   assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
   const aliasGuardMatch = /if\s*\(\s*aliasPairs\.length\s*>\s*0\s*\)\s*\{/.exec(body);
   assert.ok(aliasGuardMatch, 'if (aliasPairs.length > 0) { ... } ブロックが見つからない');
-  const aliasBlock = extractBalancedBody(body, aliasGuardMatch[0]);
+  const aliasBlock = extractBodyAfterParams(body, aliasGuardMatch[0]);
   assert.ok(aliasBlock, 'aliasPairsブロックの中身を取得できない');
   assert.ok(/\bremoveDocEntry\(/.test(aliasBlock), 'aliasPairsブロックが removeDocEntry を呼んでいない（QA指摘Major-1）');
   assert.ok(
@@ -184,11 +161,11 @@ test('【不変条件・QA指摘Major-1・2026-09-23】store.js: applyCatalogRes
 // ---- store.js: applyCatalogResolutions（ステップ7d: kind混在は例外にせずkindでグループ化する） ----
 test('【不変条件・ステップ7d】store.js: applyCatalogResolutionsのaliasPairsブロックはp.kindでグループ化し、種別ごとにaddDocumentAliases(kind, pairs)・removeDocEntry(kind, from)を呼ぶ（kind混在例外は無い）', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
+  const body = extractBodyAfterParams(src, 'export async function applyCatalogResolutions(decisions) {');
   assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
   const aliasGuardMatch = /if\s*\(\s*aliasPairs\.length\s*>\s*0\s*\)\s*\{/.exec(body);
   assert.ok(aliasGuardMatch, 'if (aliasPairs.length > 0) { ... } ブロックが見つからない');
-  const aliasBlock = extractBalancedBody(body, aliasGuardMatch[0]);
+  const aliasBlock = extractBodyAfterParams(body, aliasGuardMatch[0]);
   assert.ok(aliasBlock, 'aliasPairsブロックの中身を取得できない');
   assert.ok(
     !/複数種別のaliasPairsは未対応です/.test(aliasBlock),
@@ -196,7 +173,7 @@ test('【不変条件・ステップ7d】store.js: applyCatalogResolutionsのali
   );
   const groupMatch = /for\s*\(\s*const \[pKind, pairs\] of pairsByKind\s*\)\s*\{/.exec(aliasBlock);
   assert.ok(groupMatch, 'aliasPairsブロックが pairsByKind を for (const [pKind, pairs] of pairsByKind) でループしていない（kindでのグループ化が欠落）');
-  const groupBody = extractBalancedBody(aliasBlock, groupMatch[0]);
+  const groupBody = extractBodyAfterParams(aliasBlock, groupMatch[0]);
   assert.ok(groupBody, 'for (const [pKind, pairs] of pairsByKind) { ... } の中身を取得できない');
   assert.ok(/addDocumentAliases\(\s*pKind,\s*pairs\s*\)/.test(groupBody), 'グループ化ループが addDocumentAliases(pKind, pairs) を呼んでいない');
   assert.ok(/removeDocEntry\(\s*pKind,\s*from\s*\)/.test(groupBody), 'グループ化ループが removeDocEntry(pKind, from) を呼んでいない');
@@ -204,15 +181,15 @@ test('【不変条件・ステップ7d】store.js: applyCatalogResolutionsのali
 
 test('【不変条件・ステップ7d】store.js: applyCatalogResolutionsのuserOpsブロックはop.kindでグループ化し、種別ごとにcommitUserEntries(opKind, ...)を呼ぶ', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function applyCatalogResolutions(decisions) {');
+  const body = extractBodyAfterParams(src, 'export async function applyCatalogResolutions(decisions) {');
   assert.ok(body, 'store.js に applyCatalogResolutions が見つからない');
   const userOpsGuardMatch = /if\s*\(\s*userOps\.length\s*>\s*0\s*\)\s*\{/.exec(body);
   assert.ok(userOpsGuardMatch, 'if (userOps.length > 0) { ... } ブロックが見つからない');
-  const userOpsBlock = extractBalancedBody(body, userOpsGuardMatch[0]);
+  const userOpsBlock = extractBodyAfterParams(body, userOpsGuardMatch[0]);
   assert.ok(userOpsBlock, 'userOpsブロックの中身を取得できない');
   const groupMatch = /for\s*\(\s*const \[opKind, ops\] of opsByKind\s*\)\s*\{/.exec(userOpsBlock);
   assert.ok(groupMatch, 'userOpsブロックが opsByKind を for (const [opKind, ops] of opsByKind) でループしていない（kindでのグループ化が欠落）');
-  const groupBody = extractBalancedBody(userOpsBlock, groupMatch[0]);
+  const groupBody = extractBodyAfterParams(userOpsBlock, groupMatch[0]);
   assert.ok(groupBody, 'for (const [opKind, ops] of opsByKind) { ... } の中身を取得できない');
   assert.ok(/commitUserEntries\(\s*opKind,/.test(groupBody), 'グループ化ループが commitUserEntries(opKind, ...) を呼んでいない');
 });
@@ -220,7 +197,7 @@ test('【不変条件・ステップ7d】store.js: applyCatalogResolutionsのuse
 // ---- store.js: resetAll ----
 test('【不変条件・ステップ6-3】store.js: resetAllがproject.clearCatalogResolveRows()を呼んでいる', () => {
   const src = readSrc('store.js');
-  const body = extractBalancedBody(src, 'export async function resetAll() {');
+  const body = extractBodyAfterParams(src, 'export async function resetAll() {');
   assert.ok(body, 'store.js に resetAll が見つからない');
   assert.ok(/\bproject\.clearCatalogResolveRows\(\)/.test(body), 'resetAll が project.clearCatalogResolveRows() を呼んでいない');
 });
@@ -232,7 +209,7 @@ test('【不変条件・ステップ6-3】modes/FinishModeState.js: initがbuild
   assert.ok(/\bbuildResolveRows\(/.test(src), 'FinishModeState.js が buildResolveRows を呼んでいない');
   assert.ok(/\bpeekUnresolvedCodes\(\)/.test(src), 'FinishModeState.js が peekUnresolvedCodes() を呼んでいない（非破壊で覗く契約。takeUnresolvedCodesではない）');
   assert.ok(!/\btakeUnresolvedCodes\(\)/.test(src), 'FinishModeState.js がtakeUnresolvedCodesを呼んでいる（他の消費者の蓄積を消してしまう退行。peekUnresolvedCodesを使う契約）');
-  const initBody = extractBalancedBody(src, 'async init() {');
+  const initBody = extractBodyAfterParams(src, 'async init() {');
   assert.ok(initBody, 'FinishModeState.js に init() が見つからない');
   assert.ok(/catalogResolveRows/.test(initBody), 'init() の戻り値にcatalogResolveRowsが含まれていない');
 });
@@ -366,7 +343,7 @@ test('【不変条件・ステップ10e】modes/OpeningModeState.js: initがkind
   const src = readSrc('modes/OpeningModeState.js');
   assert.ok(/from ['"]\.\.\/catalog\/resolveQueue\.js['"]/.test(src), 'OpeningModeState.js が catalog/resolveQueue.js を import していない');
   assert.ok(/from ['"]\.\.\/catalog\/catalogRegistry\.js['"]/.test(src), 'OpeningModeState.js が catalog/catalogRegistry.js を import していない');
-  const initBody = extractBalancedBody(src, 'async init() {');
+  const initBody = extractBodyAfterParams(src, 'async init() {');
   assert.ok(initBody, 'OpeningModeState.js に init() が見つからない');
   assert.ok(/kindDef\(\s*CatalogKind\.OPENING_SUB_TYPE\s*\)\.loadBuiltin\(\)/.test(initBody), 'init() が kindDef(CatalogKind.OPENING_SUB_TYPE).loadBuiltin() を呼んでいない（本体標準マスタを直接importする退行）');
   assert.ok(/composeCatalog\(\s*CatalogKind\.OPENING_SUB_TYPE,/.test(initBody), 'init() が composeCatalog(CatalogKind.OPENING_SUB_TYPE, ...) を呼んでいない');
@@ -380,7 +357,7 @@ test('【不変条件・ステップ10e】modes/OpeningModeState.js: initがkind
 // ---- modes/OpeningModeState.js: 場面(b)の行組み立て・建具記号（fixtureSymbol。ステップ12d） ----
 test('【不変条件・ステップ12d】modes/OpeningModeState.js: initがkindDef(FIXTURE_SYMBOL).loadBuiltin→composeCatalog→buildResolveRows(kind:FIXTURE_SYMBOL)で行を組み立てる', () => {
   const src = readSrc('modes/OpeningModeState.js');
-  const initBody = extractBalancedBody(src, 'async init() {');
+  const initBody = extractBodyAfterParams(src, 'async init() {');
   assert.ok(initBody, 'OpeningModeState.js に init() が見つからない');
   assert.ok(/kindDef\(\s*CatalogKind\.FIXTURE_SYMBOL\s*\)\.loadBuiltin\(\)/.test(initBody), 'init() が kindDef(CatalogKind.FIXTURE_SYMBOL).loadBuiltin() を呼んでいない（本体標準マスタを直接importする退行）');
   assert.ok(/composeCatalog\(\s*CatalogKind\.FIXTURE_SYMBOL,/.test(initBody), 'init() が composeCatalog(CatalogKind.FIXTURE_SYMBOL, ...) を呼んでいない');
@@ -392,7 +369,7 @@ test('【不変条件・ステップ8g】modes/StructuralModeState.js: initがki
   const src = readSrc('modes/StructuralModeState.js');
   assert.ok(/from ['"]\.\.\/catalog\/resolveQueue\.js['"]/.test(src), 'StructuralModeState.js が catalog/resolveQueue.js を import していない');
   assert.ok(/from ['"]\.\.\/catalog\/catalogRegistry\.js['"]/.test(src), 'StructuralModeState.js が catalog/catalogRegistry.js を import していない');
-  const initBody = extractBalancedBody(src, 'async init() {');
+  const initBody = extractBodyAfterParams(src, 'async init() {');
   assert.ok(initBody, 'StructuralModeState.js に init() が見つからない');
   assert.ok(/kindDef\(\s*CatalogKind\.SECTION\s*\)\.loadBuiltin\(\)/.test(initBody), 'init() が kindDef(CatalogKind.SECTION).loadBuiltin() を呼んでいない（本体標準マスタを直接importする退行）');
   assert.ok(/composeCatalog\(\s*CatalogKind\.SECTION,/.test(initBody), 'init() が composeCatalog(CatalogKind.SECTION, ...) を呼んでいない');
@@ -467,7 +444,7 @@ test('【不変条件・ステップ7d QA指摘Major-1】ui/CatalogResolveDialog
 // 一覧を絞る（categoryFilterの受け渡しと実装本体をアンカー。コメント文には当たらない形）----
 test('【不変条件・ステップ10e QA指摘Minor-4】ui/CatalogResolveDialog.jsx: EntryPickerはcategoryFilterでrowsを絞り、ResolveRowがopeningCategoryOf(row.targetKey)をopeningSubType行にだけ渡す', () => {
   const src = readSrc('ui/CatalogResolveDialog.jsx');
-  const pickerBody = extractBalancedBody(src, 'function EntryPicker(');
+  const pickerBody = extractBodyAfterParams(src, 'function EntryPicker(');
   assert.ok(pickerBody, 'ui/CatalogResolveDialog.jsx に EntryPicker が見つからない');
   assert.ok(
     /if\s*\(\s*categoryFilter\s*\)\s*rows\s*=\s*rows\.filter\(/.test(pickerBody),

@@ -5,12 +5,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripCommentLikeLines } from '../../uiBusySourceScan.js';
 
 const SRC = fs.readFileSync(path.join(import.meta.dirname, 'AutoScaledFigure.jsx'), 'utf8').replace(/\r\n/g, '\n');
-
-function stripCommentLines(text) {
-  return text.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-}
 
 function bodyOf(text, startMark, endMark) {
   const start = text.indexOf(startMark);
@@ -20,8 +17,8 @@ function bodyOf(text, startMark, endMark) {
   return text.slice(start, end);
 }
 
-const editable = src => bodyOf(stripCommentLines(src), 'function EditableDimLabel', '  return (');
-const staticDim = src => bodyOf(stripCommentLines(src), 'const vlx =', 'return (');
+const editable = src => bodyOf(stripCommentLikeLines(src), 'function EditableDimLabel', '  return (');
+const staticDim = src => bodyOf(stripCommentLikeLines(src), 'const vlx =', 'return (');
 
 // 回転ラベルの式は続く「: isH ?」まで固定する（末尾に項を足されると偽）
 const ROTATED_PX = /const px = \(rotated \? t\.tx\(dim\.at\) \+ \(labelLeft \? -\(6 \+ 8\) : 6 \+ 8\)\n\s*: isH \?/;

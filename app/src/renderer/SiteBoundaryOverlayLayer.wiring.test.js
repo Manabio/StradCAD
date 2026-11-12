@@ -5,10 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripBlockAndCommentLines as stripComments } from '../uiBusySourceScan.js';
 
-function stripComments(text) {
-  return text.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n');
-}
 const code = rel => stripComments(fs.readFileSync(path.resolve(import.meta.dirname, rel), 'utf8'));
 const count = (text, re) => (text.match(re) ?? []).length;
 

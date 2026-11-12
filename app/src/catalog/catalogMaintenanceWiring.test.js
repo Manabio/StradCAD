@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripCommentsKeepStrings as stripComments, extractBalancedBody } from '../uiBusySourceScan.js';
 
 const appSrc = path.resolve(import.meta.dirname, '..');
 
@@ -12,55 +13,11 @@ function readSrc(rel) {
   return fs.readFileSync(path.join(appSrc, rel), 'utf8');
 }
 
-// catalogRegistryWiring.test.js と同じ趣旨の抽出（ステップ12b QA指摘m4対応で追加。コメント文中の
-// 言及ではなく実装本体だけを見るため、対象関数の{}を波かっこの深さで正確に切り出す）。
-// signatureは末尾が関数本体開始の'{'まで含む完全な文字列で渡すこと（例:
+// extractBalancedBody の signature は末尾が関数本体開始の'{'まで含む完全な文字列で渡すこと（例:
 // 'async function performSave(plan, entryKey, meta = {}) {'）——
 // 引数の分割代入や既定値に'{'を含む関数でも、パラメータ内の'{'を本体開始と誤認しないため。
-function extractBalancedBody(src, signature) {
-  const startIdx = src.indexOf(signature);
-  if (startIdx < 0) return null;
-  const braceStart = startIdx + signature.length - 1;
-  let depth = 0, i = braceStart;
-  for (; i < src.length; i++) {
-    if (src[i] === '{') depth++;
-    else if (src[i] === '}') { depth--; if (depth === 0) break; }
-  }
-  return src.slice(braceStart, i + 1);
-}
-
-// ステップ14-A1: structural/woodFraming.test.js 等と同じ趣旨のコメント除去（コメント文中の
-// 言及だけで「本体が呼んでいる」と誤検知しないよう、文字列リテラルは保持しつつ // と /* */ の
-// コメントだけを取り除く）。
-function stripComments(src) {
-  let out = '';
-  for (let i = 0; i < src.length;) {
-    const two = src.slice(i, i + 2);
-    if (two === '//') {
-      const nl = src.indexOf('\n', i);
-      i = nl === -1 ? src.length : nl;
-      continue;
-    }
-    if (two === '/*') {
-      const end = src.indexOf('*/', i + 2);
-      i = end === -1 ? src.length : end + 2;
-      continue;
-    }
-    const ch = src[i];
-    if (ch === '\'' || ch === '"' || ch === '`') {
-      let j = i + 1;
-      while (j < src.length && src[j] !== ch) {
-        j += src[j] === '\\' ? 2 : 1;
-      }
-      out += src.slice(i, Math.min(j + 1, src.length));
-      i = j + 1;
-      continue;
-    }
-    out += ch;
-    i += 1;
-  }
-  return out;
-}
+// stripComments は文字列リテラルを保持しつつ // と /* */ のコメントだけを取り除く（コメント文中の
+// 言及だけで「本体が呼んでいる」と誤検知しないため）。
 
 test('【不変条件・ステップ5】ui/HamburgerMenu.jsx: 「カタログ保守」項目（id: catalog-maintenance）を持つ', () => {
   const src = readSrc('ui/HamburgerMenu.jsx');

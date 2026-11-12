@@ -6,13 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripBlockAndCommentLines as stripComments } from '../../uiBusySourceScan.js';
 
-function stripComments(text) {
-  const withoutBlockComments = text.replace(/\/\*[\s\S]*?\*\//g, '');
-  return withoutBlockComments.split(/\r?\n/)
-    .filter(line => !line.trim().startsWith('//'))
-    .join('\n');
-}
 const figure = stripComments(fs.readFileSync(path.resolve(import.meta.dirname, 'roofPlanFigure.js'), 'utf8'));
 const count = (text, re) => (text.match(re) || []).length;
 
