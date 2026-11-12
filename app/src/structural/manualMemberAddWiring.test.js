@@ -47,15 +47,23 @@ test('【配線】MemberListTabは柱の追加・部材の削除・Undo記録を
   assert.equal(countWholeLines(stripped, "import { pushGraphUndo, commitManualColumnAdd, commitManualMemberRemoval } from './manualMemberCommit.js';"), 1, 'import 行');
 });
 
-// 削除後の採番で番号が詰まり、展開中カードのキー（mapName:タグ）が別グループを指すため、削除確認の OK 分岐で閉じる。
-test('【配線】MemberListTab: 削除確認の OK 分岐で commitManualMemberRemoval の後に setExpandedKey(null) を呼ぶ', () => {
+// 置き換え（ユーザー裁定2026-11-12 R6）: 以前は「削除確認の OK 分岐で commitManualMemberRemoval の後に setExpandedKey(null)」を
+// 固定していた（番号をキーにカードを覚えていた頃、削除後の採番で別グループが開いた扱いになるのを防ぐため）。カードを
+// 部材の id で覚えるようにしたので、削除の後に展開へは触らない——消したグループのカードは部材がすべて消えて
+// 取り直しで閉じる（structural/expandedMemberCard.js。配線は expandedMemberCardWiring.test.js）。
+test('【配線】MemberListTab: 削除確認の OK 分岐は commitManualMemberRemoval の後に展開カードへ触らない', () => {
   const commitLine = 'commitManualMemberRemoval(g, project, deleteConfirm.mapName, deleteConfirm.ids);';
   const start = stripped.indexOf(commitLine);
   assert.ok(start >= 0, '削除の呼び出し行が無い');
   const end = stripped.indexOf('setDeleteConfirm(null);', start);
   assert.ok(end > start, '削除の後の setDeleteConfirm(null) が無い');
   const after = stripped.slice(start + commitLine.length, end);
-  assert.equal(countWholeLines(after, 'setExpandedKey(null);'), 1, '削除の後（確認ダイアログを閉じる前）に 1 行で呼ぶ');
+  assert.equal(after.replace(/[\s}]/g, ''), '', '削除の呼び出しと setDeleteConfirm(null) の間に別の処理がある');
+  const dialogStart = stripped.lastIndexOf('{deleteConfirm && (', start);
+  assert.ok(dialogStart >= 0, '削除確認ダイアログの始まりが無い');
+  assert.equal(countOccurrences(stripped.slice(dialogStart, end), 'setExpandedKey'), 0, '削除確認の中で展開カードを変えている');
+  // 伏図の選択は開いているカードの鏡写し——ここで直接いじらない。
+  assert.equal(countOccurrences(stripped.slice(dialogStart, end), 'onSelectMembers'), 0, '削除確認の中で伏図の選択を直接変えている');
 });
 
 test('【配線】MemberListTabはaddManualFooting/addManualBeamを各1回だけ、引数まで固定した形で呼ぶ', () => {

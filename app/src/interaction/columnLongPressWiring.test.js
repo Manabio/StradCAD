@@ -99,14 +99,26 @@ test('【配線】App.jsx: handleMenuSelect の柱の分岐は startDraw より�
   assert.equal(wholeLines(menuSelect, 'if (!result.ok) setToast({ msg: result.error, key: Date.now() });'), 1);
 });
 
-test('【配線】App.jsx: 柱の削除が成功したときだけ構造リストの展開カードを閉じる（追加では閉じない・失敗では閉じない）', () => {
-  const at = menuSelect.indexOf('if (!result.ok) setToast({ msg: result.error, key: Date.now() });');
+// 置き換え（ユーザー裁定2026-11-12 R5）: 以前は「削除が成功したときだけ構造リストの展開カードを閉じる」を固定していた
+// （番号をキーにカードを覚えていた頃、削除後の採番で別グループが開いた扱いになるのを防ぐため）。カードを部材の id で
+// 覚えるようにしたので、柱の追加・削除の後に開いているカードへは触らない——開いていたグループの柱が残っていれば
+// 開いたまま、すべて消えたら MemberListTab 側の取り直しで閉じる（structural/expandedMemberCard.js）。
+test('【配線】App.jsx: 柱の追加・削除の後に構造リストの展開カードへ触らない（成功時は何もしない・失敗時はトーストだけ）', () => {
+  const toastLine = 'if (!result.ok) setToast({ msg: result.error, key: Date.now() });';
+  const at = menuSelect.indexOf(toastLine);
   assert.ok(at >= 0);
   const branchEnd = menuSelect.indexOf('return;', at);
   assert.ok(branchEnd > at);
-  const tail = menuSelect.slice(at, branchEnd);
-  assert.equal(wholeLines(tail, 'else if (item.id === ColumnMenuItemId.DEL) deselectStructuralMembers();'), 1, 'ok の else 側・DEL のときだけ');
-  assert.equal(count(menuSelect, 'deselectStructuralMembers('), 1, '柱の分岐以外で呼ばない');
+  assert.equal(menuSelect.slice(at + toastLine.length, branchEnd).trim(), '', 'トーストの行と return の間に別の処理がある');
+  // 行頭コメントは除いて数える（「呼ばない」と書いたコメントで赤にしない）。
+  const code = menuSelect.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+  assert.ok(code.includes('runColumnMenuAction('), '本体を読めていない');
+  assert.equal(count(code, 'deselectStructuralMembers'), 0, 'handleMenuSelect が展開カードを閉じている');
+  assert.equal(count(code, 'setMemberDeselectRequest'), 0, 'handleMenuSelect が閉じる合図を直接進めている');
+  assert.equal(count(code, 'setMemberFocusRequest'), 0, 'handleMenuSelect が別のカードを開いている');
+  // 伏図の選択は開いているカードの鏡写し——ここで直接いじると、カードは開いたまま強調だけが食い違う。
+  assert.equal(count(code, 'selectStructuralMembers'), 0, 'handleMenuSelect が伏図の選択を直接変えている');
+  assert.equal(count(code, 'selectMembers'), 0, 'handleMenuSelect が伏図の選択を直接変えている');
 });
 
 test('【配線】App.jsx: 柱の追加・削除の確定は runColumnMenuAction に一本化（commit を直接呼ばない）・フックへ composition を渡す', () => {

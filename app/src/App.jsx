@@ -2598,6 +2598,9 @@ const App = observer(() => {
   function handleMenuSelect(item) {
     // 柱の長クリック（平面・構造）: 追加・削除。選択時点で編集先を解決し直し、長クリック時から変わっていれば中止する。
     // 追加・削除の直後に構造再計算・壁再生成は走らせない（構造リストの追加・削除と同じ）。
+    // 構造リストの開いているカードにも触らない: カードは部材の id で覚えているので、採番で番号がずれても
+    // 同じグループのまま開き、開いていたグループの柱がすべて消えたときだけ MemberListTab 側で閉じる
+    // （ユーザー裁定2026-11-12 R5。無関係の柱・グループの 1 本だけを消したときは開いたまま）。
     if (item.id === ColumnMenuItemId.ADD || item.id === ColumnMenuItemId.DEL) {
       const result = runColumnMenuAction(item.id, {
         columnEdit: menu.columnEdit,
@@ -2605,7 +2608,6 @@ const App = observer(() => {
         project,
       });
       if (!result.ok) setToast({ msg: result.error, key: Date.now() });
-      else if (item.id === ColumnMenuItemId.DEL) deselectStructuralMembers();
       return;
     }
     if (item.id === 'cl-v' || item.id === 'cl-h') {

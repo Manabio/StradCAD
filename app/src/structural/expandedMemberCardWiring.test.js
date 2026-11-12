@@ -141,12 +141,13 @@ test('【配線】ColumnOffsetAxisSelect: onPendingFocus(target.id) → onStruct
     'onPendingFocus?.(target.id); の直後に onStructureChanged(…) が続いていない');
 });
 
-// ラチェット: 開いているカードを変える経路はここに列挙した 8 本だけ（判断は expandedMemberCard.js の 1 か所）。
+// ラチェット: 開いているカードを変える経路はここに列挙した 7 本だけ（判断は expandedMemberCard.js の 1 か所）。
 // 内訳: ①deselectRequest で閉じる ②伏図タップ（focusRequest）③composition 切替で閉じる ④描画後の取り直し
-// ⑤カードのトグル ⑥分割の確定 ⑦柱の個別指定・オフセットの主指定 ⑧削除確認 OK で閉じる（S3 で外す予定）。
-// 新しい経路（例: 追加の成功時）で setExpandedKey を足すとここが赤になる。
-test('【配線・ラチェット】setExpandedKey( の出現は 8 つだけ', () => {
-  assert.equal(countOccurrences(stripped, 'setExpandedKey('), 8);
+// ⑤カードのトグル ⑥分割の確定 ⑦柱の個別指定・オフセットの主指定。
+// 新しい経路（例: 追加・削除の成功時）で setExpandedKey を足すとここが赤になる。削除の後に閉じる処理は
+// 取り直し（④）へ吸収した（裁定 R5・R6。以前は削除確認 OK で閉じる 8 本目があった）。
+test('【配線・ラチェット】setExpandedKey( の出現は 7 つだけ', () => {
+  assert.equal(countOccurrences(stripped, 'setExpandedKey('), 7);
 });
 
 test('【配線】computeTagGroups( は定義・MergeBar・openMergeDialog・sections の 4 つだけで、MemberGroupSection は props で受ける', () => {

@@ -548,9 +548,10 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               // graph は setDeleteConfirm 時点のもの（QA修正: mapName から再解決すると、在来木造の柱
               // グループが自階柱□に切り替わった後は別階を掴んでしまう。ステップ3・2026-09-17裁定）。
               const g = deleteConfirm.graph;
+              // 削除の後に開いているカードは触らない: 開いているカードは部材の id で覚えており、消したグループの
+              // カードは部材がすべて消えるので取り直し（reconcileAnchor）で閉じる。採番で番号が詰まっても、
+              // 別のグループが開いた扱いにはならない（ユーザー裁定2026-11-12 R6）。
               commitManualMemberRemoval(g, project, deleteConfirm.mapName, deleteConfirm.ids);
-              // 削除後の採番で番号が詰まり、開いていたカードのタグが別グループを指すため閉じる。
-              setExpandedKey(null);
             }
             setDeleteConfirm(null);
           }}

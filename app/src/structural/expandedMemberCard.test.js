@@ -11,7 +11,7 @@ import { runInAction } from 'mobx';
 import { Project, CenterLineType, Discipline } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { serializeGraph } from '../graphSnapshot.js';
-import { commitManualColumnAdd, pushGraphUndo } from './manualMemberCommit.js';
+import { commitManualColumnAdd, commitManualMemberRemoval, pushGraphUndo } from './manualMemberCommit.js';
 import { addManualFooting, addManualBeam } from './manualMemberAdd.js';
 import { renumberMembers } from './memberNumbering.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
@@ -424,6 +424,101 @@ test('再現/対照 柱 S造: 追加が既存グループに入るなら同じ�
   assert.ok(next !== null);
   assert.ok(next.ids.includes(r.newId));
   assert.equal(next.tag, null);
+});
+
+// ================= 5b. 削除（裁定 R5・R6: 削除の後に閉じる処理は取り直しへ吸収） =================
+// 柱 S造: 250角×1（C1）・200角×1（C2）・150角×2（C3）。削除は実際の確定（commitManualMemberRemoval＝構造リストの削除と
+// 長クリックの柱削除が共通で通る。削除→採番）を通す。筋書きごとに作り直す。
+function makeDeleteEnv() {
+  const env = makeEnv('S造');
+  const [x1, x2, x3] = env.xs, [y1, y2] = env.ys;
+  const big = env.graph.addColumn('STEEL', 'STEEL-SQ250x250x9.0', x1, y1, {});
+  const mid = env.graph.addColumn('STEEL', 'STEEL-SQ200x200x9.0', x2, y1, {});
+  const s1 = env.graph.addColumn('STEEL', 'STEEL-SQ150x150x9.0', x3, y1, {});
+  const s2 = env.graph.addColumn('STEEL', 'STEEL-SQ150x150x9.0', x3, y2, {});
+  renumberMembers(env.graph, env.project, 'columnMap');
+  const ids = { big: big.id, mid: mid.id, s1: s1.id, s2: s2.id };
+  assert.equal(idsWithTag(env, 'columnMap', 'C1').join(','), ids.big, '前提: C1 は 250 角');
+  assert.equal(idsWithTag(env, 'columnMap', 'C2').join(','), ids.mid, '前提: C2 は 200 角');
+  assert.equal(idsWithTag(env, 'columnMap', 'C3').join(','), [ids.s1, ids.s2].sort().join(','), '前提: C3 は 150 角の 2 本');
+  return { env, ids };
+}
+const removeColumns = (env, ids) => commitManualMemberRemoval(env.graph, env.project, 'columnMap', ids);
+
+test('削除/無関係の柱を消して番号が詰まっても、開いていたカードは同じ部材のまま（番号で覚えると別グループを指す）', () => {
+  const { env, ids } = makeDeleteEnv();
+  const a = anchorForCard('columnMap', [ids.mid]); // C2（200 角）を開いている
+  assert.equal(removeColumns(env, [ids.big]), 1);
+  // 不良の記録: 番号が詰まり、C2 は 150 角の 2 本を指す（番号で覚えていたら別グループのカードが開く）
+  assert.equal(idsWithTag(env, 'columnMap', 'C2').join(','), [ids.s1, ids.s2].sort().join(','), '前提: 番号が詰まっていない');
+  const r = resolveExpandedCard(a, listingFromGraph(env, 'columnMap'));
+  assert.ok(r !== null, '開いていたカードが閉じた');
+  assert.equal(r.ids.join(','), ids.mid);
+  assert.equal(r.tag, 'C1');
+  assert.ok(reconcileAnchor(a, a, r) === a, '部材が同じなのに覚え直している');
+});
+
+test('削除/開いているグループの 1 本だけ消すと、残りの部材で開いたまま', () => {
+  const { env, ids } = makeDeleteEnv();
+  const a = anchorForCard('columnMap', [ids.s1, ids.s2]);
+  assert.equal(removeColumns(env, [ids.s1]), 1);
+  const r = resolveExpandedCard(a, listingFromGraph(env, 'columnMap'));
+  assert.ok(r !== null, '残りの部材があるのに閉じた');
+  assert.equal(r.ids.join(','), ids.s2);
+  const next = reconcileAnchor(a, a, r);
+  assert.ok(next !== null);
+  assert.equal(next.ids.join(','), ids.s2);
+});
+
+test('削除/主 id の柱（タップした柱）を消すと、残りの部材で開いたまま主 id は外れる', () => {
+  const { env, ids } = makeDeleteEnv();
+  const a = anchorForCard('columnMap', [ids.s1, ids.s2], ids.s1);
+  assert.equal(removeColumns(env, [ids.s1]), 1);
+  const r = resolveExpandedCard(a, listingFromGraph(env, 'columnMap'));
+  assert.ok(r !== null, '残りの部材があるのに閉じた');
+  const next = reconcileAnchor(a, a, r);
+  assert.equal(next.ids.join(','), ids.s2);
+  assert.equal(next.primaryId, null);
+});
+
+test('削除/開いているグループの全部材を消す（構造リストの削除）と閉じ、番号が詰まった別グループへは移らない', () => {
+  const { env, ids } = makeDeleteEnv();
+  const a = anchorForCard('columnMap', [ids.mid]); // C2 を開いている
+  assert.equal(removeColumns(env, [ids.mid]), 1);
+  // 番号が詰まり C2 は 150 角の 2 本になる——番号で覚えていたらこのカードが開いた扱いになる
+  assert.equal(idsWithTag(env, 'columnMap', 'C2').join(','), [ids.s1, ids.s2].sort().join(','), '前提: 番号が詰まっていない');
+  const r = resolveExpandedCard(a, listingFromGraph(env, 'columnMap'));
+  assert.ok(r === null, '消したグループの代わりに別のカードが開いた');
+  assert.ok(reconcileAnchor(a, a, r) === null);
+});
+
+test('削除→undo/1 本消して開いたままのカードは、undo で戻った柱（同じ id）を取り込む', () => {
+  const { env, ids } = makeDeleteEnv();
+  const both = [ids.s1, ids.s2].sort().join(',');
+  let a = anchorForCard('columnMap', [ids.s1, ids.s2]);
+  assert.equal(removeColumns(env, [ids.s1]), 1);
+  a = reconcileAnchor(a, a, resolveExpandedCard(a, listingFromGraph(env, 'columnMap')));
+  assert.equal(a.ids.join(','), ids.s2, '前提: 残りの 1 本で覚え直していない');
+  assert.ok(undoManager.canUndo, '前提: 削除の undo が積まれていない');
+  undoManager.undo();
+  assert.equal(idsWithTag(env, 'columnMap', 'C3').join(','), both, '前提: undo で同じ id の柱が戻っていない');
+  const r = resolveExpandedCard(a, listingFromGraph(env, 'columnMap'));
+  assert.ok(r !== null, 'undo の後にカードが閉じた');
+  assert.equal([...r.ids].sort().join(','), both);
+  assert.equal([...reconcileAnchor(a, a, r).ids].sort().join(','), both);
+});
+
+test('削除→undo/全部材を消して閉じたカードは、undo で柱が戻っても開き直さない（R4）', () => {
+  const { env, ids } = makeDeleteEnv();
+  let a = anchorForCard('columnMap', [ids.mid]);
+  assert.equal(removeColumns(env, [ids.mid]), 1);
+  a = reconcileAnchor(a, a, resolveExpandedCard(a, listingFromGraph(env, 'columnMap')));
+  assert.ok(a === null, '前提: 閉じていない');
+  undoManager.undo();
+  assert.equal(idsWithTag(env, 'columnMap', 'C2').join(','), ids.mid, '前提: undo で柱が戻っていない');
+  const r = resolveExpandedCard(a, listingFromGraph(env, 'columnMap'));
+  assert.ok(r === null, '閉じたカードが undo で開き直った');
+  assert.ok(reconcileAnchor(a, a, r) === null);
 });
 
 // ================= 6. R4 の列 =================
