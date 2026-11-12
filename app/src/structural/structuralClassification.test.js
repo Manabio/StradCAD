@@ -7,6 +7,7 @@ import {
   FIGURE_TYPE, SLOT_TYPE, slotPresent,
   SHARED_PLANE_MEMBER_OVERRIDES, resolveSharedPlaneView,
   sharedPlaneDrawsKind, sharedPlaneDrawsMember, sharedPlaneListsMember, sharedPlaneDrawsRoofFraming,
+  sharedPlaneViewFor, sharedPlaneSectionVisible,
 } from './structuralClassification.js';
 import { buildStructuralFigureSlots } from './structuralFigureSlots.js';
 
@@ -212,4 +213,53 @@ test('【C】SHARED_PLANE_MEMBER_OVERRIDES は内側まで frozen', () => {
     assert.equal(Object.isFrozen(byRole), true);
     for (const o of Object.values(byRole)) assert.equal(Object.isFrozen(o), true);
   }
+});
+
+test('【C】sharedPlaneViewFor: view が null なら null、planeId 一致なら view そのもの、不一致なら null', () => {
+  const { fView, gView } = makeViews();
+  assert.equal(sharedPlaneViewFor(null, fView.planeId) === null, true);
+  assert.equal(sharedPlaneViewFor(undefined, fView.planeId) === null, true);
+  assert.equal(sharedPlaneViewFor(fView, fView.planeId) === fView, true);
+  assert.equal(sharedPlaneViewFor(gView, gView.planeId) === gView, true);
+  assert.equal(sharedPlaneViewFor(fView, 'other-plane') === null, true);
+  assert.equal(sharedPlaneViewFor(gView, undefined) === null, true);
+});
+
+// [名前, groupKinds, 基礎伏図（カード無し）, 1階伏図（カード無し）]。カードありはどちらの伏図でも true。
+const M = MEMBER_KIND;
+const SECTION_TABLE = [
+  ['柱・杭',           [M.COLUMN],                                 F, T],
+  ['基礎・柱脚',       [M.INDEPENDENT_FOOTING, M.COLUMN_BASE],     T, F],
+  ['梁（基礎面＝土台基礎）', [M.FOUNDATION_BEAM],                  T, F],
+  ['梁（基礎面でない）', [M.BEAM],                                 F, T],
+  ['スラブ',           [M.SLAB],                                   F, T],
+  ['耐力壁',           [M.WALL],                                   F, T],
+];
+
+test('【C】sharedPlaneSectionVisible: セクション表（基礎伏図／1階伏図 × hasCards）', () => {
+  const { fView, gView } = makeViews();
+  for (const [name, kinds, onF, onG] of SECTION_TABLE) {
+    assert.equal(sharedPlaneSectionVisible(fView, kinds, false), onF, `${name} 基礎伏図・カード無し`);
+    assert.equal(sharedPlaneSectionVisible(gView, kinds, false), onG, `${name} 1階伏図・カード無し`);
+    assert.equal(sharedPlaneSectionVisible(fView, kinds, true), true, `${name} 基礎伏図・カードあり`);
+    assert.equal(sharedPlaneSectionVisible(gView, kinds, true), true, `${name} 1階伏図・カードあり`);
+  }
+  // 種別を持たない分類（空配列）はカードの有無だけで決まる。
+  assert.equal(sharedPlaneSectionVisible(fView, [], false), false, '空の種別・カード無し');
+  assert.equal(sharedPlaneSectionVisible(fView, [], true), true, '空の種別・カードあり');
+});
+
+test('【C】sharedPlaneSectionVisible: view が null なら常に true（hasCards・種別によらず）', () => {
+  for (const [name, kinds] of SECTION_TABLE) {
+    assert.equal(sharedPlaneSectionVisible(null, kinds, false), true, `${name} null・カード無し`);
+    assert.equal(sharedPlaneSectionVisible(null, kinds, true), true, `${name} null・カードあり`);
+  }
+  assert.equal(sharedPlaneSectionVisible(null, [], false), true);
+});
+
+test('【C】失敗系: sharedPlaneSectionVisible は groupKinds が配列でなければ throw（view が null でも）', () => {
+  const { fView } = makeViews();
+  assert.throws(() => sharedPlaneSectionVisible(fView, undefined, false), /sharedPlaneSectionVisible/);
+  assert.throws(() => sharedPlaneSectionVisible(fView, 'column', true), /sharedPlaneSectionVisible/);
+  assert.throws(() => sharedPlaneSectionVisible(null, null, true), /sharedPlaneSectionVisible/);
 });

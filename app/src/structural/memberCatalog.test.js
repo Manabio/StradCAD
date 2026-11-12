@@ -552,18 +552,18 @@ test('【不変条件・QA指摘F12】MemberListTab.jsx: 統合の確定（handl
 
 test('【不変条件・QA指摘F4\'再発防止】MemberListTab.jsx: composition変更のリセットeffectは「前回見たcomposition」との同一参照比較でガードする（真偽値の初回フラグではない＝StrictModeの二重実行でも安全）', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
-  const effectMatch = /useEffect\(\(\) => \{([\s\S]*?)\}, \[composition\]\);/.exec(src);
-  assert.ok(effectMatch, "useEffect(() => { ... }, [composition]); が見つからない");
+  const effectMatch = /useEffect\(\(\) => \{([\s\S]*?)\}, \[composition, slotKey\]\);/.exec(src);
+  assert.ok(effectMatch, "useEffect(() => { ... }, [composition, slotKey]); が見つからない");
   const body = effectMatch[1];
   // 初回（ref未設定）ガード: if (ref.current === null) { ref.current = composition; return; }
-  const initMatch = /if\s*\(\s*(\w+)\.current\s*===\s*null\s*\)\s*\{\s*\1\.current\s*=\s*composition;\s*return;\s*\}/.exec(body);
+  const initMatch = /if\s*\(\s*(\w+)\.current\s*===\s*null\s*\)\s*\{\s*\1\.current\s*=\s*composition;\s*(?:lastSlotKeyRef\.current\s*=\s*slotKey;\s*)?return;\s*\}/.exec(body);
   assert.ok(initMatch, '初回（ref.current===null）ガードが見つからない（QA指摘F4\'再発の回帰: 真偽値フラグ方式に戻っている）');
   const refVar = initMatch[1];
   // 同一参照ガード: if (composition === ref.current) return;（StrictModeの2回目の実行を吸収する）
-  const sameRefRe = new RegExp(`if\\s*\\(\\s*composition\\s*===\\s*${refVar}\\.current\\s*\\)\\s*return;`);
+  const sameRefRe = new RegExp(`if\\s*\\(\\s*composition\\s*===\\s*${refVar}\\.current(?:\\s*&&\\s*slotKey\\s*===\\s*lastSlotKeyRef\\.current)?\\s*\\)\\s*return;`);
   assert.ok(sameRefRe.test(body), `if (composition === ${refVar}.current) return; が見つからない（同一composition参照での二重実行を弾いていない＝StrictModeで再発する回帰）`);
   // ガードを通過した後（実際に変わったとき）だけ ref を更新してリセットする。
-  const updateRe = new RegExp(`${refVar}\\.current\\s*=\\s*composition;\\s*\\n\\s*setMergeState\\(null\\)`);
+  const updateRe = new RegExp(`${refVar}\\.current\\s*=\\s*composition;\\s*\\n(?:\\s*lastSlotKeyRef\\.current\\s*=\\s*slotKey;\\s*\\n)?\\s*setMergeState\\(null\\)`);
   assert.ok(updateRe.test(body), `${refVar}.current = composition; の後にsetMergeState(null)が続いていない`);
   assert.ok(/setMergeDialogState\(null\)/.test(body) && /setExpandedKey\(null\)/.test(body),
     'setMergeDialogState/setExpandedKeyのリセットが無い');

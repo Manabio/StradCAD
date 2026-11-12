@@ -267,6 +267,21 @@ export function sharedPlaneListsMember(view, mapName, entity) {
   return sharedPlaneAllows(view, mapName, entity, 'list');
 }
 
+/** view を自分の平面（planeId）の部材にだけ掛ける。別の平面の graph（参照レイヤ）には掛けない（null を返す＝絞らない）。 */
+export function sharedPlaneViewFor(view, planeId) {
+  return view && view.planeId === planeId ? view : null;
+}
+
+/** 構造リストのセクション（分類の箱）を出すか。カードがあれば出す。無ければ、その分類の部材種別が
+ *  この伏図の所属のときだけ出す。view が null なら true（絞らない）。 */
+export function sharedPlaneSectionVisible(view, groupKinds, hasCards) {
+  if (!Array.isArray(groupKinds)) {
+    throw new Error(`sharedPlaneSectionVisible: groupKinds は配列でなければならない（実際: ${typeof groupKinds}）`);
+  }
+  if (!view) return true;
+  return hasCards || groupKinds.some(k => sharedPlaneDrawsKind(view, k));
+}
+
 /** 小屋組（棟木・母屋・束。保存しない導出図形）を描くか。小屋梁と同じ図に出す。view が null なら true。 */
 export function sharedPlaneDrawsRoofFraming(view) {
   return sharedPlaneDrawsMember(view, 'beamMap', { role: BeamRole.ROOF_BEAM });

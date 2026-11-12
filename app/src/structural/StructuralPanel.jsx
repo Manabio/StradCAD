@@ -17,7 +17,7 @@ const TABS = [
 // 「共通」タブ＝旧・構造パレット（CommonInfoTab）、「構造リスト」タブ＝分類別の部材一覧（MemberListTab）、
 // 「外部」タブ＝仕上げモードの外部タブの屋根の群（主屋根・下屋）を構造モードから指定する（RoofSpecTab。ユーザー指示2026-10-30）。
 // focusRequest（描画エリアの部材タグクリック由来）が来たら構造リストタブへ強制切替する。
-export const StructuralPanel = observer(function StructuralPanel({ project, graph, composition, onClose, isLandscape, focusRequest, onToast, onStructureChanged, onSelectMembers, deselectRequest, structureMode = null }) {
+export const StructuralPanel = observer(function StructuralPanel({ project, graph, composition, onClose, isLandscape, focusRequest, onToast, onStructureChanged, onSelectMembers, deselectRequest, structureMode = null, slotView = null }) {
   const [activeTab, setActiveTab] = useState('common');
 
   useEffect(() => {
@@ -54,7 +54,7 @@ export const StructuralPanel = observer(function StructuralPanel({ project, grap
       </div>
 
       {activeTab === 'common' && <CommonInfoTab project={project} graph={graph} onStructureChanged={onStructureChanged} />}
-      {activeTab === 'members' && <MemberListTab composition={composition} project={project} focusRequest={focusRequest} onToast={onToast} onStructureChanged={onStructureChanged} onSelectMembers={onSelectMembers} deselectRequest={deselectRequest} structureMode={structureMode} />}
+      {activeTab === 'members' && <MemberListTab composition={composition} project={project} focusRequest={focusRequest} onToast={onToast} onStructureChanged={onStructureChanged} onSelectMembers={onSelectMembers} deselectRequest={deselectRequest} structureMode={structureMode} slotView={slotView} />}
       {activeTab === 'roof' && <RoofSpecTab graph={graph} composition={composition} project={project} onStructureChanged={onStructureChanged} />}
     </>
   );

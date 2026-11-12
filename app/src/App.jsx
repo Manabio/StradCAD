@@ -3389,6 +3389,7 @@ const App = observer(() => {
           deselectRequest={memberDeselectRequest}
           structureMode={appMode === 'structure' && mode?.startBayPick ? mode : null}
           onStructureChanged={guardUi(handleStructureChanged)}
+          slotView={structSlotView}
         />
       )}
     </>

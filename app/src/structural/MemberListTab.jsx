@@ -49,7 +49,7 @@ import {
   BAY_PICK_BUTTON_FONT_PX, BAY_PICK_BUTTON_MIN_HEIGHT_PX, BAY_PICK_BUTTON_PADDING,
   BAY_PICK_BUTTON_DISABLED_COLOR, BAY_PICK_BUTTON_TEXT_COLOR,
 } from '../core/constants.js';
-import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE } from './structuralClassification.js';
+import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE, sharedPlaneListsMember, sharedPlaneViewFor, sharedPlaneSectionVisible } from './structuralClassification.js';
 import { foundationOptionsFor, rulesFor, effectiveStructure, woodColumnWidthMm, columnWidthMm, resolvedBeamColumnWidthMm } from './structureRules.js';
 import { columnListCategory } from './framingDrawing.js';
 import { resolveColumnWidthEdit, normalizeColumnOverridesToFloor, allowedColumnWidths, isUpsizedWidth, columnWidthChangeNotice } from './columnWidthScope.js';
@@ -163,9 +163,12 @@ function tagSortTuple(tag, members, group, graph, project, structure) {
 // group.mapName の実体を、構造種別で取捨した上でタグ（部材番号）単位にまとめる（同一形状＝同一タグ）。
 // MemberGroupSection（表示用）と MemberListTab（統合バー・統合ダイアログ用にアクティブなセクション分だけ
 // 再計算する）の両方から呼ぶ共通ロジック（二重実装を避ける）。
-function computeTagGroups(group, graph, project, structure, figureType) {
+// slotView は基礎伏図／1階伏図の見せ分け視点（null＝絞らない）。自分の平面の graph にだけ掛ける。
+function computeTagGroups(group, graph, project, structure, figureType, slotView) {
   const allEntities = [...graph[group.mapName].values()].filter(group.filter ?? (() => true));
-  const entities = structure == null ? allEntities : allEntities.filter(e => structureHasMemberKind(memberKindOf(group.mapName, e), structure, figureType));
+  const byStructure = structure == null ? allEntities : allEntities.filter(e => structureHasMemberKind(memberKindOf(group.mapName, e), structure, figureType));
+  const view = sharedPlaneViewFor(slotView, graph.plane.id);
+  const entities = byStructure.filter(e => sharedPlaneListsMember(view, group.mapName, e));
   const byTag = new Map();
   for (const e of entities) {
     const tag = e.memberNo ?? UNNUMBERED_TAG;
@@ -248,8 +251,8 @@ const SectionIcon = observer(({ entity, mapName, iconShape }) => {
 // 統合選択モードの下端固定バー（design-member-numbering-ui.md 3.2）。MemberListTab のスクロール領域の
 // 外（flex兄弟）に置くことで、ModePanel（横長・パネル下端固定）・BottomSheet（縦長・sticky bottom）の
 // どちらでも同一実装で「常時可視」を満たす（両者ともパネル自身がflex縦積みでこの兄弟要素を押し出さない）。
-const MergeBar = observer(({ group, graph, project, structure, figureType, selectedTags, onCancel, onConfirm }) => {
-  const tagGroups = computeTagGroups(group, graph, project, structure, figureType);
+const MergeBar = observer(({ group, graph, project, structure, figureType, slotView, selectedTags, onCancel, onConfirm }) => {
+  const tagGroups = computeTagGroups(group, graph, project, structure, figureType, slotView);
   const totalCount = tagGroups
     .filter(([tag]) => selectedTags.has(tag))
     .reduce((n, [, members]) => n + members.length, 0);
@@ -282,7 +285,7 @@ const MergeBar = observer(({ group, graph, project, structure, figureType, selec
   );
 });
 
-export const MemberListTab = observer(({ composition, project, focusRequest, onToast, onStructureChanged, onSelectMembers, deselectRequest = 0, structureMode = null }) => {
+export const MemberListTab = observer(({ composition, project, focusRequest, onToast, onStructureChanged, onSelectMembers, deselectRequest = 0, structureMode = null, slotView = null }) => {
   const [expandedKey, setExpandedKey] = useState(null); // 開いているカードのアンカー（expandedMemberCard.js の CardAnchor。部材の id で覚える）| null
   // S造スラブカードのプレート選択肢（一覧のマウントにつき 1 回読む。未読込みは undefined）。
   const slabMaterials = useSteelSlabMaterials();
@@ -312,7 +315,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
   // 統合選択モード（design-member-numbering-ui.md セクション3）。対象は同一セクション（mapName+group.key）内のみ
   // ＝有効な group/graph/structure/figureType を [統合…] 押下時点のコンテキストのまま保持する
   // （MemberGroupSection が既に解決済みの値をそのまま渡す。ここで再解決はしない）。
-  const [mergeState, setMergeState] = useState(null); // { group, graph, structure, figureType, anchorTag, anchorMaterialType, selectedTags: Set<string> } | null
+  const [mergeState, setMergeState] = useState(null); // { group, graph, structure, figureType, slotView, anchorTag, anchorMaterialType, selectedTags: Set<string> } | null
   const [mergeDialogState, setMergeDialogState] = useState(null); // { group, graph, groups: [{tag, members}] } | null
 
   // R階伏図（屋根スラブ伏図）は全部材をR階ルールで取捨する（柱・梁・スラブのみ表示、壁・基礎系はカテゴリ非表示）。
@@ -364,15 +367,20 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
   // 前回（1回目）と同じなので早期returnし、実際にcomposition参照が変わったとき（階切替・図面合成の
   // 組み直し）だけリセットが走る。初回（lastCompositionRef.current===null）は代入だけしてreturnする
   // （expandedKeyはまだnullのはずなので、リセットをスキップしても意味論は変わらない）。
+  // 基礎伏図⇄1階伏図の切替は同じ composition のまま slotKey だけが変わるため、slotKey も一緒に比べる
+  // （どちらかが変われば閉じる）。初回の判定は ref が null かどうかで行い、slotKey の null とは区別する。
+  const slotKey = slotView?.slotKey ?? null;
   const lastCompositionRef = useRef(null);
+  const lastSlotKeyRef = useRef(null);
   useEffect(() => {
-    if (lastCompositionRef.current === null) { lastCompositionRef.current = composition; return; }
-    if (composition === lastCompositionRef.current) return;
+    if (lastCompositionRef.current === null) { lastCompositionRef.current = composition; lastSlotKeyRef.current = slotKey; return; }
+    if (composition === lastCompositionRef.current && slotKey === lastSlotKeyRef.current) return;
     lastCompositionRef.current = composition;
+    lastSlotKeyRef.current = slotKey;
     setMergeState(null);
     setMergeDialogState(null);
     setExpandedKey(null);
-  }, [composition]);
+  }, [composition, slotKey]);
 
   // 一覧（セクション×タググループ）はここで組み、MemberGroupSection へは tagGroups として渡す
   // （開いているカードの解決と描画で同じ一覧を使うため。判断は expandedMemberCard.js に置く）。
@@ -393,9 +401,12 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
     // 伏図で下階柱として編集する」ための閲覧専用指定であり、自階自身の一覧ではその制約は不要
     // （ステップ3・2026-09-17裁定）。
     const readOnly = resolved.spec.role === LayerRole.REFERENCE && resolved.graph.plane.id !== composition.subjectPlane.id;
+    // 基礎伏図／1階伏図の見せ分け（slotView が null なら絞らない）。カードがあれば出し、無ければ所属の伏図だけ。
+    const tagGroups = computeTagGroups(group, g, project, gStructure, figureType, slotView);
+    if (!sharedPlaneSectionVisible(sharedPlaneViewFor(slotView, g.plane.id), groupMemberKinds(group.mapName, g, project), tagGroups.length > 0)) continue;
     sections.push({
       sectionKey: group.key, mapName: group.mapName, group, graph: g, structure: gStructure, readOnly,
-      tagGroups: computeTagGroups(group, g, project, gStructure, figureType),
+      tagGroups,
     });
   }
   // 開いているカードは部材の id で覚え、表示のたびに一覧から引き直す。描画後に覚え直しが要るときだけ setState する
@@ -428,7 +439,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
   // 下端固定バーの [統合する] → 材寸採用ダイアログを開く（この時点ではまだ何も変更しない）。
   function openMergeDialog() {
     if (!mergeState) return;
-    const tagGroups = computeTagGroups(mergeState.group, mergeState.graph, project, mergeState.structure, mergeState.figureType);
+    const tagGroups = computeTagGroups(mergeState.group, mergeState.graph, project, mergeState.structure, mergeState.figureType, mergeState.slotView);
     const groups = tagGroups.filter(([tag]) => mergeState.selectedTags.has(tag)).map(([tag, members]) => ({ tag, members }));
     setMergeDialogState({ group: mergeState.group, graph: mergeState.graph, groups });
   }
@@ -518,7 +529,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               onSelectMembers={onSelectMembers}
               structureMode={structureMode}
               mergeSelectedTags={isMergingHere ? mergeState.selectedTags : null}
-              onStartMerge={(tag, materialType) => setMergeState({ group, graph: g, structure: gStructure, figureType, anchorTag: tag, anchorMaterialType: materialType, selectedTags: new Set([tag]) })}
+              onStartMerge={(tag, materialType) => setMergeState({ group, graph: g, structure: gStructure, figureType, slotView, anchorTag: tag, anchorMaterialType: materialType, selectedTags: new Set([tag]) })}
               onToggleMergeTag={toggleMergeTag}
             />
           );
@@ -531,6 +542,7 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
           project={project}
           structure={mergeState.structure}
           figureType={mergeState.figureType}
+          slotView={mergeState.slotView}
           selectedTags={mergeState.selectedTags}
           onCancel={() => setMergeState(null)}
           onConfirm={openMergeDialog}

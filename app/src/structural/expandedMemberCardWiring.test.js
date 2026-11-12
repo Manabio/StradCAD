@@ -103,11 +103,12 @@ test('【配線】伏図タップ・取り直しの effect はガードなしの
 
 test('【配線】sections の 1 件の形と、組み立ての取捨（continue）', () => {
   assert.equal(countWholeLines(stripped, 'sectionKey: group.key, mapName: group.mapName, group, graph: g, structure: gStructure, readOnly,'), 1, 'sections の要素');
-  assert.equal(countWholeLines(stripped, 'tagGroups: computeTagGroups(group, g, project, gStructure, figureType),'), 1, 'tagGroups の引数');
+  assert.equal(countWholeLines(stripped, 'tagGroups,'), 1, 'tagGroups（絞り込み済みを下の const から入れる）');
+  assert.equal(countWholeLines(stripped, 'const tagGroups = computeTagGroups(group, g, project, gStructure, figureType, slotView);'), 1, 'tagGroups の引数');
   assert.equal(countWholeLines(stripped, 'for (const group of MEMBER_GROUPS) {'), 1, 'MEMBER_GROUPS の順に組む');
   assert.equal(countWholeLines(stripped, 'if (!resolved) continue;'), 1, '解決できない分類は飛ばす（打ち切らない）');
   assert.equal(countOccurrences(bodyBetween('for (const group of MEMBER_GROUPS) {', 'const openCard = '), 'break;'), 0, '組み立てを途中で打ち切っている');
-  assert.equal(countOccurrences(bodyBetween('for (const group of MEMBER_GROUPS) {', 'const openCard = '), 'continue;'), 2, '飛ばす条件は 2 つ（解決できない・構造種別が持たない）');
+  assert.equal(countOccurrences(bodyBetween('for (const group of MEMBER_GROUPS) {', 'const openCard = '), 'continue;'), 3, '飛ばす条件は 3 つ（解決できない・構造種別が持たない・基礎伏図／1階伏図の見せ分けで出さない分類）');
 });
 
 test('【配線】MemberGroupSection・MemberCard への橋渡し', () => {
