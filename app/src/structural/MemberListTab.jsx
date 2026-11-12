@@ -53,6 +53,7 @@ import { structureHasMemberKind, memberKindOf, MEMBER_KIND, FIGURE_TYPE } from '
 import { foundationOptionsFor, rulesFor, effectiveStructure, woodColumnWidthMm, columnWidthMm, resolvedBeamColumnWidthMm } from './structureRules.js';
 import { columnListCategory } from './framingDrawing.js';
 import { resolveColumnWidthEdit, normalizeColumnOverridesToFloor, allowedColumnWidths, isUpsizedWidth, columnWidthChangeNotice } from './columnWidthScope.js';
+import { anchorForCard, anchorForFocus, withPrimaryMember, resolveExpandedCard, reconcileAnchor, cardListing } from './expandedMemberCard.js';
 
 // この map グループが、その階・主構造で構造リストに出し得る部材種別（空グループの表示可否判定用）。
 // 梁グループだけは自階が基礎面か否かで「基礎梁」⇄「梁」に分かれる（自階＝床下材の供給グラフで判定）。
@@ -282,7 +283,7 @@ const MergeBar = observer(({ group, graph, project, structure, figureType, selec
 });
 
 export const MemberListTab = observer(({ composition, project, focusRequest, onToast, onStructureChanged, onSelectMembers, deselectRequest = 0, structureMode = null }) => {
-  const [expandedKey, setExpandedKey] = useState(null); // `${mapName}:${タグ}` | null
+  const [expandedKey, setExpandedKey] = useState(null); // 開いているカードのアンカー（expandedMemberCard.js の CardAnchor。部材の id で覚える）| null
   // S造スラブカードのプレート選択肢（一覧のマウントにつき 1 回読む。未読込みは undefined）。
   const slabMaterials = useSteelSlabMaterials();
 
@@ -329,21 +330,9 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
   const selfStructure = selfColumnGraph ? effectiveStructure(selfColumnGraph, project) : null;
   const woodColumnWidthGraph = (!isRoofFigure && selfColumnGraph && rulesFor(selfStructure).columnSizing === 'fixed') ? selfColumnGraph : null;
 
-  // 個別指定直後のカード追従（QA裁定・ステップ4）: 共通カードの「この柱を個別指定」は
-  // onStructureChanged（recomputeStructuralComposition。非同期）を経由するため、呼び出した直後には
-  // 新タグがまだ確定していない——直後にsizeKey（断面積）で開くカードを決め打ちすると、選んだ幅が
-  // 共通より大きいか小さいかでC1/C2が入れ替わり「どのカードが開くか反転する」実機不具合になる
-  // （QA実測。memberNumbering.test.jsに再現テストあり）。裁定＝タップした柱そのものの新しいカードへ
-  // 追従する——setPendingFocusId(column.id)を「待ち」として持ち、observerの再レンダーで
-  // selfColumnGraph.columnMap.get(id)?.memberNoを読む（MobXの観測対象なので再計算のたびに
-  // 再レンダーされる）。タグが確定（non-null）したらそのタグのカードを開いてpendingを消す。
-  const [pendingFocusId, setPendingFocusId] = useState(null);
-  const pendingFocusMemberNo = pendingFocusId ? (selfColumnGraph?.columnMap?.get(pendingFocusId)?.memberNo ?? null) : null;
-  useEffect(() => {
-    if (pendingFocusId == null || pendingFocusMemberNo == null) return;
-    setExpandedKey(`columnMap:${pendingFocusMemberNo}`);
-    setPendingFocusId(null);
-  }, [pendingFocusId, pendingFocusMemberNo]);
+  // 柱寸の個別指定・オフセットで触った柱を、開いているカードの主にする。再計算で柱が別グループへ移っても
+  // resolveExpandedCard の主 id の判定でそのカードへ追従する（番号の確定を待つ仕組みは不要になった）。
+  const focusColumnMember = id => setExpandedKey(a => withPrimaryMember(a, 'columnMap', id));
 
   // 柱グループの一覧ソース（ステップ3・2026-09-17裁定「柱一覧は在来だけ自階柱□」）。columnMap以外の
   // グループ（footingMap/beamMap/slabMap/wallMap）は自身のmapNameがそのままカテゴリ名（従来どおり）。
@@ -354,9 +343,8 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
 
   // 描画エリアの部材タグクリック（focusRequest）が来たら、該当部材のカードを開く。
   useEffect(() => {
-    if (focusRequest?.mapName && focusRequest.tag) {
-      setExpandedKey(`${focusRequest.mapName}:${focusRequest.tag}`);
-    }
+    const next = anchorForFocus(focusRequest);
+    if (next) setExpandedKey(next);
   }, [focusRequest]);
 
   // フロア切替・図面合成の組み直し（composition参照が変わる）で統合選択モードを強制終了する。
@@ -385,6 +373,40 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
     setMergeDialogState(null);
     setExpandedKey(null);
   }, [composition]);
+
+  // 一覧（セクション×タググループ）はここで組み、MemberGroupSection へは tagGroups として渡す
+  // （開いているカードの解決と描画で同じ一覧を使うため。判断は expandedMemberCard.js に置く）。
+  const sections = [];
+  for (const group of MEMBER_GROUPS) {
+    // 柱グループは在来木造だけ自階柱□（columnListCategory）を一覧ソースにする——他グループは
+    // 自身のmapNameがそのままカテゴリ名（従来どおりcomposition.graphForCategory(mapName)と同値）。
+    const resolved = composition?.resolveCategory(categoryFor(group));
+    if (!resolved) continue; // 下階が無い（基礎伏図）場合は柱グループを非表示
+    const g = resolved.graph;
+    // 構造種別が持たない部材分類はカテゴリごと隠す（「×はカテゴリ自体表示しない」＝structuralClassification）。
+    // 構造変更で「×」化した自動部材は recomputeStructuralForGraph が削除済みのため、空グループ＝非表示で齟齬は出ない。
+    // R階伏図は figureType=ROOF で取捨（壁・基礎系はカテゴリ非表示。柱・梁・スラブのみ）。
+    const gStructure = effectiveStructure(g, project);
+    if (gStructure != null && !groupMemberKinds(group.mapName, g, project).some(k => structureHasMemberKind(k, gStructure, figureType))) continue;
+    // 参照のみ（REFERENCE）レイヤの部材は閲覧可・編集不可。ただし柱一覧を自階柱□（columnMapSelf）へ
+    // 切替えた在来木造は、供給階＝主題階（自階）なら編集可にする——REFERENCEは元々「1つ上の階の
+    // 伏図で下階柱として編集する」ための閲覧専用指定であり、自階自身の一覧ではその制約は不要
+    // （ステップ3・2026-09-17裁定）。
+    const readOnly = resolved.spec.role === LayerRole.REFERENCE && resolved.graph.plane.id !== composition.subjectPlane.id;
+    sections.push({
+      sectionKey: group.key, mapName: group.mapName, group, graph: g, structure: gStructure, readOnly,
+      tagGroups: computeTagGroups(group, g, project, gStructure, figureType),
+    });
+  }
+  // 開いているカードは部材の id で覚え、表示のたびに一覧から引き直す。描画後に覚え直しが要るときだけ setState する
+  // （openCard は描画ごとに新しい参照なので effect は毎描画後に走り、参照比較だけ行う）。updater 側の reconcileAnchor(a, expandedKey, …) が、解決した後に
+  // 別のアンカーへ替わっていた場合（同じコミットで伏図タップの effect が新しいアンカーを入れた等）は触らない。
+  // 一覧がまだ無い間（composition が null）は取り直さず・閉じない。
+  const openCard = resolveExpandedCard(expandedKey, cardListing(sections));
+  const reconciledAnchor = reconcileAnchor(expandedKey, expandedKey, openCard, composition != null);
+  useEffect(() => {
+    if (reconciledAnchor !== expandedKey) setExpandedKey(a => reconcileAnchor(a, expandedKey, openCard, composition != null));
+  }, [reconciledAnchor, expandedKey, openCard, composition]);
 
   // 統合選択モード中は Esc で通常表示へ復帰する（design-member-numbering-ui.md 3.2）。
   useEffect(() => {
@@ -464,21 +486,10 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
           </div>
         )}
         {MEMBER_GROUPS.map(group => {
-          // 柱グループは在来木造だけ自階柱□（columnListCategory）を一覧ソースにする——他グループは
-          // 自身のmapNameがそのままカテゴリ名（従来どおりcomposition.graphForCategory(mapName)と同値）。
-          const resolved = composition?.resolveCategory(categoryFor(group));
-          if (!resolved) return null; // 下階が無い（基礎伏図）場合は柱グループを非表示
-          const g = resolved.graph;
-          // 構造種別が持たない部材分類はカテゴリごと隠す（「×はカテゴリ自体表示しない」＝structuralClassification）。
-          // 構造変更で「×」化した自動部材は recomputeStructuralForGraph が削除済みのため、空グループ＝非表示で齟齬は出ない。
-          // R階伏図は figureType=ROOF で取捨（壁・基礎系はカテゴリ非表示。柱・梁・スラブのみ）。
-          const gStructure = effectiveStructure(g, project);
-          if (gStructure != null && !groupMemberKinds(group.mapName, g, project).some(k => structureHasMemberKind(k, gStructure, figureType))) return null;
-          // 参照のみ（REFERENCE）レイヤの部材は閲覧可・編集不可。ただし柱一覧を自階柱□（columnMapSelf）へ
-          // 切替えた在来木造は、供給階＝主題階（自階）なら編集可にする——REFERENCEは元々「1つ上の階の
-          // 伏図で下階柱として編集する」ための閲覧専用指定であり、自階自身の一覧ではその制約は不要
-          // （ステップ3・2026-09-17裁定）。
-          const readOnly = resolved.spec.role === LayerRole.REFERENCE && resolved.graph.plane.id !== composition.subjectPlane.id;
+          // 一覧（sections）に無い分類＝下階が無い・構造種別が持たない分類は描かない（判定は上の sections の組み立て）。
+          const section = sections.find(s => s.group === group);
+          if (!section) return null;
+          const { graph: g, structure: gStructure, readOnly, tagGroups } = section;
           const isMergingHere = mergeState?.group === group; // MEMBER_GROUPS は module定数なので参照比較でよい
           return (
             <MemberGroupSection
@@ -488,14 +499,14 @@ export const MemberListTab = observer(({ composition, project, focusRequest, onT
               composition={composition}
               project={project}
               structure={gStructure}
-              figureType={figureType}
               readOnly={readOnly}
-              expandedKey={expandedKey}
-              onToggle={key => setExpandedKey(key === expandedKey ? null : key)}
-              onExpandKey={setExpandedKey}
+              tagGroups={tagGroups}
+              openCard={openCard}
+              onToggleCard={(mapName, ids, isOpen) => setExpandedKey(isOpen ? null : anchorForCard(mapName, ids))}
+              onExpandMembers={(mapName, ids) => setExpandedKey(anchorForCard(mapName, ids, ids[0]))}
               onRequestDelete={(ids, label) => setDeleteConfirm({ graph: g, mapName: group.mapName, ids, label })}
               onStructureChanged={onStructureChanged}
-              onPendingFocus={setPendingFocusId}
+              onPendingFocus={focusColumnMember}
               onColumnWidthNotice={setColumnWidthNotice}
               slabMaterials={slabMaterials}
               focusRequest={focusRequest}
@@ -792,14 +803,12 @@ const SlabPickControls = observer(({ structureMode, graph, composition, project,
 // 同一形状＝同一タグ（部材番号）であるため、リストはタグ（ラベル）単位で1行のみ表示する
 // （同じラベルの部材は複数あっても重複表示しない。件数はカード見出しに表示）。
 const MemberGroupSection = observer(({
-  group, graph, composition, project, structure, figureType, readOnly, expandedKey, onToggle, onExpandKey, onRequestDelete, focusRequest, onToast,
+  group, graph, composition, project, structure, readOnly, tagGroups, openCard, onToggleCard, onExpandMembers, onRequestDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, mergeAnchorTag, mergeAnchorMaterialType, mergeSelectedTags, onStartMerge, onToggleMergeTag,
   onSelectMembers, onStructureChanged, onPendingFocus, onColumnWidthNotice, structureMode, slabMaterials,
 }) => {
-  // 構造種別が持たない部材種別（×）の個体は一覧から除外する（footing→ベース/柱脚、beam→梁/基礎梁を role で割る）。
-  // structure=null（主構造未設定）は素通し。memberKindOf が null を返す表外部材（軒桁・杭）は structureHasMemberKind=true で残る。
-  // R階伏図は figureType=ROOF で個体も取捨する（軒桁＝null は表外で残るが、梁グループ自体が梁ルールで取捨される）。
-  const tagGroups = computeTagGroups(group, graph, project, structure, figureType);
+  // tagGroups は MemberListTab が computeTagGroups で組んだもの（構造種別が持たない部材種別（×）の個体の除外・
+  // R階伏図の figureType=ROOF での取捨も computeTagGroups の中）。
   // hideWhenEmpty:true のグループ（小梁）は0件時セクション自体を出さない（基礎伏図・R階伏図等）。
   if (group.hideWhenEmpty && tagGroups.length === 0) return null;
 
@@ -836,19 +845,22 @@ const MemberGroupSection = observer(({
         </div>
       )}
       {tagGroups.map(([tag, members]) => {
-        const key = `${group.mapName}:${tag}`;
+        // React の key は先頭部材の id（番号がずれてもカード内の入力途中の状態が別グループへ移らない）。
+        const cardKey = `${group.mapName}:${members[0].id}`;
+        // sectionKey も比べる: 梁系の複数セクションが同じ beamMap を共有し、同じタグ（未採番など）が 2 セクションに出うる。
+        const isExpanded = openCard != null && openCard.sectionKey === group.key && openCard.tag === tag;
         return (
           <MemberCard
-            key={key}
+            key={cardKey}
             members={members}
             group={group}
             graph={graph}
             composition={composition}
             project={project}
             readOnly={readOnly}
-            isExpanded={key === expandedKey}
-            onToggle={() => onToggle(key)}
-            onExpandKey={onExpandKey}
+            isExpanded={isExpanded}
+            onToggle={() => onToggleCard(group.mapName, members.map(m => m.id), isExpanded)}
+            onExpandMembers={onExpandMembers}
             onDelete={() => onRequestDelete(members.map(m => m.id), `${tag} ${group.label}（${members.length}件）`)}
             focusRequest={focusRequest}
             onToast={onToast}
@@ -875,7 +887,7 @@ const MemberGroupSection = observer(({
 // タグ（ラベル）1件分のアコーディオンカード（finish/FinishTable.jsx の RoomCard と同型）。
 // members は同一タグを共有する全部材（同一形状のため、フィールド編集は全員に伝播する）。
 const MemberCard = observer(({
-  members, group, graph, composition, project, readOnly, isExpanded, onToggle, onExpandKey, onDelete, focusRequest, onToast,
+  members, group, graph, composition, project, readOnly, isExpanded, onToggle, onExpandMembers, onDelete, focusRequest, onToast,
   mergeModeActiveAnywhere, mergeActive, isMergeAnchor, isMergeSelected, mergeAnchorMaterialType, onToggleMerge, onStartMerge,
   onSelectMembers, onStructureChanged, onPendingFocus, onColumnWidthNotice, slabMaterials,
 }) => {
@@ -992,8 +1004,11 @@ const MemberCard = observer(({
     if (isExpanded) setColumnScope(woodColumnCard && columnEntityTarget ? 'entity' : 'all');
   // 依存配列はトリガー（展開・フォーカス変更）だけに絞る意図的な設計——woodColumnCard/columnEntityTargetは
   // 判定時点の最新値を読むだけで、これら自体の変化で再発火させたくない（AxisFaceInput.jsxと同じ規律）。
+  // isIndividualColumn もトリガー: カードの React key は先頭部材の id なので、個別指定・個別の解除で柱が
+  // 共通⇔個別のグループを移ると、同じインスタンスが別の種類のカードを引き継ぐことがある（その柱が先頭のとき）。
+  // 種類が替わったら既定へ戻す（番号キーの頃は別カードの新規マウントで既定になっていた）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isExpanded, focusRequest]);
+  }, [isExpanded, focusRequest, isIndividualColumn]);
 
   // 「柱寸アップ」チェック（階の柱寸より大きい柱を許可。ユーザー裁定2026-09-17・B-1）。card-local
   // state（保存しない）——columnScopeと同じくカード展開・フォーカス変更のたびに未チェックへ戻す。
@@ -1002,7 +1017,8 @@ const MemberCard = observer(({
   const [upChecked, setUpChecked] = useState(false);
   useEffect(() => {
     if (isExpanded) setUpChecked(false);
-  }, [isExpanded, focusRequest]);
+  // isIndividualColumn もトリガー（上の columnScope の既定 effect と同じ理由。共通⇔個別を同じインスタンスが引き継ぐ場合）。
+  }, [isExpanded, focusRequest, isIndividualColumn]);
   const floorWidthForCard = woodColumnCard ? woodColumnWidthMm(graph, project) : null;
   const forcedUp = woodColumnCard && isUpsizedWidth(columnEntityTarget?.woodColumnWidthMm, floorWidthForCard);
   const allowUpsize = upChecked || forcedUp;
@@ -1108,10 +1124,14 @@ const MemberCard = observer(({
             restoreGraph(graph, after);
           },
         );
-        // 分割で追加された新番号のカードへ開き直す（一覧の再計算は memberNo/numberGroupId が
-        // observable なのでMobXが行う）。旧番号のカードを開いたままにすると、編集した値がそこには
-        // 無い＝「編集が戻った」ように見えるため、必ず分割後の部材側を開く。
-        onExpandKey?.(`${group.mapName}:${targetMembers[0].memberNo ?? UNNUMBERED_TAG}`);
+        // 分割した部材の側を id で開く（一覧の再計算は memberNo/numberGroupId が observable なので
+        // MobXが行う）。旧番号のカードを開いたままにすると、編集した値がそこには無い＝「編集が戻った」
+        // ように見えるため、必ず分割後の部材側を開く。
+        // 分割後のカードは新しいグループなので適用範囲は「全体」から始める。カードの React key は先頭部材の id
+        // のため、分割した部材がこのカードの先頭だとこのインスタンスが分割後のカードを引き継ぐ（展開の変化が無く
+        // 既定へ戻す effect は走らない）——ここで明示的に戻す。
+        setScope('all');
+        onExpandMembers?.(group.mapName, targetMembers.map(m => m.id));
         onToast?.(`「${targetMembers[0].memberNo}」として分割しました（${targetMembers.length}本）`);
         setSplitConfirm(null);
       },

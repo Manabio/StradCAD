@@ -156,6 +156,14 @@ test('reconcile: 本数が同じでも部材が入れ替わっていれば ids �
   assert.equal(r.primaryId, 'a');
 });
 
+test('reconcile: ids が同じでも、主 id が一覧に無ければ外す（同じ参照を返さない）', () => {
+  const a = anchor('columnMap', ['a', 'b'], 'zz');
+  const r = reconcileAnchor(a, a, { sectionKey: 'col', mapName: 'columnMap', tag: 'C1', ids: ['a', 'b'] });
+  assert.ok(r !== a, '主 id の違いを変化なしと見なしている');
+  assert.equal(r.primaryId, null);
+  assert.equal(r.ids.join(','), 'a,b');
+});
+
 test('reconcile: 主 id が消えたら primaryId は null', () => {
   const a = anchor('columnMap', ['a', 'b'], 'a');
   const r = reconcileAnchor(a, a, { sectionKey: 'col', mapName: 'columnMap', tag: 'C1', ids: ['b'] });
@@ -168,6 +176,19 @@ test('reconcile: tag は消える', () => {
   const r = reconcileAnchor(a, a, { sectionKey: 'col', mapName: 'columnMap', tag: 'C1', ids: ['a'] });
   assert.equal(r.tag, null);
   assert.equal(r.ids.join(','), 'a');
+});
+
+test('reconcile: listingReady=false は resolved が null でも current のまま（一覧の成立前は閉じない）', () => {
+  const a = anchor('columnMap', ['a'], 'a');
+  assert.ok(reconcileAnchor(a, a, null, false) === a);
+  const resolved = { sectionKey: 'col', mapName: 'columnMap', tag: 'C1', ids: ['a', 'n'] };
+  assert.ok(reconcileAnchor(a, a, resolved, false) === a);
+});
+
+test('reconcile: 対照 listingReady=true（既定も同じ）なら resolved null で閉じる', () => {
+  const a = anchor('columnMap', ['a'], 'a');
+  assert.equal(reconcileAnchor(a, a, null, true), null);
+  assert.equal(reconcileAnchor(a, a, null), null);
 });
 
 test('reconcile: current null → null', () => {

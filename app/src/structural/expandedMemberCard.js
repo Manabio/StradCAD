@@ -7,6 +7,7 @@
 //  R2 グループが割れたら主 id の側。主 id が無ければ覚えている部材を多く含む側（同数は一覧で上のカード）。
 //  R4 覚えている部材がすべて消えたら閉じる。undo で戻っても開き直さない。
 //  R7 伏図タップでどのカードにも一致しなければ閉じる。
+//  一覧がまだ無い間（listingReady=false。図面合成が未確立）は取り直さず閉じない（従来も一覧の成立を待っていた）。
 // graph・部材オブジェクトは受け取らず、id（文字列）とタグ（文字列）だけを扱う。入力は変更しない。
 // ================================================================
 
@@ -70,8 +71,12 @@ export function resolveExpandedCard(anchor, sections) {
   return null;
 }
 
-/** 描画後の取り直し。resolved は resolveExpandedCard(resolvedFrom, sections) の結果。 */
-export function reconcileAnchor(current, resolvedFrom, resolved) {
+/**
+ * 描画後の取り直し。resolved は resolveExpandedCard(resolvedFrom, sections) の結果。
+ * listingReady=false（一覧がまだ無い＝図面合成が未確立）の間は取り直さず・閉じない（current をそのまま返す）。
+ */
+export function reconcileAnchor(current, resolvedFrom, resolved, listingReady = true) {
+  if (!listingReady) return current;
   if (current !== resolvedFrom) return current;
   if (current === null || current === undefined) return null;
   if (!resolved) return null;

@@ -673,23 +673,10 @@ test('【不変条件・コーディネーター指示2026-09-17／QA指摘2026-
     '分割UI専用のscopeが常に\'all\'固定の既定effectへ戻っていない（柱カード用の分岐が紛れ込む回帰）');
 });
 
-// ---- QA裁定・ステップ4: 個別指定直後のカード追従（setPendingFocusId → memberNo確定を待って展開） ----
+// ---- QA裁定・ステップ4: 個別指定直後のカード追従（旧 pendingFocusId 方式は id アンカー方式へ置き換え済み） ----
+// 裁定2026-11-12 案A: 開いているカードは部材の id で覚える。旧2テスト（pendingFocusId の state・effect と
+// onPendingFocus={setPendingFocusId} の橋渡し）の置き換え先は expandedMemberCardWiring.test.js。
 
-test('【不変条件・QA裁定】MemberListTab.jsx: pendingFocusIdはselfColumnGraph.columnMap.get(id)?.memberNoの確定（non-null）を観測してcolumnMap:<memberNo>を展開し、pendingを消す', () => {
-  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
-  assert.ok(/const \[pendingFocusId, setPendingFocusId\] = useState\(null\);/.test(src),
-    'pendingFocusId のstate定義が見つからない');
-  assert.ok(/const pendingFocusMemberNo = pendingFocusId \? \(selfColumnGraph\?\.columnMap\?\.get\(pendingFocusId\)\?\.memberNo \?\? null\) : null;/.test(src),
-    'pendingFocusMemberNo が selfColumnGraph.columnMap.get(pendingFocusId)?.memberNo から解決されていない（下階柱×側や別graphを見る回帰）');
-  const effectMatch = /useEffect\(\(\) => \{\s*\n\s*if \(pendingFocusId == null \|\| pendingFocusMemberNo == null\) return;\s*\n\s*setExpandedKey\(`columnMap:\$\{pendingFocusMemberNo\}`\);\s*\n\s*setPendingFocusId\(null\);\s*\n\s*\}, \[pendingFocusId, pendingFocusMemberNo\]\);/.exec(src);
-  assert.ok(effectMatch, 'pendingFocus effect（依存配列[pendingFocusId, pendingFocusMemberNo]でsetExpandedKeyしpendingを消す）が見つからない');
-});
-
-test('【不変条件・QA裁定】MemberListTab.jsx: onPendingFocus（setPendingFocusId）はMemberGroupSection・MemberCardへそのまま橋渡しされる（新しいpropsを増やしただけで別経路を作らない）', () => {
-  const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
-  assert.ok(/onPendingFocus=\{setPendingFocusId\}/.test(src), 'MemberListTab→MemberGroupSectionへonPendingFocus={setPendingFocusId}が渡されていない');
-  assert.ok(/onPendingFocus=\{onPendingFocus\}/.test(src), 'MemberGroupSection→MemberCardへonPendingFocus={onPendingFocus}が素通しされていない');
-});
 
 test('【不変条件・ユーザー裁定2026-09-17】MemberListTab.jsx: ColumnWidthScopeSelectのvalueはscope=entityかつfocusedMemberがあるときだけその柱の解決値（個別??階）、それ以外は階の値', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, 'MemberListTab.jsx'), 'utf8');
