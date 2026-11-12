@@ -13,6 +13,7 @@ import {
   FRAMING_MONO_COLOR, beamDepthMarks, pickMembersOnFigure, pickColumnsOnFigure, columnRenderSize, ROOF_FRAMING_DASH,
 } from '../structural/framingDrawing.js';
 import { roofFramingFigurePrimitives, roofFramingEaveCorners } from '../structural/roofFramingRegions.js';
+import { MEMBER_KIND, sharedPlaneDrawsKind, sharedPlaneDrawsMember, sharedPlaneDrawsRoofFraming } from '../structural/structuralClassification.js';
 import { openingEdgeComponents } from '../structural/openingBeamAxes.js';
 import { openingCrossSegments } from '../structural/openingCrossDrawing.js';
 import { stairRiserOf } from '../finish/stair/stairDimensions.js';
@@ -164,9 +165,9 @@ function bandCapLine(key, isVertical, axisValue, half, coord, stroke, strokeWidt
 
 // 木造基礎伏図の「ベース」帯の寸法。1階壁芯（＝基礎梁の軸）から幅600
 // （foundation.sectionDefaults.baseWidth）を振り分けて描く。角でトリム（直交する基礎梁に突き当たる端を
-// 半幅だけ控えて突合せにする）。土台（幅150の中線）は role:'sill' の実体梁として一般の梁帯描画
-// （bandLines）に乗るため、ここでは描かない（2026-09-18裁定。structural/woodAutoFill.js
-// autoFillWoodSillBeams参照）。
+// 半幅だけ控えて突合せにする）。土台（幅150の中線）は role:'sill' の実体梁だが、基礎伏図／1階伏図の
+// 見せ分けでは土台の帯はどの伏図にも描かない（structuralClassification.js C節。ユーザー裁定2026-11-12。
+// 実体生成は structural/woodAutoFill.js autoFillWoodSillBeams）。
 const BAND_COORD_TOL = 1; // 端点一致判定の許容(mm)
 
 // 基礎梁(role:'foundation')の軸に沿った帯1本のRect props（isVertical=軸がX方向）。lo/hi は span方向の座標。
@@ -377,7 +378,7 @@ export const ColumnsLayer = observer(({
 // z-order は描画順（柱→基礎→梁→スラブ→耐力壁）で再現し、レイヤ宣言順には依存させない。
 // selectedMemberIds（Set<string>|null。構造リストで展開中のカードの部材id集合＝StructuralModeState.selectedMemberIds）
 // を渡すと、該当部材の実形状に半透明の青矩形（structural/memberSelection.js）を最前面に重ねて選択状態を示す。
-export const StructuralLayer = observer(({ composition, viewport, project, onMemberClick = null, selectedMemberIds = null, bayPick = null }) => {
+export const StructuralLayer = observer(({ composition, viewport, project, onMemberClick = null, selectedMemberIds = null, bayPick = null, slotView = null }) => {
   if (!composition) return null;
   const scale  = Math.min(viewport.scaleX, viewport.scaleY);
   const lod    = viewport.lodLevel;
@@ -420,7 +421,8 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
   const drawBase = woodFoundation && foundationRules.hasBase(project?.structuralInfo?.foundationType);
 
   // 梁の描画スパン（柱手前でトリム済み）を1箇所で解決する——梁本体の帯・継手記号と、非正角材の標記
-  // （beamDepthMarks）が同じスパンを読むようにするため（二重計算・食い違いの防止）。
+  // （beamDepthMarks）が同じスパンを読むようにするため（二重計算・食い違いの防止）。描く側は
+  // visibleBeamSpans（beamDrawSpans を見せ分けで絞ったもの）を読む。
   const baseSpans = (beam?.graph?.beams ?? []).map(b => {
     const { coord1, coord2 } = b.spanForColumns(displayedColumns, { diaphragm: lod === LodLevel.DETAIL });
     return { beam: b, coord1, coord2 };
@@ -447,11 +449,14 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
     const j = junctions.get(s.beam.id);
     return j ? { beam: s.beam, coord1: j.coord1, coord2: j.coord2, ends: j.ends } : s;
   });
+  // 基礎伏図／1階伏図の見せ分け（slotView。null＝絞らない）。スパン・交点は全梁で解いたまま、
+  // 帯の描画と非正角標記の入力だけを絞る（選択強調・開口の×は全梁のまま）。
+  const visibleBeamSpans = beamDrawSpans.filter(s => sharedPlaneDrawsMember(slotView, 'beamMap', s.beam));
 
   // 非正角材（成≠幅）の梁の標記（在来木造のみ。structural/framingDrawing.js beamDepthMarks が
   // 対象選定・幾何を丸ごと決める）。標記は寸法線に見立てる（ユーザー裁定2026-09-16）——文字サイズ・
   // 平行線からの離れは寸法線と同じ dimensionStyle.js の値を使う（逆補正方式はMemberTagLayer.jsxと同じ）。
-  const beamDepthMarkList = beamDepthMarks(figureRules.drawing, lod, beamDrawSpans.map(({ beam: b, coord1, coord2 }) => ({
+  const beamDepthMarkList = beamDepthMarks(figureRules.drawing, lod, visibleBeamSpans.map(({ beam: b, coord1, coord2 }) => ({
     id: b.id, isVertical: b.isVertical, axisValue: b.axisValue, coord1, coord2,
     sectionDefId: b.sectionDefId, role: b.role, materialType: b.materialType,
   })));
@@ -479,7 +484,7 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
   // という位置ではなく category === 'columnMap'（下階柱）で判定する——自階柱グループの並び順が
   // 変わっても意味を保つため（QA指摘F7）。自階柱にダイヤフラムは無い（従来どおり）。
   const columnColorOverride = framingColorOverride(figureRules.drawing);
-  const columnGroups = framingColumnGroups(figureRules.drawing);
+  const columnGroups = sharedPlaneDrawsKind(slotView, MEMBER_KIND.COLUMN) ? framingColumnGroups(figureRules.drawing) : [];
   // 1グループぶんの<Group><ColumnsLayer/></Group>。QA指摘4（2026-09-17）のz-order修正で描画位置が
   // 2箇所（後述backColumnGroups/frontColumnGroups）に分かれたため関数化し、二重実装を避ける。
   const renderColumnGroup = g => {
@@ -499,7 +504,7 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
       </Group>
     );
   };
-  // 柱タップ対象（columnMapSelf かつ pickColumns。在来木造の自階柱□のみ）だけ梁本体（beamDrawSpans）
+  // 柱タップ対象（columnMapSelf かつ pickColumns。在来木造の自階柱□のみ）だけ梁本体（visibleBeamSpans＝beamDrawSpans を見せ分けで絞ったもの）
   // より後（前面）に描く——梁が柱より後に描かれる既存z-order（画面上は梁が上、当たり判定も梁が勝つ）
   // のままだと、梁上に乗る管柱の中心タップが梁カードを開いてしまう（QA指摘4・実機観測）。非pickの
   // グループ（下階柱×・非在来の柱）は従来どおり最初（footings・梁より前）に描く——出力・z-orderとも
@@ -544,7 +549,7 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
   return (
     <>
       {backColumnGroups.map(renderColumnGroup)}
-      {woodFoundation && (
+      {woodFoundation && sharedPlaneDrawsKind(slotView, MEMBER_KIND.FOUNDATION_BEAM) && (
         <Group {...groupPropsForStyle(footing?.spec.style)}>
           {woodFoundationBands(foundationBeams, drawBase, {
             baseColor: colorOf(StructuralMaterialType.RC),
@@ -553,7 +558,7 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
         </Group>
       )}
       <Group {...groupPropsForStyle(footing?.spec.style)}>
-        {(footing?.graph?.footings ?? []).map(f => {
+        {(footing?.graph?.footings ?? []).filter(f => sharedPlaneDrawsMember(slotView, 'footingMap', f)).map(f => {
           // 矩形=widthX×widthY（柱・耐力壁と同じ実寸表現）、丸（sectionShape:'round'）=widthXを直径とする円。
           // 柱脚(ColumnBase)は丸柱の直下でも常に矩形（型枠の都合上、柱脚自体を丸で作ることは無いため）。
           // 独立基礎(IndependentFooting)と区別するため点線（'baseType' in footing で判定）。固有点線が無い場合のみ style 破線。
@@ -582,10 +587,10 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
         })}
       </Group>
       <Group {...groupPropsForStyle(beam?.spec.style)}>
-        {beamDrawSpans.flatMap(({ beam: b, coord1, coord2, ends }) => {
+        {visibleBeamSpans.flatMap(({ beam: b, coord1, coord2, ends }) => {
           const color = cautionAxisIds?.has(b.axisCL.id) ? CAUTION_COLOR : colorOf(b.materialType);
           // 詳細描画では梁を柱断面ではなくダイヤフラム端まで（鋼管柱のみ e 分だけ手前で止まる）。
-          // スパン(coord1/coord2)は上でbeamDrawSpansとして解決済み——非正角材の標記（beamDepthMarks）と
+          // スパン(coord1/coord2)は上でbeamDrawSpansとして解決済み（ここは見せ分けで絞った visibleBeamSpans）——非正角材の標記（beamDepthMarks）と
           // 同じスパンを読む（二重計算・食い違いの防止）。
           const p1 = b.isVertical ? { x: b.axisValue, y: coord1 } : { x: coord1, y: b.axisValue };
           const p2 = b.isVertical ? { x: b.axisValue, y: coord2 } : { x: coord2, y: b.axisValue };
@@ -686,7 +691,7 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
         })}
       </Group>
       <Group {...groupPropsForStyle(slab?.spec.style)}>
-        {(slab?.graph?.slabs ?? []).flatMap(s => [...s.cells].map(key => {
+        {(slab?.graph?.slabs ?? []).filter(s => sharedPlaneDrawsMember(slotView, 'slabMap', s)).flatMap(s => [...s.cells].map(key => {
           const bd = cellBoundsFromKey(key, slab.graph);
           if (!bd) return null;
           return (
@@ -741,7 +746,7 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
         </Group>
       )}
       <Group {...groupPropsForStyle(wall?.spec.style)}>
-        {(wall?.graph?.structuralWalls ?? []).flatMap(w => {
+        {(wall?.graph?.structuralWalls ?? []).filter(w => sharedPlaneDrawsMember(slotView, 'wallMap', w)).flatMap(w => {
           const color    = colorOf(w.materialType);
           const segments = wallSegments(w, wall.graph.wallOpenings);
           if (lod === LodLevel.SCHEMATIC) {
@@ -758,7 +763,7 @@ export const StructuralLayer = observer(({ composition, viewport, project, onMem
       </Group>
       {/* 小屋組（棟木＝一点鎖線2本・母屋・隅木・谷木＝一点鎖線1本・束＝黒丸・屋根の外形線＝閉じた細い実線）。梁の帯の後・
           選択ハイライトの前。線（棟木・母屋・隅木・谷木）→ 束 → 外形線の順。一点鎖線は中心線（CenterLinesLayer.jsx）と同じ画面px固定。クリック対象にしない。 */}
-      {roofFramingPrims.length > 0 && (
+      {roofFramingPrims.length > 0 && sharedPlaneDrawsRoofFraming(slotView) && (
         <Group name="roof-framing" {...groupPropsForStyle(beam?.spec.style)}>
           {roofFramingPrims.filter(p => p.kind !== 'strut' && p.kind !== 'outline').map(p => (
             <Line

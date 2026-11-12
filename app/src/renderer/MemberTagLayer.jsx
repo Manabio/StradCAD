@@ -8,6 +8,7 @@ import { groupPropsForStyle } from '../figure/figureStyle.js';
 import { PIN_ROLES } from '../core/structuralEntities.js';
 import { rulesFor, effectiveStructure } from '../structural/structureRules.js';
 import { showMemberTags } from '../structural/framingDrawing.js';
+import { sharedPlaneDrawsMember } from '../structural/structuralClassification.js';
 
 const FONT_SIZE_PX = 22; // スクリーン上の表示サイズ(px)。RoomLabelsLayer と同じ逆補正方式。
 const SECONDARY_TAG_FONT_SIZE_PX = 18; // 小梁タグは大梁(G)より一回り小さく表示する
@@ -129,7 +130,7 @@ const MemberTag = observer(({ entity, mapName, x, y, offsetX, offsetY, rotation 
 // StructuralLayer.jsx と同じ 'beamMap' で取る）の実効主構造で早期returnする。タグクリックの代替は
 // 伏図の梁タップ（StructuralLayer.jsx pickMembersOnFigure。ステップ4第3単位①）——SceneLayers.jsx が
 // StructuralLayer.onMemberClick と本レイヤーの onTagClick へ同じ openMemberCard を渡す。
-export const MemberTagLayer = observer(({ composition, viewport, project, onTagClick, onStatusMenuRequest }) => {
+export const MemberTagLayer = observer(({ composition, viewport, project, onTagClick, onStatusMenuRequest, slotView = null }) => {
   if (!composition) return null;
   const figureGraph = composition.graphForCategory('beamMap');
   if (!showMemberTags(rulesFor(effectiveStructure(figureGraph, project)).drawing)) return null;
@@ -214,26 +215,26 @@ export const MemberTagLayer = observer(({ composition, viewport, project, onTagC
   return (
     <>
       <Group {...groupPropsForStyle(composition.styleForCategory('columnMap'))}>
-        {pointTags(columnGraph?.columns ?? [], 'columnMap', c => columnMargin(c))}
+        {pointTags((columnGraph?.columns ?? []).filter(e => sharedPlaneDrawsMember(slotView, 'columnMap', e)), 'columnMap', c => columnMargin(c))}
       </Group>
       <Group {...groupPropsForStyle(composition.styleForCategory('footingMap'))}>
-        {pointTags(footingGraph?.footings ?? [], 'footingMap', footingMargin)}
+        {pointTags((footingGraph?.footings ?? []).filter(e => sharedPlaneDrawsMember(slotView, 'footingMap', e)), 'footingMap', footingMargin)}
       </Group>
       <Group {...groupPropsForStyle(composition.styleForCategory('beamMap'))}>
         {axisTags(
           // 小梁・床梁タグは略図（LOD SCHEMATIC）では非表示（大梁のみ残す。PIN_ROLES=母材から離して
           // 終える梁のrole集合。core/structuralEntities.js参照。床梁を小梁と同型に扱う）
-          (beamGraph?.beams ?? []).filter(b => !(lod === LodLevel.SCHEMATIC && PIN_ROLES.has(b.role))),
+          (beamGraph?.beams ?? []).filter(b => !(lod === LodLevel.SCHEMATIC && PIN_ROLES.has(b.role)) && sharedPlaneDrawsMember(slotView, 'beamMap', b)),
           'beamMap',
           b => beamMargin(b, lod),
           b => (PIN_ROLES.has(b.role) ? SECONDARY_TAG_FONT_SIZE_PX : FONT_SIZE_PX) / viewport.scaleX,
         )}
       </Group>
       <Group {...groupPropsForStyle(composition.styleForCategory('wallMap'))}>
-        {axisTags(wallGraph?.structuralWalls ?? [], 'wallMap', w => wallMargin(w, lod))}
+        {axisTags((wallGraph?.structuralWalls ?? []).filter(e => sharedPlaneDrawsMember(slotView, 'wallMap', e)), 'wallMap', w => wallMargin(w, lod))}
       </Group>
       <Group {...groupPropsForStyle(composition.styleForCategory('slabMap'))}>
-        {slabTags(slabGraph?.slabs ?? [], 'slabMap')}
+        {slabTags((slabGraph?.slabs ?? []).filter(e => sharedPlaneDrawsMember(slotView, 'slabMap', e)), 'slabMap')}
       </Group>
     </>
   );

@@ -74,6 +74,7 @@ import { StructuralPanel } from './structural/StructuralPanel.jsx';
 import { autoFillColumnAxisOffsets, autoFillBeamEccentricity, resolveLowestGraph, axisExteriorSign } from './structural/structuralAutoFill.js';
 import { buildExteriorSide } from './structural/wallGate.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor, effectiveStructure } from './structural/structureRules.js';
+import { resolveSharedPlaneView } from './structural/structuralClassification.js';
 import { buildStructuralFigureSlots, designationForSlot, firstSlotKeyForPlane, floorSettingsPlaneIdForSlot } from './structural/structuralFigureSlots.js';
 import { recomputeStructuralComposition, runStructuralModeSetup, rebuildStructuralBinding, reflectStructuralToOtherFloors, setStructuralToastHandler } from './structural/structuralOrchestration.js';
 import { structuralSync, OPENING_STRUCTURAL_SYNC } from './structural/structuralSync.js';
@@ -2847,6 +2848,11 @@ const App = observer(() => {
         ? savedStructSlot.key
         : firstSlotKeyForPlane(structSlots, project.activePlaneId))
     : null;
+  // 同じ平面の基礎伏図／1階伏図の見せ分け視点（描画・タグへ渡す）。毎レンダー新しい frozen を返すが、
+  // SceneLayers は inline の関数 props（onOpeningTagClick 等）で既に毎レンダー再レンダーされるため増えない。
+  const structSlotView = structSlots
+    ? resolveSharedPlaneView(structSlots.find(s => s.key === activeStructSlot) ?? null, structSlots, structComposition?.subjectPlane?.id ?? null)
+    : null;
   const drumFloors = structSlots
     ? structSlots.map(slot => ({ id: slot.key, name: designationForSlot(slot, slot.key === activeStructSlot) }))
     : project.planes.map(p => ({ id: p.id, name: p.name }));
@@ -3159,6 +3165,7 @@ const App = observer(() => {
             stairBreakOverhangMm={stairBreakOverhangMm}
             stairUnderClips={stairUnderClips}
             structComposition={structComposition}
+            structSlotView={structSlotView}
             belowPlanPeek={belowPlanPeek}
             abovePlanPeek={abovePlanPeek}
             snapPoint={snapPoint}

@@ -46,7 +46,7 @@ import { FacadeLayer } from './FacadeLayer.jsx';
 export const SceneLayers = observer(({
   graph, project, appMode, mode, modeRef, viewport, size, columnAxisMode,
   isStairMode, installEntries, upperEntries, stairLaneGap, stairBreakOverhangMm, stairUnderClips,
-  structComposition, belowPlanPeek, abovePlanPeek,
+  structComposition, structSlotView, belowPlanPeek, abovePlanPeek,
   snapPoint, cursorWorld, clPreview, clDialog, menu,
   onMemberClick, setStatusMenu, onToast,
   onOpeningTagClick, onElevationOpeningClick,
@@ -183,6 +183,7 @@ export const SceneLayers = observer(({
                 onMemberClick={onMemberClick}
                 selectedMemberIds={mode?.selectedMemberIds ?? null}
                 bayPick={mode?.bayPick ?? null}
+                slotView={structSlotView ?? null}
               />
             )}
             {appMode === 'structure' && (
@@ -192,6 +193,7 @@ export const SceneLayers = observer(({
                 project={project}
                 onTagClick={onMemberClick}
                 onStatusMenuRequest={(entity, pos) => setStatusMenu({ entity, pos })}
+                slotView={structSlotView ?? null}
               />
             )}
             {appMode === 'floorplan' && (

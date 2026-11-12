@@ -118,7 +118,7 @@ test('【配線】SceneLayers は <PlanSolidsLayer> を showPlanFigure で1行�
   assert.match(scene, /^\s*import \{ PlanSolidsLayer \} from '\.\/PlanSolidsLayer\.jsx';\s*$/m);
   assert.equal(count(scene, /<PlanSolidsLayer\b/g), 1);
   assert.match(scene, /^\s*const showPlanFigure = shouldShowPlanFigure\(appMode\);\s*$/m);
-  assert.match(scene, /^\s*structComposition, belowPlanPeek, abovePlanPeek,\s*$/m);
+  assert.match(scene, /^\s*structComposition, structSlotView, belowPlanPeek, abovePlanPeek,\s*$/m);
   assert.equal(count(scene, /RoofPlanLayer/g), 0, '下屋は PlanSolidsLayer が描く（S5）');
   assert.equal(count(scene, /VoidLayer|upperVoidCrosses/g), 0, '吹抜けの注記は PlanSolidsLayer が描く（S6b）');
   const solidsAt = scene.indexOf('<PlanSolidsLayer'), equipAt = scene.indexOf('<EquipmentSymbolLayer');

@@ -30,7 +30,8 @@ test('【不変条件】StructuralLayer.jsx: COLOR_BY_MATERIAL[ の直接参照�
 
 test('【不変条件・z-order修正2026-09-17】StructuralLayer.jsx: 柱グループは framingColumnGroups の配列を renderColumnGroup(g) で描く（resolveCategory(group.category) の graph・group.symbol・colorOverride・group.outline をすべて橋渡しし、diaphragm は columnMap 判定で渡す）。柱グループの描画はrenderColumnGroupへ関数化されている——QA指摘4（伏図で梁上の管柱タップが梁カードを開いてしまう）の修正で、pick対象（自階柱□・pickColumns）だけ梁の後に描く2箇所描画になったため（下のz-orderテストで固定）', () => {
   const src = readSource();
-  const defMatch = /const\s+(\w+)\s*=\s*framingColumnGroups\(/.exec(src);
+  // 見せ分け（slotView）の三項が前に付く形に固定する（行コメントは落として照合）
+  const defMatch = /const\s+(\w+)\s*=\s*sharedPlaneDrawsKind\(slotView, MEMBER_KIND\.COLUMN\) \? framingColumnGroups\(/.exec(codeLines(src).join('\n'));
   assert.ok(defMatch, 'framingColumnGroups(...) の呼び出し・代入が見つからない（柱グループの判断が structural/framingDrawing.js に無い＝回帰）');
   const groupsVar = defMatch[1];
   // 1グループぶんの描画は renderColumnGroup(g) に一本化されているはず（z-order修正で描画位置が
@@ -80,9 +81,9 @@ test('【不変条件・QA指摘4】StructuralLayer.jsx: 柱タップ対象（co
   // frontColumnGroups（pick対象の自階柱□）は梁本体（beamDrawSpans.flatMapのGroup）より後に描かれる
   // ——梁が柱より後に描かれる既存z-orderのままだと、梁上に乗る管柱の中心タップが梁カードを開いてしまう
   // （QA指摘4・実機観測）。
-  const beamBodyIdx = src.indexOf('beamDrawSpans.flatMap(');
+  const beamBodyIdx = src.indexOf('visibleBeamSpans.flatMap(');
   const frontRenderIdx = src.indexOf('{frontColumnGroups.map(renderColumnGroup)}');
-  assert.ok(beamBodyIdx > 0, '梁本体の描画（beamDrawSpans.flatMap）が見つからない');
+  assert.ok(beamBodyIdx > 0, '梁本体の描画（visibleBeamSpans.flatMap）が見つからない');
   assert.ok(frontRenderIdx > 0, 'frontColumnGroups.map(renderColumnGroup) の描画が見つからない');
   assert.ok(beamBodyIdx < frontRenderIdx,
     'frontColumnGroups（pick対象の自階柱□）の描画が梁本体（beamDrawSpans）より前にある（QA指摘4の回帰: 梁上の管柱タップが梁カードを開いてしまう）');
@@ -103,14 +104,15 @@ test('【不変条件】StructuralLayer.jsx: 非正角材の標記は beamDepthM
   const src = readSource();
   // 梁本体の帯・継手記号を描く flatMap が beamDrawSpans を読んでいる（spanForColumns を1つ上へ
   // 持ち上げた結果を1箇所に集約——非正角材の標記と食い違わせないため）。
-  assert.ok(/beamDrawSpans\.flatMap\(/.test(src),
-    '梁本体の描画が beamDrawSpans.flatMap(...) を経由していない（spanForColumnsの二重計算・食い違いの回帰）');
+  // 見せ分け（slotView）の絞り込み visibleBeamSpans は beamDrawSpans.filter(...) の結果＝同じスパン。
+  assert.ok(/visibleBeamSpans\.flatMap\(/.test(src) && /const visibleBeamSpans = beamDrawSpans\.filter\(/.test(src),
+    '梁本体の描画が beamDrawSpans.filter→visibleBeamSpans.flatMap(...) を経由していない（spanForColumnsの二重計算・食い違いの回帰）');
   const defMatch = /const\s+(\w+)\s*=\s*beamDepthMarks\(/.exec(src);
   assert.ok(defMatch, 'beamDepthMarks(...) の呼び出し・代入が見つからない（非正角材の標記の判断が structural/framingDrawing.js に無い＝回帰）');
   const marksVar = defMatch[1];
   // beamDepthMarks(...) への入力が beamDrawSpans から作られている（梁本体と同じスパン）ことを確認する。
-  const inputMatch = new RegExp(`beamDepthMarks\\([^;]*beamDrawSpans\\.map\\(`, 's').exec(src);
-  assert.ok(inputMatch, 'beamDepthMarks(...) の第3引数が beamDrawSpans.map(...) 由来になっていない（梁本体と別のスパンを見る回帰）');
+  const inputMatch = new RegExp(`beamDepthMarks\\([^;]*visibleBeamSpans\\.map\\(`, 's').exec(src);
+  assert.ok(inputMatch, 'beamDepthMarks(...) の第3引数が visibleBeamSpans.map(...) 由来になっていない（梁本体と別のスパンを見る回帰）');
   const mapMatch = new RegExp(`${marksVar}\\.flatMap\\(\\s*(\\w+)`).exec(src);
   assert.ok(mapMatch, `${marksVar}.flatMap(...) の呼び出しが見つからない（beamDepthMarksの戻り値をmapして描いていない）`);
 });
@@ -216,8 +218,8 @@ test('【不変条件・B-3】StructuralLayer.jsx: beamDrawSpansはresolveBeamJu
   assert.ok(beamDrawSpansMatch, `beamDrawSpans が baseSpans.map(...) の中で ${junctionsVar}.get(...) を参照していない（交点処理の結果で上書きしていない回帰）`);
   // 梁本体の描画（bandLines分岐）でends（beamDrawSpansの分割代入）を受け取り、cappedな端だけ
   // bandCapLine(を呼んでいるか。1分岐でも落とすと検出できる形で固定する。
-  assert.ok(/beamDrawSpans\.flatMap\(\(\{\s*beam:\s*b,\s*coord1,\s*coord2,\s*ends\s*\}\)/.test(src),
-    'beamDrawSpansのflatMapがendsを分割代入していない（交点処理の結果を読んでいない回帰）');
+  assert.ok(/visibleBeamSpans\.flatMap\(\(\{\s*beam:\s*b,\s*coord1,\s*coord2,\s*ends\s*\}\)/.test(src),
+    'beamDrawSpans（を絞ったvisibleBeamSpans）のflatMapがendsを分割代入していない（交点処理の結果を読んでいない回帰）');
   const capMatch = /const capLines = \(ends \?\? \[\]\)\.flatMap\(\(e, i\) => \(e\?\.capped[\s\S]{0,120}?bandCapLine\(/.exec(src);
   assert.ok(capMatch, 'capLines が e?.capped でゲートされたbandCapLine(呼び出しになっていない（capped=falseの端に誤ってキャップ線を描く／すべての端に描く回帰）');
   assert.ok(/\.\.\.capLines,/.test(src), 'capLinesがbandLines分岐の描画配列に含まれていない');
@@ -346,10 +348,10 @@ test('【不変条件・C3a】StructuralLayer.jsx: 小屋組は roofFramingFigur
   ]);
 });
 
-test('【不変条件・C3a】StructuralLayer.jsx: 小屋組ブロックの開始行・Group・filter の行は1行まるごと一致（jsx に条件を足さない・beam の表示スタイルを引き継ぐ）', () => {
+test('【不変条件・C3a】StructuralLayer.jsx: 小屋組ブロックの開始行・Group・filter の行は1行まるごと一致（足してよい条件は見せ分けの述語 sharedPlaneDrawsRoofFraming 1 つだけ・beam の表示スタイルを引き継ぐ）', () => {
   const lines = bodyLines(readSource());
   for (const expected of [
-    '{roofFramingPrims.length > 0 && (',
+    '{roofFramingPrims.length > 0 && sharedPlaneDrawsRoofFraming(slotView) && (',
     '<Group name="roof-framing" {...groupPropsForStyle(beam?.spec.style)}>',
     // D1: 屋根の外形線（kind:'outline'）は一点鎖線の群から外し、細い実線の別の map で描く（書き換え: 一点鎖線の filter に outline 除外を追加）
     "{roofFramingPrims.filter(p => p.kind !== 'strut' && p.kind !== 'outline').map(p => (",
@@ -382,9 +384,9 @@ test('【不変条件・C3a】StructuralLayer.jsx: 小屋組の Line・Circle �
 
 test('【不変条件・C3a】StructuralLayer.jsx: z-order は 梁の帯・非正角材の標記・壁の後、選択ハイライトの前。線（棟木・母屋）→ 束の順', () => {
   const src = readSource();
-  const beamBody = src.indexOf('beamDrawSpans.flatMap(');
+  const beamBody = src.indexOf('visibleBeamSpans.flatMap(');
   const depthMarks = src.indexOf('beamDepthMarkList.flatMap(');
-  const walls = src.indexOf('(wall?.graph?.structuralWalls ?? []).flatMap(');
+  const walls = src.indexOf(".filter(w => sharedPlaneDrawsMember(slotView, 'wallMap', w)).flatMap(");
   const roof = src.indexOf('<Group name="roof-framing"');
   const selection = src.indexOf('<Group name="member-selection">');
   for (const [name, idx] of [['梁本体', beamBody], ['非正角材の標記', depthMarks], ['壁', walls], ['小屋組', roof], ['選択ハイライト', selection]]) {

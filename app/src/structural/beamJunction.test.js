@@ -371,3 +371,41 @@ test('(q5) 出隅: 連続長が離れた別の run（すき間あり）は合わ
   assert.equal(j.get('V').ends[0].kind, 'cornerClose', 'H1 は 1000 のまま＜2000');
   assert.equal(j.get('H1').ends[0].kind, 'winnerFace');
 });
+
+test('(r) role が foundation／sill だけの入力（T字・L字に交わる）は交点処理の対象外＝空 Map（基礎伏図／1階伏図の見せ分けが全梁で解いても帯がずれない前提）', () => {
+  const beams = [
+    beam('F1', false, 0, -1000, 1000, { role: 'foundation' }),
+    beam('F2', true, 0, 0, 500, { role: 'foundation' }),
+    beam('S1', false, 600, 0, 1000, { role: 'sill' }),
+    beam('S2', true, 1000, 600, 1500, { role: 'sill' }),
+  ];
+  const j = resolveBeamJunctionSpans(THROUGH, beams);
+  assert.equal(j.size, 0);
+});
+
+test('(s) primary 同士が交わる入力に、同じ位置を通る foundation・sill の梁を混ぜても、primary の結果（coord1・coord2）は primary だけのときと同じ', () => {
+  const primaries = () => [
+    beam('H', false, 0, -1000, 1000, { sectionKey: 'S', halfWidth: 60 }), // 通過
+    beam('V', true, 0, 0, 500, { sectionKey: 'T', halfWidth: 45 }),       // T字
+    beam('LH', false, 2000, 2000, 3000, { sectionKey: 'S', halfWidth: 60 }), // L字（H が長い）
+    beam('LV', true, 2000, 2000, 2800, { sectionKey: 'T', halfWidth: 45 }),
+  ];
+  const mixed = [
+    ...primaries(),
+    beam('F1', false, 0, -1000, 1000, { role: 'foundation' }),
+    beam('F2', true, 0, 0, 500, { role: 'foundation' }),
+    beam('S1', false, 2000, 2000, 3000, { role: 'sill' }),
+    beam('S2', true, 2000, 2000, 2800, { role: 'sill' }),
+  ];
+  const only = resolveBeamJunctionSpans(THROUGH, primaries());
+  const withOthers = resolveBeamJunctionSpans(THROUGH, mixed);
+  const nums = (j, id) => [j.get(id)?.coord1 ?? null, j.get(id)?.coord2 ?? null];
+  // 前提: primary だけで交点処理が実際に効いている（空 Map の自明な一致にしない）
+  assert.equal(only.get('V').coord1, 60);
+  assert.equal(only.has('LH'), true);
+  for (const id of ['H', 'V', 'LH', 'LV']) {
+    assert.deepEqual(nums(withOthers, id), nums(only, id), id);
+  }
+  assert.equal(withOthers.size, only.size);
+  for (const id of ['F1', 'F2', 'S1', 'S2']) assert.equal(withOthers.has(id), false, id);
+});

@@ -22,7 +22,7 @@ test('【配線】StructuralLayer.jsx: 下階 belowGraph は column?.graph が b
 });
 
 test('【配線】StructuralLayer.jsx: 床開口×は梁本体の後・自階柱（frontColumnGroups）の前に、クリック不可で描く', () => {
-  const beamBody = src.indexOf('beamDrawSpans.flatMap(');
+  const beamBody = src.indexOf('visibleBeamSpans.flatMap(');
   const cross = src.indexOf('openingCrossList.map(');
   const front = src.indexOf('{frontColumnGroups.map(renderColumnGroup)}');
   assert.ok(beamBody > 0 && cross > 0 && front > 0, '描画ブロックが見つからない');
