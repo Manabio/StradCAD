@@ -348,6 +348,13 @@ export const BeamRole = Object.freeze({
   PARTITION_BEAM: 'partitionBeam',  // 隔て梁
 });
 
+// スラブの役割（Slab.role）。新規コードでだけ使う（既存の文字列直書きは置換しない）。
+export const SlabRole = Object.freeze({
+  SLAB:           'slab',           // 一般のスラブ
+  MAT_FOUNDATION: 'mat_foundation', // べた基礎のマットスラブ（基礎種別の structureRules.MAT_FOUNDATION とは別の値）
+  ROOF_PANEL:     'roof_panel',     // 屋根面
+});
+
 // S造スラブを支える子梁（小梁）の最大ピッチ(mm)。スパン間をこれ以下の等間隔に割り付ける
 // （structural/slabSecondaryBeamAxes.js。ユーザー指示2026-10-26）。
 export const STEEL_SECONDARY_BEAM_MAX_PITCH_MM = 2500;

@@ -7,14 +7,18 @@
 //   構造リスト   … MemberListTab.jsx（FIGURE_MEMBERS で分類を出し分け）
 //   スライダー   … App.jsx / buildStructuralFigureSlots（SLOT_PRESENCE でスロットを取捨）
 //   削除        … structuralRecompute.js（×化した自動部材を削除候補に）
+//   見せ分け    … 描画・タグ・リスト・長クリックが C 節の述語だけを読む。生成・削除は C 節を読まない
 // 機構（生成・図面合成・描画）は統合しない——figure.md の「生成≠図面選定」を守るため、
 // ここはあくまで宣言データに留める。
 //
-// 静的な参照データ（core.js 非依存。memberCatalog.js と同じく循環import回避）。
+// 静的な参照データ（core.js 非依存。memberCatalog.js と同じく循環import回避。
+// import してよいのは何も import しない core/constants.js のみ）。
 // 主構造キーの正式表記（'未定' を除く6種）はここ（STRUCTURES）が真実——共通タブの選択肢
 // structureRules.MAIN_STRUCTURE_OPTIONS はこの配列から組み立てる。
 // ※ RC造は半角括弧 '(...)' 、木造は全角括弧 '（...）' の混在表記が正規。
 // ================================================================
+
+import { BeamRole, SlabRole } from '../core/constants.js';
 
 // 主構造の正規キー（表示順）。SLOT_PRESENCE / FIGURE_MEMBERS の boolean 配列はこの並びに対応する。
 export const STRUCTURES = Object.freeze([
@@ -188,4 +192,82 @@ export function slotPresent(slotType, structure) {
   const row = SLOT_PRESENCE[slotType];
   if (!row || idx < 0) return true;
   return row[idx];
+}
+
+// ----------------------------------------------------------------
+// C. 同一平面の複数スロットでの見せ分け（基礎伏図／1階伏図など）
+// 生成・削除（memberKindOf / structureHasMemberKind / GOVERNING_FIGURE）は読まない別軸。
+// 描画・タグ・リスト・長クリックだけが以下の述語を読む。
+// ----------------------------------------------------------------
+
+// 同じ平面に乗りうるスロット種別（見せ分けの対象）。
+export const SHARED_PLANE_SLOT_TYPES = Object.freeze([SLOT_TYPE.FOUNDATION, SLOT_TYPE.GROUND_FLOOR]);
+
+// 一般規則（所属図面＝GOVERNING_FIGURE）で決まらない部材だけの例外。mapName → role → { list, draw }。
+// 値は FIGURE_TYPE か null（null＝どの図にも出さない）。
+export const SHARED_PLANE_MEMBER_OVERRIDES = Object.freeze({
+  beamMap: Object.freeze({
+    [BeamRole.SILL]:      Object.freeze({ list: FIGURE_TYPE.FOUNDATION, draw: null }),
+    // 小屋梁（下屋の小屋組）は1階伏図に出し、基礎伏図からは外す（ユーザー裁定 2026-11-12）。
+    [BeamRole.ROOF_BEAM]: Object.freeze({ list: FIGURE_TYPE.ABOVEGROUND, draw: FIGURE_TYPE.ABOVEGROUND }),
+  }),
+  slabMap: Object.freeze({ [SlabRole.MAT_FOUNDATION]: Object.freeze({ list: FIGURE_TYPE.FOUNDATION, draw: FIGURE_TYPE.FOUNDATION }) }),
+});
+
+/** 見せ分けの視点を解決する。同じ平面に見せ分け対象スロットが2つ以上あり、slot がその1つで、
+ *  かつ slot.planeId が表示中の平面 subjectPlaneId と一致するときだけ { slotKey, planeId, figureType }。
+ *  それ以外（非木造・FLOOR・屋根・地階あり・平面ずれ）は null＝見せ分けなし。 */
+export function resolveSharedPlaneView(slot, slots, subjectPlaneId) {
+  if (!Array.isArray(slots)) {
+    throw new Error(`resolveSharedPlaneView: slots は配列でなければならない（実際: ${typeof slots}）`);
+  }
+  if (slot == null) return null;
+  if (!SHARED_PLANE_SLOT_TYPES.includes(slot.slotType)) return null;
+  const sharing = slots.filter(s => s.planeId === slot.planeId && SHARED_PLANE_SLOT_TYPES.includes(s.slotType));
+  if (sharing.length < 2) return null;
+  if (slot.planeId !== subjectPlaneId) return null;
+  if (!Object.values(FIGURE_TYPE).includes(slot.figureType)) {
+    throw new Error(`resolveSharedPlaneView: slot.figureType が FIGURE_TYPE の値でない（実際: ${String(slot.figureType)}）`);
+  }
+  return Object.freeze({ slotKey: slot.key, planeId: slot.planeId, figureType: slot.figureType });
+}
+
+/** 部材種別 memberKind を、その見せ分け視点の図に描くか（所属図面と一致するか）。
+ *  view が null・表A対象外の種別は true（絞らない）。 */
+export function sharedPlaneDrawsKind(view, memberKind) {
+  if (!view) return true;
+  const governing = GOVERNING_FIGURE[memberKind];
+  if (!governing) return true;
+  return governing === view.figureType;
+}
+
+// 見せ分けの一般規則に使う部材種別。杭（columnMap の role:'foundation'。memberKindOf は null）は柱グループと
+// 同じ図に出す（伏図の柱は柱グループ単位で描くため。ユーザー裁定 2026-11-12「基礎伏図には柱も書かない」）。
+// 生成・削除の memberKindOf は変えない。
+function sharedPlaneKindOf(mapName, entity) {
+  return memberKindOf(mapName, entity) ?? (mapName === 'columnMap' ? MEMBER_KIND.COLUMN : null);
+}
+
+// field は例外表の 'draw'（描く）／'list'（リストに出す）。例外表が一般規則に優先。
+function sharedPlaneAllows(view, mapName, entity, field) {
+  if (!view) return true;
+  const override = SHARED_PLANE_MEMBER_OVERRIDES[mapName]?.[entity?.role];
+  if (override) return override[field] === view.figureType;
+  const kind = sharedPlaneKindOf(mapName, entity);
+  return kind == null ? true : sharedPlaneDrawsKind(view, kind);
+}
+
+/** 部材（mapName＋entity）を見せ分け視点で描く・タップできる・タグを出すか。例外表（OVERRIDES）が一般規則に優先。 */
+export function sharedPlaneDrawsMember(view, mapName, entity) {
+  return sharedPlaneAllows(view, mapName, entity, 'draw');
+}
+
+/** 部材（mapName＋entity）を見せ分け視点でリストに出すか。例外表の list を使う以外は描画と同じ一般規則。 */
+export function sharedPlaneListsMember(view, mapName, entity) {
+  return sharedPlaneAllows(view, mapName, entity, 'list');
+}
+
+/** 小屋組（棟木・母屋・束。保存しない導出図形）を描くか。小屋梁と同じ図に出す。view が null なら true。 */
+export function sharedPlaneDrawsRoofFraming(view) {
+  return sharedPlaneDrawsMember(view, 'beamMap', { role: BeamRole.ROOF_BEAM });
 }
