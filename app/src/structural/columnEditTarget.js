@@ -8,6 +8,7 @@ import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { bareColumnRect } from '../finish/columnWrap.js';
 import { manualColumnAnchorLines } from '../core/centerLineKindPolicy.js';
 import { resolveManualColumnAnchors } from './manualMemberAdd.js';
+import { MEMBER_KIND, sharedPlaneDrawsKind, sharedPlaneViewFor } from './structuralClassification.js';
 
 /**
  * 柱を立てられる線（縦・横）を appMode ごとに解決する唯一の口。構造リスト「＋追加」（intersectionMemberOptions）と
@@ -49,11 +50,12 @@ export function resolveColumnSlot(graph, project, { vCL, hCL, x, y } = {}) {
  *  - 構造（structure）: 構造リストの柱グループと同じ解決（MemberListTab.jsx）——自階の実効主構造から柱一覧の
  *    供給カテゴリ（columnListCategory）を決め、composition.resolveCategory で供給階を引く。供給階が無い
  *    （基礎伏図の下階柱）、または参照のみ（REFERENCE）で供給階が主題階でない場合は編集不可＝null。
+ *    基礎伏図（柱を描かない伏図。slotView が柱を描かない視点）も編集不可＝null（描いていない部材は操作させない）。
  *  - その他のモード: null。
- * @param {{appMode:string, activeGraph:object, composition:object|null, project:object}} args
+ * @param {{appMode:string, activeGraph:object, composition:object|null, project:object, slotView?:object|null}} args
  * @returns {{graph:object}|null}
  */
-export function resolveColumnEditTarget({ appMode, activeGraph, composition, project }) {
+export function resolveColumnEditTarget({ appMode, activeGraph, composition, project, slotView = null }) {
   if (appMode === 'floorplan') return activeGraph ? { graph: activeGraph } : null;
   if (appMode !== 'structure' || !composition) return null;
   const selfGraph = composition.graphForCategory('columnMapSelf');
@@ -61,7 +63,9 @@ export function resolveColumnEditTarget({ appMode, activeGraph, composition, pro
   const resolved = composition.resolveCategory(columnListCategory(rulesFor(selfStructure).drawing));
   if (!resolved) return null;
   const readOnly = resolved.spec.role === LayerRole.REFERENCE && resolved.graph.plane.id !== composition.subjectPlane.id;
-  return readOnly ? null : { graph: resolved.graph };
+  if (readOnly) return null;
+  if (!sharedPlaneDrawsKind(sharedPlaneViewFor(slotView, resolved.graph.plane.id), MEMBER_KIND.COLUMN)) return null;
+  return { graph: resolved.graph };
 }
 
 /**

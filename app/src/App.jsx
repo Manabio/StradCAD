@@ -634,6 +634,24 @@ const App = observer(() => {
   const [memberDeselectRequest, setMemberDeselectRequest] = useState(0);
   const deselectStructuralMembers = useCallback(() => setMemberDeselectRequest(n => n + 1), []);
 
+  // 構造モードの図面スロット列。構造リスト・描画・長クリックが同じ視点（structSlotView）を読むため、ここで一度だけ作る。
+  const structSlots = appMode === 'structure' ? buildStructuralFigureSlots(project) : null;
+  // 選択中スロット key。保存値は「アクティブ平面に属するスロット」のときだけ採用する。
+  // それ以外（モード退出→別平面で再突入したのに古い屋根スロットkeyが残存／構造変更でスロットが消えた 等）は
+  // アクティブ平面の先頭スロットへフォールバックする——key一致だけ見ると、屋根平面は再突入時も同一idで
+  // 再利用されるため古い「R階伏図」スロットにヒットし、1階突入なのにR階伏図が選択されてしまう。
+  const savedStructSlot = structSlots?.find(s => s.key === activeStructSlotKey) ?? null;
+  const activeStructSlot = structSlots
+    ? (savedStructSlot?.planeId === project.activePlaneId
+        ? savedStructSlot.key
+        : firstSlotKeyForPlane(structSlots, project.activePlaneId))
+    : null;
+  // 同じ平面の基礎伏図／1階伏図の見せ分け視点（描画・タグ・長クリックへ渡す）。毎レンダー新しい frozen を返すが、
+  // SceneLayers は inline の関数 props（onOpeningTagClick 等）で既に毎レンダー再レンダーされるため増えない。
+  const structSlotView = structSlots
+    ? resolveSharedPlaneView(structSlots.find(s => s.key === activeStructSlot) ?? null, structSlots, structComposition?.subjectPlane?.id ?? null)
+    : null;
+
   // ---- ポインタ/タッチ/長押しのジェスチャー配線（interaction/usePointerInteraction.js）----
   const {
     handlers: pointerHandlers,
@@ -660,6 +678,7 @@ const App = observer(() => {
     onMemberDeselect: deselectStructuralMembers,
     // 柱の長クリック（平面・構造）の編集先の解決に使う。平面では使われない（resolveColumnEditTarget は activeGraph を返す）。
     composition: structComposition,
+    slotView: structSlotView,
   });
 
   // 起動時IDB復元の完了をマウント時1回だけ待ち、activeFloorId をproject.activePlaneIdへ同期する。
@@ -1482,7 +1501,7 @@ const App = observer(() => {
     const slot = buildStructuralFigureSlots(project).find(s => s.key === slotKey);
     if (!slot) return;
     if (slot.planeId === project.activePlaneId) {
-      setActiveStructSlotKey(slotKey); // 同一平面内のスロット選択（部材合成の細分は次フェーズ）
+      setActiveStructSlotKey(slotKey); // 同一平面内のスロット選択（基礎伏図／1階伏図の見せ分けは視点 structSlotView。structuralClassification.js C節）
       return;
     }
     await switchFloorKeepingMode(slot.planeId);
@@ -2605,7 +2624,7 @@ const App = observer(() => {
     if (item.id === ColumnMenuItemId.ADD || item.id === ColumnMenuItemId.DEL) {
       const result = runColumnMenuAction(item.id, {
         columnEdit: menu.columnEdit,
-        currentTarget: resolveColumnEditTarget({ appMode, activeGraph: graph, composition: structComposition, project }),
+        currentTarget: resolveColumnEditTarget({ appMode, activeGraph: graph, composition: structComposition, project, slotView: structSlotView }),
         project,
       });
       if (!result.ok) setToast({ msg: result.error, key: Date.now() });
@@ -2835,24 +2854,8 @@ const App = observer(() => {
   const floorName = project.activeGraph?.plane?.name ?? '1階';
 
   // 移動スライダー（ドラム）用の階リスト — 採用階のみ（標高昇順）。
-  // 構造モードでは図面スロット列（buildStructuralFigureSlots）を主題とし、呼称（地中梁図・R階伏図 等）に
+  // 構造モードでは図面スロット列（structSlots。usePointerInteraction より前で作る）を主題とし、呼称（地中梁図・R階伏図 等）に
   // 書き換える。それ以外のモードは採用平面の階名そのまま。
-  const structSlots = appMode === 'structure' ? buildStructuralFigureSlots(project) : null;
-  // 選択中スロット key。保存値は「アクティブ平面に属するスロット」のときだけ採用する。
-  // それ以外（モード退出→別平面で再突入したのに古い屋根スロットkeyが残存／構造変更でスロットが消えた 等）は
-  // アクティブ平面の先頭スロットへフォールバックする——key一致だけ見ると、屋根平面は再突入時も同一idで
-  // 再利用されるため古い「R階伏図」スロットにヒットし、1階突入なのにR階伏図が選択されてしまう。
-  const savedStructSlot = structSlots?.find(s => s.key === activeStructSlotKey) ?? null;
-  const activeStructSlot = structSlots
-    ? (savedStructSlot?.planeId === project.activePlaneId
-        ? savedStructSlot.key
-        : firstSlotKeyForPlane(structSlots, project.activePlaneId))
-    : null;
-  // 同じ平面の基礎伏図／1階伏図の見せ分け視点（描画・タグへ渡す）。毎レンダー新しい frozen を返すが、
-  // SceneLayers は inline の関数 props（onOpeningTagClick 等）で既に毎レンダー再レンダーされるため増えない。
-  const structSlotView = structSlots
-    ? resolveSharedPlaneView(structSlots.find(s => s.key === activeStructSlot) ?? null, structSlots, structComposition?.subjectPlane?.id ?? null)
-    : null;
   const drumFloors = structSlots
     ? structSlots.map(slot => ({ id: slot.key, name: designationForSlot(slot, slot.key === activeStructSlot) }))
     : project.planes.map(p => ({ id: p.id, name: p.name }));

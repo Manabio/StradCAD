@@ -56,6 +56,7 @@ export function usePointerInteraction({
   project, graph, size, appMode, columnAxisMode, modeRef,
   menu, setMenu, onToast, onUndo, onRedo, onExitOpeningMode, onMemberClick, onMemberDeselect,
   composition = null,
+  slotView = null,
 }) {
   const [isPanning,   setIsPanning]   = useState(false);
   const [pressPos,    setPressPos]    = useState(null);
@@ -163,7 +164,7 @@ export function usePointerInteraction({
       const fireWorld = viewport.screenToWorld(sx, sy);
       const columnMode = appMode === 'floorplan' || appMode === 'structure';
       const columnLP = resolveColumnLongPress({
-        appMode, activeGraph: graph, composition, project,
+        appMode, activeGraph: graph, composition, project, slotView,
         world: fireWorld, scaleX: viewport.scaleX, scaleY: viewport.scaleY, thresholdPx: CL_THRESHOLD_PX,
         endpointDistPx: columnMode ? endpointHitDistancePx(graph, viewport, fireWorld, { width: size.width, height: size.height, appMode, columnAxisMode }) : null,
         openingHit: columnMode ? openingHitAt(graph, viewport, fireWorld, appMode) : false,

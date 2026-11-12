@@ -11,6 +11,8 @@ import { resolveSourcePlanes, LayerRole } from '../figure/figureTypes.js';
 import { getFigure } from '../figure/figureRegistry.js';
 import { STRUCTURAL_FIGURE_ID } from './structuralFigure.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
+import { FIGURE_TYPE, SLOT_TYPE, resolveSharedPlaneView } from './structuralClassification.js';
+import { buildStructuralFigureSlots } from './structuralFigureSlots.js';
 import { resolveColumnEditTarget, isColumnSlotOccupied } from './columnEditTarget.js';
 
 const V = CenterLineType.VERTICAL, H = CenterLineType.HORIZONTAL;
@@ -110,6 +112,57 @@ test('【編集先・失敗側】他の appMode・構造で composition なし�
     assertNoTarget(resolveColumnEditTarget({ appMode, activeGraph: f2.graph, composition: comp, project }), `${appMode}: `);
   }
   assertNoTarget(resolveColumnEditTarget({ appMode: 'structure', activeGraph: f2.graph, composition: null, project }));
+});
+
+// ---- 見せ分け（slotView）: 描いていない部材は操作させない ----
+// view は frozen な { slotKey, planeId, figureType } を手で作る（resolveSharedPlaneView の戻りと同じ形）。
+const viewOf = (planeId, figureType) => Object.freeze({ slotKey: `slot:${figureType}`, planeId, figureType });
+const targetWith = (project, subject, graphOf, slotView, appMode = 'structure') => resolveColumnEditTarget({
+  appMode, activeGraph: subject.graph, composition: composeStructural(project, subject, graphOf), project, slotView,
+});
+
+test('【見せ分け】構造・在来木造: 基礎伏図（柱を描かない）は null・1階伏図と view なしは従来どおり編集先', () => {
+  const { project, f1, f2 } = makeProject(TRADITIONAL_WOOD_STRUCTURE);
+  const graphOf = { p1: f1.graph, p2: f2.graph };
+  assertNoTarget(targetWith(project, f1, graphOf, viewOf(f1.plane.id, FIGURE_TYPE.FOUNDATION)), '基礎伏図: ');
+  assertTargetIs(targetWith(project, f1, graphOf, viewOf(f1.plane.id, FIGURE_TYPE.ABOVEGROUND)), f1.graph, '1階伏図: ');
+  assertTargetIs(targetWith(project, f1, graphOf, null), f1.graph, 'view なし: ');
+  assertTargetIs(targetWith(project, f1, graphOf, undefined), f1.graph, 'view 省略: ');
+});
+
+// 手書きの view がスロット列の実物と食い違っていないことの確認: App.jsx と同じ手順（スロット列→resolveSharedPlaneView）で作る。
+test('【見せ分け】実物のスロット列から作った view でも同じ（基礎伏図＝null・1階伏図＝編集先）', () => {
+  const { project, f1, f2 } = makeProject(TRADITIONAL_WOOD_STRUCTURE);
+  project.structuralInfo.setField('mainStructure', TRADITIONAL_WOOD_STRUCTURE);
+  const slots = buildStructuralFigureSlots(project);
+  const onF1 = slots.filter(s => s.planeId === f1.plane.id);
+  const fSlot = onF1.find(s => s.slotType === SLOT_TYPE.FOUNDATION);
+  const gSlot = onF1.find(s => s.slotType === SLOT_TYPE.GROUND_FLOOR);
+  assert.equal(fSlot != null && gSlot != null, true, '前提: 1階の平面に基礎伏図と1階伏図の両スロットが乗る');
+  const fView = resolveSharedPlaneView(fSlot, slots, f1.plane.id);
+  const gView = resolveSharedPlaneView(gSlot, slots, f1.plane.id);
+  assert.equal(fView?.figureType, FIGURE_TYPE.FOUNDATION, '基礎伏図の視点');
+  assert.equal(gView?.figureType, FIGURE_TYPE.ABOVEGROUND, '1階伏図の視点');
+  const graphOf = { p1: f1.graph, p2: f2.graph };
+  assertNoTarget(targetWith(project, f1, graphOf, fView), '基礎伏図（実物）: ');
+  assertTargetIs(targetWith(project, f1, graphOf, gView), f1.graph, '1階伏図（実物）: ');
+});
+
+test('【見せ分け】view の平面が編集先 graph の平面と違えば絞らない（別平面の参照レイヤには掛けない）', () => {
+  const { project, f1, f2 } = makeProject(TRADITIONAL_WOOD_STRUCTURE);
+  const graphOf = { p1: f1.graph, p2: f2.graph };
+  assertTargetIs(targetWith(project, f2, graphOf, viewOf(f1.plane.id, FIGURE_TYPE.FOUNDATION)), f2.graph, '編集先は 2階・view は 1階の基礎伏図: ');
+  // 非在来の 2階では編集先＝下階（1階）。1階の基礎伏図 view は 1階の graph に掛かるので null・2階の view は掛からない
+  const s = makeProject('S造');
+  const sGraphOf = { p1: s.f1.graph, p2: s.f2.graph };
+  assertNoTarget(targetWith(s.project, s.f2, sGraphOf, viewOf(s.f1.plane.id, FIGURE_TYPE.FOUNDATION)), '下階が編集先で view もその平面: ');
+  assertTargetIs(targetWith(s.project, s.f2, sGraphOf, viewOf(s.f2.plane.id, FIGURE_TYPE.FOUNDATION)), s.f1.graph, 'view が別平面: ');
+});
+
+test('【見せ分け】平面モードは slotView を読まない（基礎伏図の view が渡っても activeGraph）', () => {
+  const { project, f1, f2 } = makeProject(TRADITIONAL_WOOD_STRUCTURE);
+  const r = targetWith(project, f1, { p1: f1.graph, p2: f2.graph }, viewOf(f1.plane.id, FIGURE_TYPE.FOUNDATION), 'floorplan');
+  assertTargetIs(r, f1.graph);
 });
 
 // ---- 占有判定 ----

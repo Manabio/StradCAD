@@ -21,6 +21,7 @@ import { getFigure } from '../figure/figureRegistry.js';
 import { STRUCTURAL_FIGURE_ID } from '../structural/structuralFigure.js';
 import { TRADITIONAL_WOOD_STRUCTURE, UNSPECIFIED_STRUCTURE } from '../structural/structureRules.js';
 import { resolveColumnEditTarget, resolveColumnSlot } from '../structural/columnEditTarget.js';
+import { FIGURE_TYPE } from '../structural/structuralClassification.js';
 import { deleteCenterLineWithUndo } from '../transform/centerLineOps.js';
 import { recomputeStructuralForGraph } from '../structural/structuralRecompute.js';
 import { autoFillWallBeamAxes, selfWallSegments } from '../structural/wallBeamAxes.js';
@@ -241,6 +242,65 @@ test('【長クリック・構造】基礎伏図（非在来の最下階）・�
   for (const appMode of ['finish', 'ceiling', 'opening', 'site', 'elevation', 'facade']) {
     isNull(press(env, appMode, 1300, 2700), appMode);
   }
+});
+
+// 在来木造の 1階: 基礎伏図（柱を描かない）では柱の断面内も CL の交点も押しても柱の編集対象にしない（描いていない部材は操作させない）
+const viewOf = (planeId, figureType) => Object.freeze({ slotKey: `slot:${figureType}`, planeId, figureType });
+function woodFoundationEnv() {
+  const env = makeEnv(TRADITIONAL_WOOD_STRUCTURE);
+  const comp = composeStructural(env.project, env.f1, { p1: env.f1.graph, p2: env.f2.graph });
+  const col = env.f1.graph.addColumn(StructuralMaterialType.WOOD, WOOD_120, env.gx[0], env.gy[0], {});
+  const common = { appMode: 'structure', activeGraph: env.f1.graph, composition: comp, project: env.project, scaleX: SX, scaleY: SY, thresholdPx: TH, endpointDistPx: null, openingHit: false };
+  return { env, col, common };
+}
+
+test('【長クリック・構造・見せ分け】基礎伏図では柱の断面内も CL の交点も null。1階伏図・view なしは従来どおり（柱／slot）', () => {
+  const { env, col, common } = woodFoundationEnv();
+  const foundation = viewOf(env.f1.plane.id, FIGURE_TYPE.FOUNDATION);
+  const above = viewOf(env.f1.plane.id, FIGURE_TYPE.ABOVEGROUND);
+  const onColumn = { x: col.x, y: col.y }, onCrossing = { x: 5300, y: 6700 };
+  isNull(resolveColumnLongPress({ ...common, world: onColumn, slotView: foundation }), '基礎伏図・柱の断面内');
+  isNull(resolveColumnLongPress({ ...common, world: onCrossing, slotView: foundation }), '基礎伏図・CL の交点');
+  for (const [label, slotView] of [['1階伏図', above], ['view なし', null], ['view 省略', undefined]]) {
+    sameObj(resolveColumnLongPress({ ...common, world: onColumn, slotView })?.column, col, `${label}・柱`);
+    const r = resolveColumnLongPress({ ...common, world: onCrossing, slotView });
+    assert.equal(r?.slot?.vCL?.id, env.gx[1].id, `${label}・slot`);
+  }
+});
+
+test('【長クリック・構造・見せ分け】別平面の view は掛けない（2階の基礎伏図 view でも 1階が編集先なら従来どおり）', () => {
+  const { env, col, common } = woodFoundationEnv();
+  sameObj(resolveColumnLongPress({ ...common, world: { x: col.x, y: col.y }, slotView: viewOf(env.f2.plane.id, FIGURE_TYPE.FOUNDATION) })?.column, col);
+});
+
+// 長クリック（1階伏図）からメニュー選択までの間に基礎伏図へ切り替わった: 選択時の再解決（App.jsx handleMenuSelect と同じ手順）で
+// 編集先が null になり中止する。対照として、1階伏図のまま選べば削除できる（同じ fixture・同じ柱。view だけが違う）。
+test('【確定・見せ分け】1階伏図で長クリック→基礎伏図へ切替→削除を選ぶと中止（柱は残る）。切り替えなければ削除できる', () => {
+  const { env, col, common } = woodFoundationEnv();
+  const foundation = viewOf(env.f1.plane.id, FIGURE_TYPE.FOUNDATION);
+  const above = viewOf(env.f1.plane.id, FIGURE_TYPE.ABOVEGROUND);
+  const pressed = resolveColumnLongPress({ ...common, world: { x: col.x, y: col.y }, slotView: above });
+  sameObj(pressed?.column, col, '前提: 1階伏図では柱に当たる');
+  const columnEdit = { graph: pressed.graph, column: pressed.column, slot: pressed.slot };
+  const targetOf = slotView => resolveColumnEditTarget({ appMode: common.appMode, activeGraph: common.activeGraph, composition: common.composition, project: env.project, slotView });
+  undoManager._undoStack.splice(0);
+  isNull(targetOf(foundation), '基礎伏図へ切り替えた後の編集先');
+  expectAbort(env, env.f1.graph, ColumnMenuItemId.DEL, { columnEdit, currentTarget: targetOf(foundation) }, ERR_COLUMN_DEL_ABORTED);
+  assert.equal(env.f1.graph.columnMap.get(col.id) === col, true, '柱は残る');
+  const res = runColumnMenuAction(ColumnMenuItemId.DEL, { columnEdit, currentTarget: targetOf(above), project: env.project });
+  assert.equal(res.ok, true, '1階伏図のままなら削除できる');
+  assert.equal(env.f1.graph.columnMap.has(col.id), false, '柱が消える');
+});
+
+test('【長クリック・失敗側】基礎伏図の view でも入力検査（world・scale・endpointDistPx・openingHit）は先に throw する（null 返却に隠れない）', () => {
+  const { common } = woodFoundationEnv();
+  const base = { ...common, world: { x: 1300, y: 2700 }, slotView: viewOf(common.activeGraph.plane.id, FIGURE_TYPE.FOUNDATION) };
+  isNull(resolveColumnLongPress(base), '前提: 検査が通れば null');
+  assert.throws(() => resolveColumnLongPress({ ...base, world: undefined }), /world/);
+  assert.throws(() => resolveColumnLongPress({ ...base, world: { x: NaN, y: 1 } }), /world\.x/);
+  assert.throws(() => resolveColumnLongPress({ ...base, scaleX: Infinity }), /scaleX/);
+  assert.throws(() => resolveColumnLongPress({ ...base, endpointDistPx: NaN }), /endpointDistPx/);
+  assert.throws(() => resolveColumnLongPress({ ...base, openingHit: 'no' }), /openingHit/);
 });
 
 test('【長クリック・失敗側】world・scale・閾値の欠落／非有限は throw', () => {

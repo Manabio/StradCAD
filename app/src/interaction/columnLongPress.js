@@ -34,8 +34,9 @@ function isCenterLineAlive(graph, cl) {
 
 /**
  * 長クリック位置（world）が柱の断面内か、CL の交点か（柱追加位置）を解く。優先順: 柱 > 交点。
- * 候補の柱は編集先 graph の柱すべて（平面の ColumnsLayer・構造伏図の柱グループとも graph.columns を絞り込まずに描くため。
- * 描画側に絞り込みの述語は無い）。thresholdPx は呼び出し側が既存の CL_THRESHOLD_PX を渡す。
+ * 候補の柱は編集先 graph の柱すべて（平面の ColumnsLayer・構造伏図の柱グループとも、描くときは graph.columns を
+ * 個体ごとには絞り込まない）。柱グループごと描かない伏図（在来木造の基礎伏図。slotView が柱を描かない視点）では
+ * 編集先そのものが null になる（resolveColumnEditTarget）。thresholdPx は呼び出し側が既存の CL_THRESHOLD_PX を渡す。
  * 他の候補に譲る 2 つの規則（どちらも呼び出し側が発火位置で求めて明示的に渡す。欠落・型違いは throw）:
  *  - endpointDistPx（number|null）: 発火位置から CL 端点候補（突端円・はね出し線分・足）までの画面距離。交点（柱追加）までの
  *    画面距離より**小さければ**柱追加にせず（slot なし）従来の端点メニューへ譲る。等距離は柱追加。柱の判定には影響しない。
@@ -44,7 +45,7 @@ function isCenterLineAlive(graph, cl) {
  * @returns {null | {graph, column: object|null, slot: {vCL,hCL,x,y,occupied}|null, addable: boolean}}
  *   null＝柱の編集対象でないモード・編集先なし（従来のメニューへ）。
  */
-export function resolveColumnLongPress({ appMode, activeGraph, composition, project, world, scaleX, scaleY, thresholdPx, endpointDistPx, openingHit } = {}) {
+export function resolveColumnLongPress({ appMode, activeGraph, composition, project, slotView = null, world, scaleX, scaleY, thresholdPx, endpointDistPx, openingHit } = {}) {
   if (!world) throw new Error('resolveColumnLongPress: world は必須です');
   assertFinite('world.x', world.x);
   assertFinite('world.y', world.y);
@@ -55,7 +56,7 @@ export function resolveColumnLongPress({ appMode, activeGraph, composition, proj
     throw new Error(`resolveColumnLongPress: endpointDistPx は有限の数値か null が必要です（実際: ${endpointDistPx}）`);
   }
   if (typeof openingHit !== 'boolean') throw new Error(`resolveColumnLongPress: openingHit は真偽値が必要です（実際: ${openingHit}）`);
-  const target = resolveColumnEditTarget({ appMode, activeGraph, composition, project });
+  const target = resolveColumnEditTarget({ appMode, activeGraph, composition, project, slotView });
   if (!target) return null;
   const { graph } = target;
   const hit = columnAtPoint(graph.columns, world.x, world.y, { scaleX, scaleY, minHalfPx: thresholdPx });

@@ -21,7 +21,7 @@ const menuSelect = extractFunctionBody(appSrc, 'function handleMenuSelect(item) 
 test('【配線】usePointerInteraction: longPress.onFire が resolveColumnLongPress を 1 回、発火時の画面座標（sx, sy）から呼ぶ', () => {
   assert.equal(count(onFire, 'resolveColumnLongPress('), 1);
   assert.equal(wholeLines(onFire, 'const columnLP = resolveColumnLongPress({'), 1);
-  assert.equal(wholeLines(onFire, 'appMode, activeGraph: graph, composition, project,'), 1);
+  assert.equal(wholeLines(onFire, 'appMode, activeGraph: graph, composition, project, slotView,'), 1);
   assert.equal(wholeLines(onFire, 'const fireWorld = viewport.screenToWorld(sx, sy);'), 1, '発火位置の世界座標（ホバー時の値ではない）');
   assert.equal(wholeLines(onFire, 'world: fireWorld, scaleX: viewport.scaleX, scaleY: viewport.scaleY, thresholdPx: CL_THRESHOLD_PX,'), 1);
   // 他の候補に譲る規則の入力も発火位置から求める（端点までの距離・建具の有無）
@@ -95,7 +95,7 @@ test('【配線】App.jsx: handleMenuSelect の柱の分岐は startDraw より�
   assert.equal(count(menuSelect, 'runColumnMenuAction('), 1);
   assert.equal(wholeLines(menuSelect, 'const result = runColumnMenuAction(item.id, {'), 1);
   assert.equal(wholeLines(menuSelect, 'columnEdit: menu.columnEdit,'), 1);
-  assert.equal(wholeLines(menuSelect, 'currentTarget: resolveColumnEditTarget({ appMode, activeGraph: graph, composition: structComposition, project }),'), 1);
+  assert.equal(wholeLines(menuSelect, 'currentTarget: resolveColumnEditTarget({ appMode, activeGraph: graph, composition: structComposition, project, slotView: structSlotView }),'), 1);
   assert.equal(wholeLines(menuSelect, 'if (!result.ok) setToast({ msg: result.error, key: Date.now() });'), 1);
 });
 
@@ -128,4 +128,41 @@ test('【配線】App.jsx: 柱の追加・削除の確定は runColumnMenuAction
   assert.equal(wholeLines(appSrc, "import { runColumnMenuAction } from './interaction/columnLongPress.js';"), 1);
   assert.equal(wholeLines(appSrc, "import { resolveColumnEditTarget } from './structural/columnEditTarget.js';"), 1);
   assert.equal(wholeLines(appSrc, "import { ColumnMenuItemId } from './core/constants.js';"), 1);
+});
+
+// 基礎伏図では柱の長クリックを出さない（S4）: 見せ分けの視点（structSlotView）を長クリックの判定と選択時の再解決へ渡す。
+// 行頭コメントを除いた本文で照合する（コメントの文言に一致して合格しない）。
+const codeOf = src => src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+const appCode = codeOf(appSrc);
+const hookCode = codeOf(hookSrc);
+
+test('【配線】App.jsx: usePointerInteraction の引数に slotView: structSlotView（呼び出しの内側）。視点の 4 つの const は呼び出しより前で 1 回だけ', () => {
+  const callAt = appCode.indexOf('usePointerInteraction({');
+  assert.ok(callAt >= 0);
+  const callEnd = appCode.indexOf('\n  });', callAt);
+  assert.ok(callEnd > callAt);
+  assert.equal(wholeLines(appCode.slice(callAt, callEnd), 'slotView: structSlotView,'), 1, '呼び出しの内側に slotView: structSlotView,');
+  assert.equal(count(appCode.slice(callAt, callEnd), 'slotView'), 1, '呼び出しの内側で slotView を上書きしていない（後勝ちの 2 つ目が無い）');
+  assert.equal(count(appCode, 'usePointerInteraction({'), 1);
+  for (const name of ['structSlots', 'savedStructSlot', 'activeStructSlot', 'structSlotView']) {
+    assert.equal(count(appCode, `const ${name} =`), 1, `${name} を複製していない（1 回だけ宣言）`);
+    assert.ok(appCode.indexOf(`const ${name} =`) < callAt, `const ${name} は usePointerInteraction の呼び出しより前（TDZ）`);
+  }
+  // 視点が依存する宣言（appMode・structComposition・activeStructSlotKey）はさらに前
+  const viewAt = appCode.indexOf('const structSlots =');
+  for (const decl of ['const [appMode,', 'const [structComposition,', 'const [activeStructSlotKey,']) {
+    const at = appCode.indexOf(decl);
+    assert.ok(at >= 0 && at < viewAt, `${decl} は視点の計算より前`);
+  }
+});
+
+test('【配線】usePointerInteraction.js: 引数 slotView = null を受け、resolveColumnLongPress の呼び出しの内側で渡す', () => {
+  assert.equal(wholeLines(hookCode, 'slotView = null,'), 1);
+  const callAt = hookCode.indexOf('resolveColumnLongPress({');
+  assert.ok(callAt >= 0);
+  assert.equal(count(hookCode, 'resolveColumnLongPress({'), 1);
+  const callEnd = hookCode.indexOf('\n      });', callAt);
+  assert.ok(callEnd > callAt);
+  assert.equal(wholeLines(hookCode.slice(callAt, callEnd), 'appMode, activeGraph: graph, composition, project, slotView,'), 1, '呼び出しの内側に slotView');
+  assert.equal(count(hookCode.slice(callAt, callEnd), 'slotView'), 1, '呼び出しの内側で slotView を上書きしていない（後勝ちの 2 つ目が無い）');
 });
