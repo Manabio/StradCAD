@@ -1,7 +1,7 @@
 // switchbackCuts.js（WP-E5）の単体テスト。elevationStairSequence.test.jsと同じフィクスチャ方針。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType, OpeningCategory, edgeKey } from '@core';
+import { CenterLineType, Discipline, StairType, StructuralMaterialType, OpeningCategory, edgeKey } from '@core';
 import { buildStairBand } from '../../elevationStair.js';
 import { halfWallThicknessMm } from '../floorProfileMath.js';
 import { generateRoomWallsFromOutline } from '../../../finish/wallGeneration.js';
@@ -15,11 +15,7 @@ import { generateStairPartitionWalls } from '../../../finish/stair/stairPartitio
 import { TRADITIONAL_WOOD_STRUCTURE } from '../../../structural/structureRules.js';
 import { buildBandLayers } from '../sectionBandLayers.js';
 import { stairFaceSequence } from '../../elevationStairSequence.js';
-
-function makeGraph(name = 'p1') {
-  const plane = new Plane(name, 0, `${name}階`, 1, 1);
-  return new PlanGraph(plane);
-}
+import { makePlanGraph as makeGraph } from '../../../graphTestFixtures.js';
 
 // elevationStairSequence.test.jsのmakeSwitchbackFixtureと同一構成。
 function makeSwitchbackFixture(graph, {

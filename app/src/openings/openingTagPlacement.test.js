@@ -4,17 +4,13 @@
 // 前例: finish/stair/stairEntries.js）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '../core.js';
+import { CenterLineType, Discipline, OpeningCategory } from '../core.js';
 import { LodLevel } from '../viewport.js';
 import { wallFaceRange } from './openingGeometry.js';
 import {
   shouldShowOpeningTags, roomSideDir, openingTagAnchor, wallObstacleRects, layoutOpeningTags,
 } from './openingTagPlacement.js';
-
-function makeGraph(planeId = 'p1') {
-  const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
-  return new PlanGraph(plane);
-}
+import { makePlanGraph as makeGraph } from '../graphTestFixtures.js';
 
 function approxEqual(a, b, eps = 1e-6) {
   assert.ok(Math.abs(a - b) < eps, `期待値 ${b} に対し実際は ${a}（差 ${Math.abs(a - b)}）`);

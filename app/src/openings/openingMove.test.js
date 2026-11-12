@@ -2,18 +2,14 @@
 // 壁は openingGeometry.test.js と同じ「x=0..3000 の水平壁（axisCL=y0）」を基本にする。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '../core.js';
+import { CenterLineType, Discipline, OpeningCategory } from '../core.js';
 import {
   openingMoveRange, openingRefOffsetRange, refOffsetRangeOf, clampRefOffset, openingSnapCandidates,
   resolveOpeningRefOffset, snapIndicatorAlong, clCrossesWall, perpendicularWallMaterial,
   elevationDragAlong, previewDxLocalMm,
 } from './openingMove.js';
 import { footprintResolver, openingFootprintExtraHalfOf } from './slideOutset.js';
-
-function makeGraph(planeId = 'p1') {
-  const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
-  return new PlanGraph(plane);
-}
+import { makePlanGraph as makeGraph } from '../graphTestFixtures.js';
 
 // 水平壁 x=startX..3000（axisCL: y=0）。startX を変えると refCL(clStart) の値が動く。
 function makeHorizontalWall(graph, { startX = 0 } = {}) {

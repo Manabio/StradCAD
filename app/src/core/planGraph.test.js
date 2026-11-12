@@ -3,17 +3,11 @@
 // removeExteriorRow系3関数）の削除挙動を固定し、統合前後で同値であることを保証する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PlanGraph } from './planGraph.js';
-import { Plane } from './plane.js';
 import { Project } from './project.js';
 import { CenterLineType, Discipline, StructuralMaterialType, OpeningCategory, DimensionKind, DimensionSide } from './constants.js';
 import { HDimensionLine } from './dimension.js';
 import { slabBeamSlotKey } from '../structural/slabSecondaryBeamAxes.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // 柱・梁・耐力壁・基礎・スリーブ・一般Shape（線・壁）が1本のCL（verticalCL）を参照する共通フィクスチャ。
 // スラブ（StructuralSlab）はcellKeyのみのCL非依存アンカーのため意図的に含めない

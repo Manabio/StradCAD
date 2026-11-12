@@ -2,7 +2,7 @@
 // finish/wallGeneration.js で壁を生成した部屋に対して面を組み立てる（elevationFaces.test.jsと同じ方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { outerWallFaceAt } from '../finish/wallFaces.js';
 import { buildRoomFaces } from './elevationFaces.js';
@@ -15,11 +15,7 @@ import {
   familyCeilingSegments, floorProfileFromSegments, mergeFloorProfiles,
   drawnFloorProfileZAt, drawnFloorProfileZMax, clipContentAboveDrawnProfile, findRunCLAt, clipHiddenSegmentBelowProfile, clipHiddenSegmentAboveProfile,
 } from './elevationFloorProfile.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // x0-xMid-x1 × y0-y1 の2セル矩形部屋（内部に中心線xMidを1本持つ）を作る。
 function makeSplitRoom(graph, name = 'LDK') {

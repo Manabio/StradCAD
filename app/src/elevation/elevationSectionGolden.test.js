@@ -27,7 +27,7 @@
 // 「同位置は太い方を残す」で畳むため、線の本数も従来と同じ。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature, edgeKey } from '@core';
+import { CenterLineType, Discipline, RoomFeature, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { roomCeilingHeight } from '../finish/roomMetrics.js';
 import { buildRoomBand } from './elevationBand.js';
@@ -36,22 +36,7 @@ import { composeRoomFaces } from './elevationFaceList.js';
 import { makeProbeContext } from './section/sectionProbe.js';
 import { buildColumns } from './section/sectionEngine.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './section/sectionCutPlane.js';
-
-function makeGraph(name = 'p1', elevation = 0) {
-  const plane = new Plane(name, elevation, `${name}階`, 1, 1);
-  return new PlanGraph(plane);
-}
-
-function makeRectRoom(graph, x0v, y0v, x1v, y1v, name = 'LDK') {
-  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, x0v, { labeled: false, discipline: Discipline.ARCH });
-  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, x1v, { labeled: false, discipline: Discipline.ARCH });
-  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, y0v, { labeled: false, discipline: Discipline.ARCH });
-  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, y1v, { labeled: false, discipline: Discipline.ARCH });
-  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
-  const room = graph.addRoom(new Set([key]), name);
-  generateRoomWallsFromOutline(graph, room);
-  return room;
-}
+import { makePlanGraph as makeGraph, makeRectRoom } from '../graphTestFixtures.js';
 
 // キー順ソート（配列順は保持。数値はそのまま）。
 function sortKeys(value) {

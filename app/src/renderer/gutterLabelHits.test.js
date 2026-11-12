@@ -5,15 +5,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  Plane, PlanGraph, CenterLineType, DimensionKind, DimensionSide, HDimensionLine, VDimensionLine,
+  CenterLineType, DimensionKind, DimensionSide, HDimensionLine, VDimensionLine,
 } from '../core.js';
 import { findCenterDimensionLegEndpoint, centerDimensionLegHits, isClInDrawingBand, gutterClipRects } from './gutterLabelHits.js';
 import { INSET } from '../layout.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 function addCenterDimensionRows(graph) {
   graph.addDimensionLine(HDimensionLine, { dimensionKind: DimensionKind.CENTER, side: DimensionSide.TOP });

@@ -2,23 +2,13 @@
 // structGraph連携の実挙動を再現できないため、実 core.js（Plane/PlanGraph/Project）を使う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, Project, CenterLineType, Discipline, centerLineKind } from '../core.js';
+import { CenterLineType, Discipline, centerLineKind } from '../core.js';
 import {
   isEndpointAt, findExtendBoundary, findShortenBoundary,
   canExtendCenterLine, canShortenCenterLine, extendCenterLine, shortenCenterLine,
 } from './centerLineExtend.js';
 import { composeUndoWithMergeChain } from './centerLineMerge.js';
-
-function makeGraph(planeId = 'p1') {
-  const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
-  return new PlanGraph(plane);
-}
-
-function makeProjectWithGraph() {
-  const project = new Project('proj', 'test');
-  const { graph } = project.addPlane(0, '1階', 'p1');
-  return { project, graph };
-}
+import { makePlanGraph as makeGraph, makeSinglePlaneProject as makeProjectWithGraph } from '../graphTestFixtures.js';
 
 // ---- 3階再現: 通り芯X1(0)・X2(1820)・梁芯のみ(2730)・X3(3640)。主体は水平の中心線 extent [X1,X2]。
 // 梁芯(2730)は平面モードでは非表示（下階の壁から自階へ自動生成される想定）だが、種別無差別走査

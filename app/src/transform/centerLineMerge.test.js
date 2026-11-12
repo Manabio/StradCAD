@@ -4,16 +4,12 @@
 // 2パターンのみで、「隣接して結合する」経路は別途ここで検証する（ステップ7、2026-09-20）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
+import { CenterLineType, Discipline } from '../core.js';
 import {
   getCenterLineSegment, segmentsCollinearTouching, findCenterLineMergeMatch, mergeCenterLineChain,
 } from './centerLineMerge.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
-
-function makeGraph(planeId = 'p1') {
-  const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
-  return new PlanGraph(plane);
-}
+import { makePlanGraph as makeGraph } from '../graphTestFixtures.js';
 
 test('findCenterLineMergeMatch: kindが一致し隣接（端点一致）する候補だけを返す（種別違いは隣接していても無視）', () => {
   const graph = makeGraph();

@@ -9,15 +9,7 @@ import { Plane, PlanGraph, Project, Stair, CenterLineType, Discipline, RoomKind,
 import { wallFreshnessKey, WALL_KEY_VERSION, STAIR_KEY_FIELDS } from './wallFreshnessKey.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
-
-function addCL(graph, type, value) {
-  return graph.addCenterLine(type, value, { labeled: false, discipline: Discipline.ARCH });
-}
+import { makeFirstFloorGraph as makeGraph, makeSinglePlaneProject as makeProject, addCL } from '../graphTestFixtures.js';
 
 function makeRoom(graph, name = '部屋A') {
   const x0 = addCL(graph, CenterLineType.VERTICAL, 0);
@@ -238,12 +230,6 @@ test('【不変条件】finish/wallRegeneration.js は FinishModeState / modes/ 
 
 // ================= v8: 幾何の区画（fh / geo / cells / stairs） =================
 const keyPart = (key, name) => key.split('|').find(s => s.startsWith(`${name}=`));
-
-function makeProject() {
-  const project = new Project('proj', 'test');
-  const { graph } = project.addPlane(0, '1階', 'p1');
-  return { project, graph };
-}
 
 function addStructLine(project, type, value, props = {}) {
   return project.structGraph.addCenterLine(type, value, { labeled: true, discipline: Discipline.STRUCT, ...props });

@@ -3,14 +3,11 @@
 // y:1500..4500、upDirection 'up'・flip=false）。破れ線先セルは復路レーン（x:1000..2000）の 1 セル。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType, RoomKind } from '@core';
+import { CenterLineType, Discipline, StairType, RoomKind } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { cellsBeyondBreak } from '../../finish/stair/stairGeometry.js';
 import { lowerStairVoidRanges, mergeRanges, inRanges } from './lowerStairVoid.js';
-
-function makeGraph(name = 'p1') {
-  return new PlanGraph(new Plane(name, 0, `${name}階`, 1, 1));
-}
+import { makePlanGraph as makeGraph } from '../../graphTestFixtures.js';
 
 function makeSwitchbackFixture(graph, { flip = false } = {}) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });

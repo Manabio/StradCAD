@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  Plane, PlanGraph, Project, CenterLineType, Discipline, RoomKind, RoomFeature,
+  Project, CenterLineType, Discipline, RoomKind, RoomFeature,
   isShaftFeature, ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE,
 } from '@core';
 import { FinishModeState } from './FinishModeState.js';
@@ -16,10 +16,7 @@ import { ERR_ELEVATOR_NOT_RECTANGLE, ERR_ELEVATOR_EXTERIOR, ERR_ELEVATOR_NOT_UNA
 import { assertShaftInvariant } from '../finish/equipment/equipmentTestFixtures.js';
 import { installEquipment } from '../finish/equipment/equipmentOps.js';
 import { snapshotFinishState } from '../finish/finishUndo.js';
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // 2x2マス格子（x:0-2000-4000, y:0-1500-3000）。
 function makeGrid2x2() {

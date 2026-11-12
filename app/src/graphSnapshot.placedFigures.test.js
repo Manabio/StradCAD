@@ -3,12 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ByteBuffer } from 'flatbuffers';
-import { Plane, PlanGraph, PlacedFigure, PLACED_FIGURE_KEYS } from './core.js';
+import { PlacedFigure, PLACED_FIGURE_KEYS } from './core.js';
 import { serializeGraph, restoreGraph, decodeFloorSnapshot, encodeFloorSnapshot } from './graphSnapshot.js';
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, 'p1階', 1, 1));
-}
+import { makePlanGraph as makeGraph } from './graphTestFixtures.js';
 
 /** ルートテーブルの vtable 長（バイト）。末尾の未使用フィールドは vtable で切り詰められる。 */
 function rootVtableLength(bytes) {

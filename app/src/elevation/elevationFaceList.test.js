@@ -3,18 +3,14 @@
 // （elevationFaces.test.jsと同じ方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
+import { CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { getCellsInRect } from '../finish/gridCells.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { composeRoomFaces, neighborWallFace, splitFacesAtPartitionWalls, kneeDropRecordFor,
   dropFacesSeenAsSightline } from './elevationFaceList.js';
 import { stepRiserSegments } from './elevationStepFace.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 function makeRect(graph, name = 'LDK') {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });

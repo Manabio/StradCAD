@@ -3,15 +3,11 @@
 // グラフで検証する（elevationFaces.test.jsと同じ方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomFaces, faceBoundaryLocalX } from './elevationFaces.js';
 import { collectRow1SplitPoints } from './elevationDimSplit.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 function makeRoom(graph) {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });

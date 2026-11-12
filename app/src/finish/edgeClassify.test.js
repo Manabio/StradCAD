@@ -12,10 +12,7 @@ import { footprintCellKeys } from '../structural/wallGate.js';
 import { buildRoofLayout, ROOF_LAYOUT_SHAPES } from './roofTestFixtures.js';
 import { worldToCell } from './gridCells.js';
 import { BOUNDARY_MASTERS } from './materials/boundaryMasters.js';
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // 4種別×labeled2値の総当り。struct(labeled:true)のみ「通り芯」、aux（lineType:dashed）は
 // labeledの値を問わず「補助線」、それ以外（center・beam）は「中心線」——HEADの分岐（struct+labeled

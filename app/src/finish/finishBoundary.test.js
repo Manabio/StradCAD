@@ -19,12 +19,7 @@ import { loadMaterialMap } from './wallRegeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import { cellsBeyondBreak } from './stair/stairGeometry.js';
 import { WALL_KEY_VERSION } from './wallFreshnessKey.js';
-
-function makeSinglePlaneProject() {
-  const project = new Project('proj', 'test');
-  const { graph } = project.addPlane(0, '1階', 'p1');
-  return { project, graph };
-}
+import { makeSinglePlaneProject } from '../graphTestFixtures.js';
 
 // ---- ステップ2（壁由来梁芯の追従）統合フィクスチャ ----
 // 2部屋（部屋A: y0-ym、部屋B: ym-y1）が共有するym CLに「面合わせ」CL偏芯を指定する。

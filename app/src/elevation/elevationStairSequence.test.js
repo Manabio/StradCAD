@@ -1,7 +1,7 @@
 // elevationStairSequence.js（階段=SWITCHBACKの歩行順面シーケンス。WP-S2）のテスト。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType, RoomFeature, edgeKey } from '@core';
+import { CenterLineType, Discipline, StairType, StructuralMaterialType, RoomFeature, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { measureStairSpans } from '../finish/stair/stairClassify.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
@@ -23,11 +23,7 @@ import { withGraphReadScope } from '../graphReadScope.js';
 import { buildBandLayers } from './section/sectionBandLayers.js';
 import { buildCutContent } from './section/sectionContent.js';
 import { makeProbeContext } from './section/sectionProbe.js';
-
-function makeGraph(name = 'p1') {
-  const plane = new Plane(name, 0, `${name}階`, 1, 1);
-  return new PlanGraph(plane);
-}
+import { makePlanGraph as makeGraph } from '../graphTestFixtures.js';
 
 // 折返し階段（SWITCHBACK）の3セル構成: 踊り場(全幅・上端y:[0,1500])＋往路レーン(左列・x:[0,1000])＋
 // 復路レーン(右列・x:[1000,2000])、いずれもy:[1500,4500]。全体は単純な矩形(x:[0,2000],y:[0,4500])

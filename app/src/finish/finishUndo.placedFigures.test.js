@@ -2,14 +2,11 @@
 // finishUndo.roofZones.test.js と同型。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, PlacedFigure, PLACED_FIGURE_KEYS, ShaftSoundproof } from '../core.js';
+import { PlacedFigure, PLACED_FIGURE_KEYS, ShaftSoundproof } from '../core.js';
 import { undoManager } from '../undoManager.js';
 import { withFinishUndo, snapshotFinishState, restoreFinishState } from './finishUndo.js';
 import { addPlacedFigure, updatePlacedFigure, removePlacedFigure } from './placedFigure/placedFigureOps.js';
-
-function freshGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
+import { makeFirstFloorGraph as freshGraph } from '../graphTestFixtures.js';
 
 const pf = (id, over = {}) => new PlacedFigure({ id, figureKey: 'df-a', x: 1820, y: -455, rotationDeg: 270, mirror: true, zMm: 850, note: 'n', ...over });
 

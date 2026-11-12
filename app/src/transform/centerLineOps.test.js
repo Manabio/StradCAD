@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  Plane, PlanGraph, Project, CenterLineType, Discipline, centerLineKind, OpeningCategory, StructuralMaterialType,
+  PlanGraph, Project, CenterLineType, Discipline, centerLineKind, OpeningCategory, StructuralMaterialType,
   edgeKey, RoomFeature, RoomKind,
 } from '../core.js';
 import {
@@ -41,18 +41,7 @@ import { getAllCells } from '../finish/gridCells.js';
 import { findFloorsBlockingGridDeletion, findFloorsWithSameLineId } from './centerLineFloorSync.js';
 import { withProductionPeek, decodeFloor } from './centerLineTestFixtures.js';
 import { resolveMoveRange } from './followerGraph.js';
-
-function makeGraph(planeId = 'p1') {
-  const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
-  return new PlanGraph(plane);
-}
-
-// project.structGraph・graph._structGraph の連携（struct CL の追加・重複判定）が必要なテスト用。
-function makeProjectWithGraph() {
-  const project = new Project('proj', 'test');
-  const { graph } = project.addPlane(0, '1階', 'p1');
-  return { project, graph };
-}
+import { makePlanGraph as makeGraph, makeSinglePlaneProject as makeProjectWithGraph } from '../graphTestFixtures.js';
 
 // ---- shouldSuggestWoodStructure ----
 

@@ -12,9 +12,6 @@ import path from 'node:path';
 import { runInAction } from 'mobx';
 import { CenterLineType, Discipline, CL_OVERLAP_TOL_MM } from './constants.js';
 import { centerLineKind, BeamAxisOrigin } from './centerLine.js';
-import { Plane } from './plane.js';
-import { Project } from './project.js';
-import { PlanGraph } from './planGraph.js';
 import {
   CL_KINDS, APP_MODES, VISIBLE_KINDS_BY_MODE, HIT_EXCLUDED_KINDS_BY_MODE, COEXISTENCE, BEAM_ON_ARCH_LINES_COEXISTENCE,
   DISPLAY_ONLY_KINDS_BY_MODE, SAME_DIRECTION_OBSTACLE_OVERRIDE, kindsRenderedIn,
@@ -50,17 +47,7 @@ import { computeMoveRange, collectFollowerOffsets } from '../transform/followerG
 import { beamAxisMoveRange } from '../structural/beamAxisMove.js';
 import { checkPromoteToGridGuards, checkDemoteToCenterGuards } from '../transform/centerLineConvert.js';
 import { findBracketingCLs, findCLMoveSnap, findBeamAxisMoveSnap, findNearbyCenterLines } from '../snapGeometry.js';
-
-function makeGraph(planeId = 'p1') {
-  const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
-  return new PlanGraph(plane);
-}
-
-function makeProjectWithGraph() {
-  const project = new Project('proj', 'test');
-  const { graph } = project.addPlane(0, '1階', 'p1');
-  return { project, graph };
-}
+import { makePlanGraph as makeGraph, makeSinglePlaneProject as makeProjectWithGraph } from '../graphTestFixtures.js';
 
 // kind に対応する生成規約（centerLineOps.js の props 組み立てと同型）で、graph（center/aux/beam）または
 // project.structGraph（struct）へ同座標の別CLを追加する。addCenterLineFromDialog の重複ガードは経由しない

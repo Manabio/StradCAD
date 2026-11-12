@@ -1,12 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph } from '@core';
 import { roomCeilingHeight } from './roomMetrics.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 test('roomCeilingHeight: 数値のceilingHeightはそのままmm・rawとも同値を返す', () => {
   const graph = makeGraph();

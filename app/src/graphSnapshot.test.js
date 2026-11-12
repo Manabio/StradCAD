@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, RoomFeature, ExteriorLevelRef,
+  CenterLineType, Discipline, OpeningCategory, Project, Site, SiteLineKind, RoomKind, RoomFeature, ExteriorLevelRef,
   DEFAULT_SHAFT_WALL_MATERIAL, DEFAULT_SHAFT_SOUNDPROOF, ShaftSoundproof, StairType,
   ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE, StructuralMaterialType, edgeKey,
   RoofSpec, ROOF_SPEC_KEYS, isDefaultRoofSpec, CEILING_ZONE_KEYS, restoreCeilingZones, CeilingZone,
@@ -23,14 +23,11 @@ import { remapLineIdsInSnapshot, makeFreshLineIdMap, findLineIdOccurrences } fro
 import { findDuplicateLineIds } from './lineIdUniqueness.js';
 import { slabBeamSlotKey } from './structural/slabSecondaryBeamAxes.js';
 import { defaultSteelSlabSpec } from './structural/steelSlabSpec.js';
+import { makePlanGraph as makeGraph } from './graphTestFixtures.js';
 
 // wallBeamAxes.test.js と同じ方針: ダックタイピングでは effectiveValue 等の実挙動を
 // 再現できないため、実 core.js（Plane/PlanGraph）を使う。
 
-function makeGraph(planeId = 'p1', elevation = 0) {
-  const plane = new Plane(planeId, elevation, `${planeId}階`, 1, 1);
-  return new PlanGraph(plane);
-}
 
 // 水平に走る外壁1本 + 引き違い窓1件を持つグラフを作る。
 function makeGraphWithWindow(openingProps) {

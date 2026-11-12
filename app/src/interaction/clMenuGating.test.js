@@ -6,15 +6,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature } from '../core.js';
+import { CenterLineType, Discipline, RoomFeature } from '../core.js';
 import { CONTEXT } from './menuItems.js';
 import { convertMenuFlags } from './clMenuGating.js';
 import { worldToCell } from '../finish/gridCells.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // ---- canToGrid（CL端点長押し。中心線→通り芯の提案）----
 

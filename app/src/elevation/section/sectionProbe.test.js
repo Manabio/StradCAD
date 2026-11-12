@@ -5,7 +5,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory, RoomFeature, StructuralMaterialType } from '@core';
-import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext, collectCutBreaks, probeColumn } from './sectionProbe.js';
 import { emitOpenGapMarks, emitColumns } from './sectionEmit.js';
 import { nearMembersOf, probeColumnHits } from './sectionHits.js';
@@ -16,24 +15,9 @@ import { localXOf } from './sectionTypes.js';
 import { findHostWall, wallFaceRange } from '../../openings/openingGeometry.js';
 import { effectiveFrameProjection } from '../../openings/openingNumbering.js';
 import { frameOnlyPerpRange } from '../../openings/openingPlanSymbolGeometry.js';
+import { makeFirstFloorGraph as makeGraph, makeRectRoom } from '../../graphTestFixtures.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）明示指定なしの既定値
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
-
-function makeRectRoom(graph, x0v, y0v, x1v, y1v, name = 'LDK') {
-  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, x0v, { labeled: false, discipline: Discipline.ARCH });
-  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, x1v, { labeled: false, discipline: Discipline.ARCH });
-  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, y0v, { labeled: false, discipline: Discipline.ARCH });
-  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, y1v, { labeled: false, discipline: Discipline.ARCH });
-  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
-  const room = graph.addRoom(new Set([key]), name);
-  generateRoomWallsFromOutline(graph, room);
-  return room;
-}
 
 // 実機フィードバック第3弾G用: 壁を一切生成しない矩形室（自層に候補壁が無い状態を作り、
 // probeColumnを「self天井より上はabove層の実Room有無で判定する」分岐まで到達させる）。

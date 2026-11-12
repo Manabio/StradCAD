@@ -6,12 +6,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { findGutterCL } from './gutterHitTest.js';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { CenterLineType, Discipline } from '../core.js';
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // scaleX/scaleY=1・offsetX/Y=0 とし、cl.value(mm) がそのままスクリーン座標になるようにする
 // （テストの座標が読みやすいようにするためのテスト専用の単純化。findGutterCL自体は任意のscale/offsetで動く）。

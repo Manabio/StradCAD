@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
-import { Plane, PlanGraph, Project, CenterLineType, Discipline, RoomFeature, StairType, StructuralMaterialType } from '../core.js';
+import { Project, CenterLineType, Discipline, RoomFeature, StairType, StructuralMaterialType } from '../core.js';
 import { getAllCells } from '../finish/gridCells.js';
 import {
   openingBeamSourcesFor, openingBeamSourcesDiagnostics, autoFillOpeningBeamAxes, reconcileOpeningBeamAxes,
@@ -17,10 +17,7 @@ import { BeamAxisOrigin } from '../core/centerLine.js';
 import { RC_WALL_BACKING_CODES } from '../finish/materials/backingClass.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { landingEdgeCLs } from '../finish/stair/stairLanding.js';
-
-function makeGraph(planeId = 'p1') {
-  return new PlanGraph(new Plane(planeId, 0, `${planeId}階`, 1, 1));
-}
+import { makePlanGraph as makeGraph } from '../graphTestFixtures.js';
 
 const GRID = { labeled: true, discipline: Discipline.STRUCT };
 const ARCH = { labeled: false, discipline: Discipline.ARCH };

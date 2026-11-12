@@ -2,7 +2,7 @@
 // node:testから直接importできる（ElevationModeState.test.jsと同じ方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, applyDefaultBaseboard, RoomKind, RoomFeature, ROOF_SPEC_KEYS, RoofZone, RoofSpec } from '@core';
+import { CenterLineType, Discipline, applyDefaultBaseboard, RoomKind, RoomFeature, ROOF_SPEC_KEYS, RoofZone, RoofSpec } from '@core';
 import { FinishModeState, MATERIAL_CODE_OVERRIDE_FIELDS } from './FinishModeState.js';
 import { enumerateMaterialCodeRefs, ROOM_MATERIAL_OVERRIDE_KEYS, ROOF_SPEC_MATERIAL_FIELDS } from '../catalog/codeNormalization.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
@@ -18,11 +18,7 @@ import { ERR_ROOF_NOT_UNASSIGNED } from '../error.js';
 import { StructuralInfo } from '../core/structuralInfo.js';
 import { StructuralMaterialType } from '../core/constants.js';
 import { defaultSteelSlabSpec, normalizeSteelSlabSpec } from '../structural/steelSlabSpec.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // startDrag/commitDrag が使う regionCellsAt/worldToCell が拾えるよう、区切りCL（非labeled・
 // discipline=ARCH・非dashed）で単一セルの矩形を作る（elevationFaces.test.js等と同じ方針）。

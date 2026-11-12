@@ -17,11 +17,7 @@ import { isFinishCellDivider } from '../core/centerLineKindPolicy.js';
 import { RoomKind } from '../core.js';
 import { generateExteriorWalls, healDerivedGeometry } from './wallGeneration.js';
 import { mergeAdjacentDividers } from './floorCLMap.js';
-
-function makeGraph(planeId = 'p1') {
-  const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
-  return new PlanGraph(plane);
-}
+import { makePlanGraph as makeGraph } from '../graphTestFixtures.js';
 
 function makeProjectWithTwoFloors() {
   const project = new Project('proj', 'test');

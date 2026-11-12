@@ -1,10 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph } from '@core';
 import { undoManager } from '../../undoManager.js';
 import { commitRoofSpecField, roofSpecFieldChanges } from './roofSpecCommit.js';
-
-const freshGraph = () => new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
+import { makeFirstFloorGraph as freshGraph } from '../../graphTestFixtures.js';
 
 test('commitRoofSpecField: 有効な新しい値は確定して true。undo 1エントリで、undo で戻り redo でやり直せる', () => {
   const graph = freshGraph();

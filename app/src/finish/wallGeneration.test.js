@@ -4,17 +4,13 @@
 // あった（QA指摘）。この穴を塞ぐ。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PlanGraph, Plane, CenterLineType, Discipline, RoomKind, RoomFeature, SHAFT_FEATURES, edgeKey } from '@core';
+import { CenterLineType, Discipline, RoomKind, RoomFeature, SHAFT_FEATURES, edgeKey } from '@core';
 import {
   applyBackingOwnership, computeExternalEdgeParams, generateExteriorWalls, generateRoomWallsFromOutline,
   isInteriorWallTarget, clipToAxisExtent, computeExteriorWallSegments,
 } from './wallGeneration.js';
 import { buildRoofLayout, ROOF_LAYOUT_SHAPES } from './roofTestFixtures.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 function addWall(graph, axisOffset, props) {
   const axisCL  = graph.addCenterLine(CenterLineType.HORIZONTAL, 0,    { labeled: false, discipline: Discipline.ARCH });

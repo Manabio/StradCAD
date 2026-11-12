@@ -2,16 +2,12 @@
 // 実 core.js（Plane/PlanGraph）+ finish/wallGeneration.js で壁を生成した部屋に対して検証する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { CenterLineType, Discipline } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { getCellsInRect } from '../finish/gridCells.js';
 import { buildRoomFaces } from './elevationFaces.js';
 import { stepRiserSegments, buildStepFaces, insertStepFaces, subtractOpenSpanCoverage } from './elevationStepFace.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // 3列(0-2000-4000-6000)×1行(0-3000)の部屋。右列だけ部分指定の子（FLは呼び出し側が設定）。
 function makeThreeColumnRoom(graph, childFL) {

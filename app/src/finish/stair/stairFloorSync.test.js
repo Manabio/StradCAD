@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { Project, CenterLineType, Discipline, RoomFeature, RoomKind, StairType } from '../../core.js';
+import { CenterLineType, Discipline, RoomFeature, RoomKind, StairType } from '../../core.js';
 import { worldToCell, refreshCells } from '../gridCells.js';
 import { serializeGraph } from '../../graphSnapshot.js';
 import { makeStorePeek, makeStoreSave, decodeFloor, assertShaftInvariant } from '../equipment/equipmentTestFixtures.js';
@@ -16,23 +16,9 @@ import { addNewFloorRoomFromSource, syncUpperFloors, syncUpperStairInteriors } f
 import { undoManager } from '../../undoManager.js';
 import { collectNeededCLs } from '../floorCLMap.js';
 import { placeStair, addPerFloorV } from './stairRemovalTestFixtures.js';
+import { setupGridProject as setupProject } from '../../graphTestFixtures.js';
 
 // X:[0,1000,2000] Y:[0,1000]（全階共通の通り芯）。left=[0,1000]x[0,1000]・right=[1000,2000]x[0,1000]。
-function setupProject(floorCount) {
-  const project = new Project('proj', 'test');
-  const grid = { labeled: true, discipline: Discipline.STRUCT };
-  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    grid);
-  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   1000, grid);
-  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   2000, grid);
-  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    grid);
-  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1000, grid);
-  const graphs = [];
-  for (let i = 0; i < floorCount; i++) {
-    const { graph } = project.addPlane(i * 3000, `${i + 1}階`, `p${i + 1}`);
-    graphs.push(graph);
-  }
-  return { project, graphs };
-}
 function leftKey(graph)  { return worldToCell(500, 500, graph).key; }
 function rightKey(graph) { return worldToCell(1500, 500, graph).key; }
 

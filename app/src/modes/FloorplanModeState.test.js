@@ -5,15 +5,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Plane, PlanGraph } from '@core';
 import { FloorplanModeState } from './FloorplanModeState.js';
 import { isUiBusy } from '../uiBusy.js';
 import { ERR_CL_MOVE_LOAD_FAILED } from '../error.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 test('FloorplanModeState: stretchState・startStretch/updateStretch/commitStretch/cancelStretchは存在しない（交点ドラッグ廃止）', () => {
   const graph = makeGraph();

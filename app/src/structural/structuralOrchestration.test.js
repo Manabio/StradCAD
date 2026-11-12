@@ -33,16 +33,11 @@ import { figureBindingManager } from '../figure/FigureBindingManager.js';
 import { createStructuralResolveContext } from './structuralResolveContext.js';
 import { buildWoodFloorForB1, dumpB1AllFloorsAllFields, allFieldsDumpForGraph } from './structuralOrchestrationFixtures.js';
 import { slabBeamSlotKey } from './slabSecondaryBeamAxes.js';
+import { makeSinglePlaneProject } from '../graphTestFixtures.js';
 
 // 下階なし（基礎伏図相当）composition スタブ。recomputeStructuralComposition は
 // belowGraph=null のとき下階分岐（buildStructuralWallGate 等の非同期IDB経路）を一切通らない。
 const noBelowComposition = { graphForCategory: () => null };
-
-function makeSinglePlaneProject() {
-  const project = new Project('proj', 'test');
-  const { graph } = project.addPlane(0, '1階', 'p1');
-  return { project, graph };
-}
 
 // ---- 反映パスの「収束するまで繰り返す」（リード裁定・2026-09-19）を直接検証するための最小限の
 // インメモリIndexedDBシム。----

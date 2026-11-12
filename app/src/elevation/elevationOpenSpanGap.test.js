@@ -13,11 +13,7 @@ import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildRoomBand } from './elevationBand.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // D1（elevationOpenSpan.test.jsの makeWallThenOpenRoom と同一構成の最小再現）: 2行×2列。
 // 上段(y:0-1000)はx=2000で自室(左)と他室(右)が接する＝実壁。下段(y:1000-2000)は

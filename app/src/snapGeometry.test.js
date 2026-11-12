@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  Plane, PlanGraph, CenterLineType, Discipline, DimensionKind, DimensionSide, HDimensionLine, VDimensionLine,
+  CenterLineType, Discipline, DimensionKind, DimensionSide, HDimensionLine, VDimensionLine,
   centerLineKind,
 } from './core.js';
 import {
@@ -14,11 +14,7 @@ import {
   pointerTargetScope, legEndpointForMode,
 } from './snapGeometry.js';
 import { CL_KINDS, APP_MODES, hitTestKinds, spansEntireAxis } from './core/centerLineKindPolicy.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from './graphTestFixtures.js';
 
 // CENTER寸法4行（TOP/BOTTOM/LEFT/RIGHT）を追加する。store.js の初期化と同じ構成
 // （centerBoundary が graph.gridXs/gridYs を参照するため、この4行が無いと常に到達なし扱いになる）。

@@ -8,13 +8,7 @@ import { selfWallFreeEnds } from './wallFreeEnds.js';
 import { wallRunFreeEnds } from './woodFraming.js';
 import { selfWallSegments } from './wallBeamAxes.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
-
-// woodAutoFill.test.js の addBackingWall と同じ。
-function addBackingWall(graph, { axisValue, clStart, clEnd, isVertical, bandOffset = null }) {
-  const axisCL = graph.addCenterLine(
-    isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL, axisValue, { labeled: false, discipline: Discipline.ARCH });
-  return graph.addWall(axisCL, 0, isVertical, clStart, 0, clEnd, 0, { backingOffset: 0, backingDepth: 120, wallFinish: 12.5, bandOffset });
-}
+import { addBackingWall } from '../graphTestFixtures.js';
 
 function makeWoodGraph() {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));

@@ -1,15 +1,12 @@
 // 屋根区画（PlanGraph.roofZones）の仕上げ undo（snapshot の `roofZones` キー）のテスト。finishUndo.test.js の主屋根と同型。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, RoofSpec, RoofZone, ROOF_ZONE_KEYS, ShaftSoundproof } from '../core.js';
+import { RoofSpec, RoofZone, ROOF_ZONE_KEYS, ShaftSoundproof } from '../core.js';
 import { NON_DEFAULT_ROOF_SPEC } from './roofTestFixtures.js';
 import { undoManager } from '../undoManager.js';
 import { withFinishUndo, snapshotFinishState, restoreFinishState } from './finishUndo.js';
 import { createRoofZone, removeRoofZone } from './roof/roofZones.js';
-
-function freshGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
+import { makeFirstFloorGraph as freshGraph } from '../graphTestFixtures.js';
 
 test('不変条件: 仕上げ undo の snapshot の roofZones は RoofZone.toData のキー集合と一致する（区画なしは []）', () => {
   const graph = freshGraph();

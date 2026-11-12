@@ -3,17 +3,13 @@
 // フィクスチャ（makeSwitchbackFixture）を再利用する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
+import { CenterLineType, Discipline, StairType, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { uTurnPlanLayout } from '../../finish/stair/stairGeometry.js';
 import { stairContribution, stairPrimitivesForCut, clipStringerToAnchors, landingFramePrimitives, stairCutFloorProfile, stairFaceHits, stairOccluderRects, stairFaceOccluderRects, stairDrawRange, flightNoseZAt, flightTreadZAt, landingStepRisers, withCutLandings, flightStartOuterBound, mergeOuterBounds, farSideSilhouettePrimitives, clipWallEndVerticalsByStairMass, crossingLandingFloorProfile, hiddenTurnStepPrimitives, HIDDEN_STEP_MARK, crossingFlightBodySections, flightHiddenRects, crossingFlightCutSurfaces } from './sectionStair.js';
 import { stairRunProfile, stringerBandGeometry, resolveUTurnSectionParams } from './stairSectionProfile.js';
 import { localXOf, cutDrawRange } from './sectionTypes.js';
-
-function makeGraph(name = 'p1') {
-  const plane = new Plane(name, 0, `${name}階`, 1, 1);
-  return new PlanGraph(plane);
-}
+import { makePlanGraph as makeGraph } from '../../graphTestFixtures.js';
 
 // elevationStairSequence.test.jsのmakeSwitchbackFixtureと同一構成（コメントも参照）。
 function makeSwitchbackFixture(graph, structure = StructuralMaterialType.WOOD) {

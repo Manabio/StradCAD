@@ -4,12 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EquipmentRow } from './equipment.js';
 import { ElevatorEquipmentCategory, EvUsage, DEFAULT_EV_USAGE } from './constants.js';
-import { PlanGraph } from './planGraph.js';
-import { Plane } from './plane.js';
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // ---- EquipmentRow ----
 

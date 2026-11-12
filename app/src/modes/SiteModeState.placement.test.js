@@ -3,7 +3,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project, CenterLineType, Discipline, DimensionSide } from '@core';
-import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
 import {
@@ -11,16 +10,7 @@ import {
   SitePlacementCenterSource,
 } from '../core/constants.js';
 import { SiteModeState } from './SiteModeState.js';
-
-function makeRectRoom(graph, x0v, y0v, x1v, y1v, name) {
-  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, x0v, { labeled: false, discipline: Discipline.ARCH });
-  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, x1v, { labeled: false, discipline: Discipline.ARCH });
-  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, y0v, { labeled: false, discipline: Discipline.ARCH });
-  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, y1v, { labeled: false, discipline: Discipline.ARCH });
-  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), name);
-  generateRoomWallsFromOutline(graph, room);
-  return room;
-}
+import { makeRectRoom } from '../graphTestFixtures.js';
 
 /** n 階建て（p1..pn・3000 ピッチ）。在来木造（最上階に主屋根の region ができる）。 */
 function makeProject(n, { activeId = 'p2' } = {}) {

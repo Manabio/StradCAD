@@ -4,16 +4,12 @@
 // 着目した、階段を含まない最小構成のテスト。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
+import { CenterLineType, Discipline } from '@core';
 import {
   regenerateWalls, loadMaterialMap, preloadWallRegenerationModules, _resetWallRegenerationModuleCacheForTest,
 } from './wallRegeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 function makeRoom(graph, name = '部屋A') {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });

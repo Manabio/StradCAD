@@ -4,13 +4,9 @@
 // （graph.rooms・graph.exteriorRows・graph.roomOrder）をそのまま入力にする。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, RoomKind, RoomFeature } from '@core';
+import { RoomKind, RoomFeature } from '@core';
 import { buildExteriorGroups, isExteriorRoomGroupRoom, isSelectedRoofGroup } from './exteriorGroups.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // 部屋を1つ作り、kind/feature/nameを設定するヘルパー（cellsはダミー。グリッド判定は本モジュールの対象外）。
 function makeRoom(graph, name, { kind = RoomKind.INTERIOR, feature = null } = {}) {

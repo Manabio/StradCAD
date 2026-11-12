@@ -25,6 +25,7 @@ import { SECONDARY_BEAM_CLEARANCE_MM } from '../core/structuralEntities.js';
 import { findSectionEntry } from './sectionCatalog.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
+import { addBackingWall } from '../graphTestFixtures.js';
 
 function makeGridGraph(structure = TRADITIONAL_WOOD_STRUCTURE) {
   const graph = new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
@@ -58,15 +59,6 @@ function splitFreeEndColumns(graph, created, targetCoords) {
     assert.ok(freeEndKeys.has(`${c.x},${c.y}`), `対象外の柱(${c.x},${c.y})はF-1の自由端（フィクスチャの開放端）であるはず`);
   }
   return target;
-}
-
-// 下地オーナー壁を1本追加（wallBeamAxes.test.js の addBackingWall と同じ。backingOffset=0＝下地帯中心が axisValue）。
-// bandOffset（柱寸法が基準120より細い階の外壁下地帯シフト量。ステップ2）は既定null
-// （帯シフト無し＝従来どおりの内壁相当）。外壁シナリオを模すテストだけ明示的に渡す。
-function addBackingWall(graph, { axisValue, clStart, clEnd, isVertical, bandOffset = null }) {
-  const axisCL = graph.addCenterLine(
-    isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL, axisValue, { labeled: false, discipline: Discipline.ARCH });
-  return graph.addWall(axisCL, 0, isVertical, clStart, 0, clEnd, 0, { backingOffset: 0, backingDepth: 120, wallFinish: 12.5, bandOffset });
 }
 
 test('wallIntersectionPoints: 縦壁×横壁の交点・T字・コーナーを返し、平行な壁同士・範囲外は返さない', () => {

@@ -3,7 +3,7 @@
 // generateExteriorWalls・resolveBackingOwnership）で作る——wallGeneration.test.js と同じ方針。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind } from '@core';
+import { CenterLineType, Discipline, RoomKind } from '@core';
 import {
   generateRoomWallsFromOutline, generateExteriorWalls, resolveBackingOwnership,
   computeExteriorWallSegments, closeConvexCorners,
@@ -13,12 +13,9 @@ import { outerWallFaceAt } from './wallFaces.js';
 import {
   wallBodyRects, dividerSegmentsOutsideWalls, exteriorGuideSegments,
 } from './finishGuideGeometry.js';
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
 
 function addWall(graph, axisCL, axisOffset, isVertical, clStart, startOffset, clEnd, endOffset, props) {
   return graph.addWall(axisCL, axisOffset, isVertical, clStart, startOffset, clEnd, endOffset, props);

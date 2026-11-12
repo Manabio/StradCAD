@@ -2,7 +2,7 @@
 // switchbackCuts.test.jsと同じフィクスチャ方針（Plane/PlanGraph+finish/wallGeneration.js）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType } from '@core';
+import { CenterLineType, Discipline, StairType } from '@core';
 import { generateRoomWallsFromOutline } from '../../../finish/wallGeneration.js';
 import { composeRoomFaces } from '../../elevationFaceList.js';
 import { makeProbeContext } from '../sectionProbe.js';
@@ -10,11 +10,7 @@ import { buildColumns } from '../sectionEngine.js';
 import { stairPrimitivesForCut } from '../sectionStair.js';
 import { straightCuts } from './straightCuts.js';
 import { buildBandLayers } from '../sectionBandLayers.js';
-
-function makeGraph(name = 'p1') {
-  const plane = new Plane(name, 0, `${name}階`, 1, 1);
-  return new PlanGraph(plane);
-}
+import { makePlanGraph as makeGraph } from '../../../graphTestFixtures.js';
 
 // 単純な矩形の直進階段室（x:[0,1000], y:[0,3000]）。upDirection='up'（t=0=y=3000(下端=上り口)、
 // t=1=y=0(上端=到達端)）。

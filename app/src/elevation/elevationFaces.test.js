@@ -3,21 +3,13 @@
 // （openingRoomLabel.test.js と同じ方針。ダックタイピングでは面座標の実挙動を再現できない）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from '@core';
+import { CenterLineType, Discipline, OpeningCategory } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import {
   buildRoomFaces, openingsOnFace, faceBoundaryLocalX, snapFaceEndsToCorners, faceWallLessExtents,
   wallCoverageGapsOnFace, wallLessEndAt, drawnSpanBoundaryX,
 } from './elevationFaces.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
-
-function addCL(graph, type, value) {
-  return graph.addCenterLine(type, value, { labeled: false, discipline: Discipline.ARCH });
-}
+import { makeFirstFloorGraph as makeGraph, addCL } from '../graphTestFixtures.js';
 
 // 矩形部屋（x0..x1, y0..y1）を1セルで作り、外周壁を自動生成する。
 function makeRectRoom(graph, x0v, y0v, x1v, y1v, name = 'LDK') {

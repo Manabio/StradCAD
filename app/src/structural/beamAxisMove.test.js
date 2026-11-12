@@ -1,19 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType, spanKey } from '../core.js';
+import { CenterLineType, Discipline, StructuralMaterialType, spanKey } from '../core.js';
 import { CL_OVERLAP_TOL_MM } from '../core/constants.js';
 import { beamAxisMoveRange, resolveSecondaryBeamsForAxis } from './beamAxisMove.js';
 import { DEFAULT_BEAM_SECTION_BY_MATERIAL } from './memberCatalog.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // memberTestFixtures.js のダックタイピングでは effectiveValue・gridXs/gridYs・findHostPrimaryBeam 連携の
 // 実挙動を再現できないため、本ファイルは実 core.js（Plane/PlanGraph）を使う
 // （structural/beamAxisMove.js 自体が @core ではなく相対 import '../core.js' を使う流儀に揃える）。
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
 
 test('beamAxisMoveRange: 両隣の障害物（通り芯・他の梁芯）の内側へ CL_OVERLAP_TOL_MM だけ内寄せする', () => {
   const graph = makeGraph();

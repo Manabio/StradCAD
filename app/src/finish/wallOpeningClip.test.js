@@ -4,20 +4,18 @@
 // 柱包み（wrapFreeEnds）の自由端のはね出しは切った座標から。壁生成の単体（stairOpenings を直接渡す）で固定する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PlanGraph, Plane, CenterLineType, Discipline, RoomKind } from '@core';
+import { CenterLineType, Discipline, RoomKind } from '@core';
 import {
   generateExteriorWalls, generateRoomWallsFromOutline, closeConvexCorners, clipEdgeParamsByOpenings,
   computeExternalEdgeParams,
 } from './wallGeneration.js';
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
 const BASE = 120, FINISH = 12.5, OFFSET = BASE / 2 + FINISH; // 72.5
 const V = CenterLineType.VERTICAL, H = CenterLineType.HORIZONTAL;
 const round = (v) => Math.round(v * 1000) / 1000;
 
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
 // 水平の壁（軸が y≒value）の [lo, hi] を昇順で
 function hWalls(graph, y, { exterior = null } = {}) {
   return graph.walls

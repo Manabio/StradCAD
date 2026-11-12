@@ -1,18 +1,14 @@
 // sectionStructure.js（WP-C: 構造梁の展開図への加算寄与）の単体テスト。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType, edgeKey } from '@core';
+import { CenterLineType, Discipline, StructuralMaterialType, edgeKey } from '@core';
 import {
   structuralContribution, structuralPrimitivesForCut, beamDepthMm, occludeByFloor, beamWallEmbedding, wallEntriesOfLayers,
 } from './sectionStructure.js';
 import { cutDrawRange } from './sectionTypes.js';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { wallConcealRange } from '../../finish/columnWrap.js';
-
-function makeGraph(name = 'p1') {
-  const plane = new Plane(name, 0, `${name}階`, 1, 1);
-  return new PlanGraph(plane);
-}
+import { makePlanGraph as makeGraph } from '../../graphTestFixtures.js';
 
 // 水平梁（isVertical=false）: 通り芯y=1000に沿ってx=0〜2000。STEEL-H200x100（幅100・成200）。
 function addHorizontalBeam(graph, levelOffset, role = 'landing') {

@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ByteBuffer } from 'flatbuffers';
-import { Plane, PlanGraph, Project, StructuralMaterialType } from './core.js';
+import { Project, StructuralMaterialType } from './core.js';
 import { SteelSlab, RcSlab, isBayKeyedSlab, SLAB_CLASS_BY_MATERIAL } from './core/structuralEntities.js';
 import {
   serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs, snapshotStructForCatalogUsage,
@@ -15,13 +15,10 @@ import { CatalogKind } from './catalog/catalogKinds.js';
 import {
   defaultSteelSlabSpec, normalizeSteelSlabSpec, SteelSlabSpecMode,
 } from './structural/steelSlabSpec.js';
+import { makePlanGraph as makeGraph } from './graphTestFixtures.js';
 
 const INDIVIDUAL = { mode: SteelSlabSpecMode.INDIVIDUAL };
 const CELL = 'a:b:c:d';
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, 'p1階', 1, 1));
-}
 
 // 個別仕様つきの S造スラブを持つグラフを往復して、復元後の最初のスラブを返す。
 function roundTripSlab(spec) {

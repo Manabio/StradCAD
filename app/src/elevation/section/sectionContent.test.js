@@ -3,7 +3,7 @@
 // フィクスチャの作法は`sectionCutPlaneExtraction.test.js`の`makeGraph`/`makeRectRoom`に倣う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '@core';
+import { CenterLineType, Discipline, StructuralMaterialType } from '@core';
 import { MEMBER_PRIM } from './sectionTypes.js';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { roomBounds } from '../../finish/gridCells.js';
@@ -13,12 +13,10 @@ import { buildSectionFromLine, buildCutContent, clipInsideSlabSolids, droppedMem
 import { makeProbeContext } from './sectionProbe.js';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign } from './sectionCutPlane.js';
 import { wallLessEndAt } from '../elevationFaces.js';
+import { makeFirstFloorGraph as makeGraph } from '../../graphTestFixtures.js';
 
 const CH = 2400;
 
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
 function makeRectRoom(graph, x0v, y0v, x1v, y1v, name) {
   // 同じ値の通り芯は使い回す（隣接する部屋の境界が別々のCLに載った別の壁にならないよう）。
   const cl = (t, v) => graph.centerLines.find(c => c.centerLineType === t && c.value === v)

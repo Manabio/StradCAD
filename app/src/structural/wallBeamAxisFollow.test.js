@@ -5,15 +5,11 @@
 // 「保護されなければ旧梁芯を吸収して撤去する」に変わった（旧: 常にskipして旧を残す）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
+import { CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
 import { findBeamAnchorCL, wallBeamAxisExcludeKey } from './wallBeamAxes.js';
 import { followWallBeamAxes } from './wallBeamAxisFollow.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
-
-function makeGraph(planeId = 'p1', elevation = 0) {
-  const plane = new Plane(planeId, elevation, `${planeId}階`, 1, 1);
-  return new PlanGraph(plane);
-}
+import { makePlanGraph as makeGraph } from '../graphTestFixtures.js';
 
 function addFuseCL(graph, value) {
   return graph.addCenterLine(CenterLineType.HORIZONTAL, value, { labeled: false, discipline: Discipline.FUSE });

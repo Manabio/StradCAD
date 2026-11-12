@@ -4,12 +4,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ByteBuffer } from 'flatbuffers';
-import { Plane, PlanGraph, edgeKey } from './core.js';
+import { edgeKey } from './core.js';
 import { DetailSlot, KneeDropFrontSide } from './core/constants.js';
 import {
   serializeGraph, restoreGraph, decodeFloorSnapshot, encodeFloorSnapshot,
 } from './graphSnapshot.js';
 import { normalizeKneeDropRecord, kneeDropFrontSideOf } from './core/kneeDropRecord.js';
+import { makePlanGraph as makeGraph } from './graphTestFixtures.js';
 
 const GS_KNEE_DROP_WALLS = 43; // schema/graphFbs.js GS.KNEE_DROP_WALLS
 const KDW_DETAIL_KEYS = 5;
@@ -19,10 +20,6 @@ const { KNEE_TOP, DROP_BOTTOM } = DetailSlot;
 
 const KEY_A = 'ax:s0:e0';
 const KEY_B = 'ax:s1:e1';
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, 'p1階', 1, 1));
-}
 
 function makeGraphWithRecords() {
   const graph = makeGraph();

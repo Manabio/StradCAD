@@ -22,23 +22,9 @@ import {
   ERR_ELEVATOR_REMOVE_FAILED, ERR_ELEVATOR_USAGE_FAILED,
   ERR_ELEVATOR_COPY_FAILED, ERR_ELEVATOR_RENUMBER_FAILED,
 } from '../../error.js';
+import { setupGridProject as setupProject } from '../../graphTestFixtures.js';
 
-// ---- 共通フィクスチャ（equipmentFloorPlan.test.js と同じ構図: X:[0,1000,2000] Y:[0,1000]） ----
-function setupProject(floorCount) {
-  const project = new Project('proj', 'test');
-  const grid = { labeled: true, discipline: Discipline.STRUCT };
-  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    grid);
-  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   1000, grid);
-  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   2000, grid);
-  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    grid);
-  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1000, grid);
-  const graphs = [];
-  for (let i = 0; i < floorCount; i++) {
-    const { graph } = project.addPlane(i * 3000, `${i + 1}階`, `p${i + 1}`);
-    graphs.push(graph);
-  }
-  return { project, graphs };
-}
+// ---- 共通フィクスチャ（setupProject＝通り芯 X:[0,1000,2000] Y:[0,1000]。graphTestFixtures.js） ----
 function leftKey(graph)  { return worldToCell(500, 500, graph).key; }
 function rightKey(graph) { return worldToCell(1500, 500, graph).key; }
 

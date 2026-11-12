@@ -3,31 +3,16 @@
 // （床だけ下げ、ceilAbs=floorDelta+chMmが不変になるよう天井は動かさない）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, RoomFeature } from '@core';
+import { CenterLineType, Discipline, RoomFeature } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { buildVoidBand, buildRoomBandWithVoidAbove } from './elevationVoid.js';
 import { planeOverhangForFace } from './section/sectionContent.js';
 import { buildRoomFaces } from './elevationFaces.js';
 import { setRoomCeilingShape } from '../ceiling/roomCeilingShape.js';
 import { DEFAULT_WALL_LESS_END_EXTEND_MM } from './elevationStyle.js';
+import { makePlanGraph as makeGraph, makeRectRoom } from '../graphTestFixtures.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）を明示指定なしの既定値として使う
-
-function makeGraph(name = 'p1', elevation = 0) {
-  const plane = new Plane(name, elevation, `${name}階`, 1, 1);
-  return new PlanGraph(plane);
-}
-
-function makeRectRoom(graph, x0v, y0v, x1v, y1v, name = 'LDK') {
-  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, x0v, { labeled: false, discipline: Discipline.ARCH });
-  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, x1v, { labeled: false, discipline: Discipline.ARCH });
-  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, y0v, { labeled: false, discipline: Discipline.ARCH });
-  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, y1v, { labeled: false, discipline: Discipline.ARCH });
-  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
-  const room = graph.addRoom(new Set([key]), name);
-  generateRoomWallsFromOutline(graph, room);
-  return room;
-}
 
 // 帯内の床線・天井線（ともにCUT=太の水平線）のyを拾う（elevationStair.test.jsのfloorYと同じ方針）。
 function floorCeilYs(band) {

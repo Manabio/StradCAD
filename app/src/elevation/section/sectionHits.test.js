@@ -13,8 +13,7 @@
 // 配列コピーで失われる実害があったため）。visibleBandsOfはopts.layerStackを必須にした。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, OpeningCategory, StructuralMaterialType, RoomFeature } from '@core';
-import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
+import { CenterLineType, Discipline, edgeKey, OpeningCategory, StructuralMaterialType, RoomFeature } from '@core';
 import { makeProbeContext, probeColumn } from './sectionProbe.js';
 import { buildColumns } from './sectionEngine.js';
 import { buildCutContent } from './sectionContent.js';
@@ -22,24 +21,9 @@ import { emitOpenGapMarks } from './sectionEmit.js';
 import { probeColumnHits, visibleBandsOf, isHiddenWall, buildLayerStack, nearMembersOf } from './sectionHits.js';
 import { makeGrid } from '../../plan/planTestFixtures.js';
 import { createZone } from '../../ceiling/ceilingZones.js';
+import { makeFirstFloorGraph as makeGraph, makeRectRoom } from '../../graphTestFixtures.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）明示指定なしの既定値
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
-
-function makeRectRoom(graph, x0v, y0v, x1v, y1v, name = 'LDK') {
-  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, x0v, { labeled: false, discipline: Discipline.ARCH });
-  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, x1v, { labeled: false, discipline: Discipline.ARCH });
-  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, y0v, { labeled: false, discipline: Discipline.ARCH });
-  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, y1v, { labeled: false, discipline: Discipline.ARCH });
-  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
-  const room = graph.addRoom(new Set([key]), name);
-  generateRoomWallsFromOutline(graph, room);
-  return room;
-}
 
 function frontCut(graph, overrides = {}) {
   return {

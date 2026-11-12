@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  Plane, PlanGraph, ShaftSoundproof, ElevatorEquipmentCategory, DEFAULT_EV_USAGE, EvUsage,
+  ShaftSoundproof, ElevatorEquipmentCategory, DEFAULT_EV_USAGE, EvUsage,
   Stair, StairType, StairPortSide, StructuralMaterialType, totalStepsFromSections,
   RoomKind, RoomFeature, RoofSpec, ROOF_SPEC_KEYS,
   CenterLineType, Discipline, DEFAULT_CEILING_PANEL, DEFAULT_CEILING_FINISH,
@@ -12,10 +12,7 @@ import {
 import { NON_DEFAULT_ROOF_SPEC } from './roofTestFixtures.js';
 import { undoManager } from '../undoManager.js';
 import { withFinishUndo, snapshotFinishState, restoreFinishState } from './finishUndo.js';
-
-function freshGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
+import { makeFirstFloorGraph as freshGraph } from '../graphTestFixtures.js';
 
 test('shaftWallMaterial を withFinishUndo 経由で変えて undo すると元の値に戻る', () => {
   const graph = freshGraph();

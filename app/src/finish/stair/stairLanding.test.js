@@ -3,14 +3,10 @@
 // （移設対象の式が同じ計算をするか突き合わせるため）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StairType } from '@core';
+import { CenterLineType, Discipline, StairType } from '@core';
 import { generateRoomWallsFromOutline } from '../wallGeneration.js';
 import { landingRect, landingEdgeCLs, landingZ } from './stairLanding.js';
-
-function makeGraph(name = 'p1') {
-  const plane = new Plane(name, 0, `${name}階`, 1, 1);
-  return new PlanGraph(plane);
-}
+import { makePlanGraph as makeGraph } from '../../graphTestFixtures.js';
 
 // elevation/section/sectionStair.test.jsのmakeSwitchbackFixtureと同一構成（コメントも参照）。
 // landingKey(x:0-2000,y:0-1500)＝踊り場、outboundKey/returnKey(y:1500-4500)＝往路・復路レーン。

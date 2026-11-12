@@ -3,30 +3,15 @@
 // content は本番と同じ共通経路 buildCutContent（sectionContent.js）で確かめる。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
+import { CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { makeProbeContext } from './sectionProbe.js';
 import { buildFaceShell, buildColumns, mergeColumns, splitOpenByFarFace, mergeContinuousWallBands } from './sectionEngine.js';
 import { buildCutContent } from './sectionContent.js';
 import { SIGHTLINE_DEPTH_LIMIT_MM } from '../elevationStyle.js';
+import { makeFirstFloorGraph as makeGraph, makeRectRoom } from '../../graphTestFixtures.js';
 
 const CH = 2400;
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
-
-function makeRectRoom(graph, x0v, y0v, x1v, y1v, name = 'LDK') {
-  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, x0v, { labeled: false, discipline: Discipline.ARCH });
-  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, x1v, { labeled: false, discipline: Discipline.ARCH });
-  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, y0v, { labeled: false, discipline: Discipline.ARCH });
-  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, y1v, { labeled: false, discipline: Discipline.ARCH });
-  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
-  const room = graph.addRoom(new Set([key]), name);
-  generateRoomWallsFromOutline(graph, room);
-  return room;
-}
 
 function frontCut(graph, overrides = {}) {
   return {

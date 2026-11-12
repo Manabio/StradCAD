@@ -3,20 +3,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ByteBuffer } from 'flatbuffers';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory } from './core.js';
+import { CenterLineType, Discipline, OpeningCategory } from './core.js';
 import { DetailSlot } from './core/constants.js';
 import {
   serializeGraph, restoreGraph, decodeFloorSnapshot, encodeFloorSnapshot,
 } from './graphSnapshot.js';
+import { makePlanGraph as makeGraph } from './graphTestFixtures.js';
 
 const GS_OPENINGS = 18; // schema/graphFbs.js GS.OPENINGS
 const OP_DETAIL_KEYS = 28; // schema/graphFbs.js OP.DETAIL_KEYS
 const OP_DETAIL_VALS = 29; // schema/graphFbs.js OP.DETAIL_VALS
 const { JAMB, HEAD } = DetailSlot;
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, 'p1階', 1, 1));
-}
 
 /** 水平壁 1 本と三方枠 2 件（id 固定）を持つ階。props[i] が i 番目の建具の追加 props。 */
 function makeGraphWithFrames(props = [{}, {}]) {

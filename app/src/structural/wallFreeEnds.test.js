@@ -2,22 +2,11 @@
 // woodAutoFill.test.js と同じく実 core.js（Plane/PlanGraph/Wall）を使う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '../core.js';
+import { CenterLineType, Discipline, edgeKey } from '../core.js';
 import { kneeDropWallAtFreeEnd, isKneeDropFreeEnd, selfWallFreeEnds } from './wallFreeEnds.js';
 import { wallRunFreeEnds } from './woodFraming.js';
 import { selfWallSegments } from './wallBeamAxes.js';
-
-// woodAutoFill.test.js の addBackingWall と同じ（下地オーナー壁を1本追加。backingOffset=0＝
-// 下地帯中心が axisValue）。
-function addBackingWall(graph, { axisValue, clStart, clEnd, isVertical, bandOffset = null }) {
-  const axisCL = graph.addCenterLine(
-    isVertical ? CenterLineType.VERTICAL : CenterLineType.HORIZONTAL, axisValue, { labeled: false, discipline: Discipline.ARCH });
-  return graph.addWall(axisCL, 0, isVertical, clStart, 0, clEnd, 0, { backingOffset: 0, backingDepth: 120, wallFinish: 12.5, bandOffset });
-}
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
+import { makeFirstFloorGraph as makeGraph, addBackingWall } from '../graphTestFixtures.js';
 
 test('kneeDropWallAtFreeEnd: 腰壁指定のある辺の自由端は壁とレコードを返す', () => {
   const graph = makeGraph();

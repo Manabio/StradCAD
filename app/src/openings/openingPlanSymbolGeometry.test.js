@@ -27,6 +27,7 @@ import {
   closedAngleFor, leafOpenAngle, angleVectors, DOOR_OPEN_ANGLE_DEG,
   frameOnlyJambProfiles, frameOnlyPerpRange,
 } from './openingPlanSymbolGeometry.js';
+import { makePlanGraph as makeGraph } from '../graphTestFixtures.js';
 
 // 独立検算用（production の closedAngleFor/leafOpenAngle を経由しない）。開き角の中間角
 // （closedAngleとopenAngleの二等分角）のperp軸成分の符号から「どちら側へ膨らむか」を返す。
@@ -37,11 +38,6 @@ function leafBulgeSign(isVertical, hingeSide, sense, angleDeg = 90) {
   const rad = (bisector * Math.PI) / 180;
   const perpComponent = isVertical ? Math.cos(rad) : Math.sin(rad);
   return Math.sign(Math.round(perpComponent * 1e9) / 1e9);
-}
-
-function makeGraph(planeId = 'p1') {
-  const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
-  return new PlanGraph(plane);
 }
 
 // ================================================================

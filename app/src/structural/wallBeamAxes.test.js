@@ -19,15 +19,12 @@ import { MATERIALS } from '../finish/materials/materialData.js';
 import { materialThickness } from '../finish/edgeComposition.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { serializeGraph, restoreGraph } from '../graphSnapshot.js';
+import { makePlanGraph as makeGraph } from '../graphTestFixtures.js';
 
 // memberTestFixtures.js のダックタイピングでは effectiveValue・gridXs/gridYs・backingRange連携の
 // 実挙動を再現できないため、本ファイルは実 core.js（Plane/PlanGraph/Wall）を使う
 // （structural/beamAxisMove.js 等、既存の実core.js流儀テストと同じ方針）。
 
-function makeGraph(planeId = 'p1', elevation = 0) {
-  const plane = new Plane(planeId, elevation, `${planeId}階`, 1, 1);
-  return new PlanGraph(plane);
-}
 
 // 縦グリッド X1=0,X2=4000,X3=8000 / 横グリッド Y1=0,Y2=4000 を持つグラフを返す。
 function makeGridGraph(planeId, elevation) {

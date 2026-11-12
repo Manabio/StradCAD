@@ -2,7 +2,7 @@
 // 壁を生成した部屋に対して帯を組み立てる（elevationFaces.test.js と同じ方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, OpeningCategory, StairType, StairSoffitFinish, StructuralMaterialType } from '@core';
+import { CenterLineType, Discipline, OpeningCategory, StairType, StairSoffitFinish, StructuralMaterialType } from '@core';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { cellsBeyondBreak } from '../finish/stair/stairGeometry.js';
 import {
@@ -18,22 +18,7 @@ import { createZone } from '../ceiling/ceilingZones.js';
 import { setRoomCeilingShape } from '../ceiling/roomCeilingShape.js';
 import { worldToCell, CEILING_CELL_GRID } from '../finish/gridCells.js';
 import { BAND_TOP_MARGIN_MM, BAND_GAP_MM, CH_DIM_OFFSET_MM } from './elevationStyle.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
-
-function makeRectRoom(graph, x0v, y0v, x1v, y1v, name = 'LDK') {
-  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, x0v, { labeled: false, discipline: Discipline.ARCH });
-  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, x1v, { labeled: false, discipline: Discipline.ARCH });
-  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, y0v, { labeled: false, discipline: Discipline.ARCH });
-  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, y1v, { labeled: false, discipline: Discipline.ARCH });
-  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
-  const room = graph.addRoom(new Set([key]), name);
-  generateRoomWallsFromOutline(graph, room);
-  return room;
-}
+import { makeFirstFloorGraph as makeGraph, makeRectRoom } from '../graphTestFixtures.js';
 
 test('buildRoomBand: 矩形部屋は4面ぶんのfaceCountを持つ', () => {
   const graph = makeGraph();

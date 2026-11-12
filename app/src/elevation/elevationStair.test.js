@@ -11,22 +11,7 @@ import { figureBounds } from '../structural/sectionFigure/sectionGeometry.js';
 import {
   BAND_GAP_MM, BAND_TOP_MARGIN_MM, GRID_LINE_ABOVE_CH_MM, CH_DIM_OFFSET_MM, ElevationLineRole, weightForRole,
 } from './elevationStyle.js';
-
-function makeGraph(name = 'p1') {
-  const plane = new Plane(name, 0, `${name}階`, 1, 1);
-  return new PlanGraph(plane);
-}
-
-function makeRectRoom(graph, x0v, y0v, x1v, y1v, name = 'LDK') {
-  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, x0v, { labeled: false, discipline: Discipline.ARCH });
-  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, x1v, { labeled: false, discipline: Discipline.ARCH });
-  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, y0v, { labeled: false, discipline: Discipline.ARCH });
-  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, y1v, { labeled: false, discipline: Discipline.ARCH });
-  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
-  const room = graph.addRoom(new Set([key]), name);
-  generateRoomWallsFromOutline(graph, room);
-  return room;
-}
+import { makePlanGraph as makeGraph, makeRectRoom } from '../graphTestFixtures.js';
 
 function worldAt(face, localAlong) {
   const along = face.originWorld + face.dirSign * localAlong;

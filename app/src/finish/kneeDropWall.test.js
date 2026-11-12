@@ -4,19 +4,11 @@
 // フォールバック）ため、新セマンティクスをテストで固定する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey } from '@core';
+import { CenterLineType, Discipline, edgeKey } from '@core';
 import { generateRoomWallsFromOutline } from './wallGeneration.js';
 import { edgeGeometry, buildCellToRoom } from './edgeClassify.js';
 import { shouldDrawCapOutline, effectiveCeilingHeight, validateKneeDropWall, ERR_CEILING_HEIGHT_UNRESOLVED, kneeDropRecordsOnAxis, resolveKneeDropOverlays, kneeDropUpOptions, kneeDropRecordForWallSpan, kneeDropRecordsAtPointOnWall, planWallHeight, PLAN_CUT_HEIGHT, resolveWallSpanKey } from './kneeDropWall.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
-
-function addCL(graph, type, value) {
-  return graph.addCenterLine(type, value, { labeled: false, discipline: Discipline.ARCH });
-}
+import { makeFirstFloorGraph as makeGraph, addCL } from '../graphTestFixtures.js';
 
 // 上室(0,0)-(4000,2000)・下室(0,2000)-(4000,5000)がy=2000のCLを共有する2部屋を作る。
 function makeSharedEdgeRooms(graph) {

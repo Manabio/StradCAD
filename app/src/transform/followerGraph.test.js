@@ -2,15 +2,9 @@
 // effectiveValue・structGraph（project.structGraph=全階共通通り芯）連携の実挙動を再現するため実 core.js を使う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Project, CenterLineType, Discipline } from '../core.js';
+import { CenterLineType, Discipline } from '../core.js';
 import { computeMoveRange, collectFollowerOffsets, resolveMoveRange, isSharedCL } from './followerGraph.js';
-
-// project.structGraph（全階共通の通り芯）+ 自グラフ（階固有の中心線・補助線・梁芯）を持つ最小プロジェクト。
-function makeProjectWithGraph() {
-  const project = new Project('proj', 'test');
-  const { graph } = project.addPlane(0, '1階', 'p1');
-  return { project, graph };
-}
+import { makeSinglePlaneProject as makeProjectWithGraph } from '../graphTestFixtures.js';
 
 // followerGraph.js 内部の gatherShapes は非 export のため、computeMoveRange 直呼び用の
 // 最小 bundle は graph.centerLines（自グラフ+structGraphのマージ済みゲッター）から組む。

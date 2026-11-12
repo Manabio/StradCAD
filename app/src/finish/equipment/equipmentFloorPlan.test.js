@@ -18,26 +18,11 @@ import {
   copyElevatorRowsToGraph,
 } from './equipmentFloorPlan.js';
 import { ERR_ELEVATOR_UPPER_CONFLICT, ERR_ELEVATOR_UPPER_UNCLOSABLE } from '../../error.js';
+import { setupGridProject as setupProject } from '../../graphTestFixtures.js';
 
 // ---- 共通フィクスチャ ----
 // structGraph の通り芯グリッド X:[0,1000,2000] Y:[0,1000] を全階共通で持つ。
 // 「left」セル=[0,1000]x[0,1000]・「right」セル=[1000,2000]x[0,1000]（既定の昇降機footprintはleft）。
-function setupProject(floorCount) {
-  const project = new Project('proj', 'test');
-  const grid = { labeled: true, discipline: Discipline.STRUCT };
-  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   0,    grid);
-  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   1000, grid);
-  project.structGraph.addCenterLine(CenterLineType.VERTICAL,   2000, grid);
-  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 0,    grid);
-  project.structGraph.addCenterLine(CenterLineType.HORIZONTAL, 1000, grid);
-  const graphs = [];
-  for (let i = 0; i < floorCount; i++) {
-    const { graph } = project.addPlane(i * 3000, `${i + 1}階`, `p${i + 1}`);
-    graphs.push(graph);
-  }
-  return { project, graphs };
-}
-
 function leftKey(graph)  { return worldToCell(500, 500, graph).key; }
 function rightKey(graph) { return worldToCell(1500, 500, graph).key; }
 

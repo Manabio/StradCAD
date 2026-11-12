@@ -2,7 +2,7 @@
 // 実挙動を再現できないため、実 core.js（Plane/PlanGraph/Project）を使う。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Project, Plane, PlanGraph, CenterLineType, Discipline, RoomKind, centerLineKind } from '../core.js';
+import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, centerLineKind } from '../core.js';
 import { BeamAxisOrigin } from '../core/centerLine.js';
 import { serializeGraph, restoreGraph, serializeStructCLs, restoreStructCLs } from '../graphSnapshot.js';
 import {
@@ -14,13 +14,7 @@ import {
   checkPromoteToGridGuards, checkDemoteToCenterGuards, isFootprintBoundaryCL,
 } from './centerLineConvert.js';
 import { worldToCell } from '../finish/gridCells.js';
-
-// project.structGraph・graph._structGraph の連携が必要なテスト用。
-function makeProjectWithGraph() {
-  const project = new Project('proj', 'test');
-  const { graph } = project.addPlane(0, '1階', 'p1');
-  return { project, graph };
-}
+import { makeSinglePlaneProject as makeProjectWithGraph } from '../graphTestFixtures.js';
 
 // ---- 昇格（中心線 → 通り芯） ----
 

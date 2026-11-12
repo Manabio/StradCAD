@@ -4,11 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getObserverTree } from 'mobx';
-import { Project, CenterLineType, Discipline, OpeningCategory } from '@core';
+import { Project, CenterLineType, OpeningCategory } from '@core';
 import { faceGapLimitMm } from '../elevation/elevationStyle.js';
 import { resolveLineWeightsPx } from '../viewport.js';
 import { FACADE_OPENING_KIND } from '../facade/facadeStyle.js';
-import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { FACADE_EMPTY_MESSAGE, FACADE_INIT_ERROR_MESSAGE, FACADE_DIRECTION_ORDER } from '../core/constants.js';
 import { floorSwapManager } from '../storage/FloorSwapManager.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from '../structural/structureRules.js';
@@ -16,16 +15,7 @@ import { eaveTopZMm, resolveTopStoryHeightMm } from '../floorHeights.js';
 import { FacadeModeState } from './FacadeModeState.js';
 import { clearOverlays } from '../catalog/catalogRegistry.js';
 import { elevationFigure, installElevationFigures } from '../openings/openingDetailTestFixtures.js';
-
-function makeRectRoom(graph, x0v, y0v, x1v, y1v, name) {
-  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, x0v, { labeled: false, discipline: Discipline.ARCH });
-  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, x1v, { labeled: false, discipline: Discipline.ARCH });
-  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, y0v, { labeled: false, discipline: Discipline.ARCH });
-  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, y1v, { labeled: false, discipline: Discipline.ARCH });
-  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), name);
-  generateRoomWallsFromOutline(graph, room);
-  return room;
-}
+import { makeRectRoom } from '../graphTestFixtures.js';
 
 /** n 階建て（p1..pn・3000 ピッチ）。withRooms=false なら部屋も壁も無い。 */
 function makeProject(n, { activeId = 'p1', withRooms = true } = {}) {

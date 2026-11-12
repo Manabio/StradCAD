@@ -2,15 +2,12 @@
 // （ステップ5・規則O層C）。beamAxisMove.test.js と同じ流儀（実core.js。Plane/PlanGraphで実グラフを組む）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
+import { CenterLineType, Discipline, StructuralMaterialType } from '../core.js';
 import { findHostBeam, findHostPrimaryBeam, openingHostRefCLs, openingHostRefIds, beamExclusionKey, spanKey } from './structuralEntities.js';
 import { BeamAxisOrigin } from './centerLine.js';
 import { TRADITIONAL_WOOD_STRUCTURE, rulesFor } from '../structural/structureRules.js';
 import { findSectionEntry } from '../structural/sectionCatalog.js';
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 const SEC = 'H-300x150'; // 断面IDはfindHostBeamの座標判定に無関係（ダミーで良い）
 

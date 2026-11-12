@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInAction } from 'mobx';
 import {
-  Plane, PlanGraph, Project, CenterLineType, Discipline, OpeningCategory, StairType, StructuralMaterialType,
+  CenterLineType, Discipline, OpeningCategory, StairType, StructuralMaterialType,
 } from './core.js';
 import { serializeGraph, serializeGraphCanonicalWalls, canonicalizeFloorBytes, decodeFloorSnapshot } from './graphSnapshot.js';
 import { findLineIdOccurrences } from './lineIdRemap.js';
@@ -14,6 +14,7 @@ import { runFinishEntryBoundary, runFinishExitBoundary } from './finish/finishBo
 import { loadMaterialMap } from './finish/wallRegeneration.js';
 import { TRADITIONAL_WOOD_STRUCTURE } from './structural/structureRules.js';
 import { cellsBeyondBreak } from './finish/stair/stairGeometry.js';
+import { makeFirstFloorGraph as makeGraph, makeSinglePlaneProject } from './graphTestFixtures.js';
 
 // ---- 合成フィクスチャ ----
 // CL: 垂直 x0/x1/x2、水平 y0/y1。壁は spec で与える（id は省略で既定の UUID）。
@@ -29,10 +30,6 @@ const OTHER_WALL = Object.freeze({
   axis: 'y1', axisOffset: -60, isVertical: false, start: 'x0', startOffset: 0, end: 'x1', endOffset: 0,
   props: Object.freeze({ isRoomWall: false, isExteriorWall: true, wallFinish: 20, backingDepth: 105 }),
 });
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
 
 function addCLs(graph) {
   const mk = (type, v) => graph.addCenterLine(type, v, { labeled: false, discipline: Discipline.ARCH });
@@ -319,12 +316,6 @@ test('壁が0本の graph でも例外なく、同じ graph に対して決定�
 });
 
 // ---- 本番経路での固定: 実際の脱出境界を無編集で続けて回す ----
-function makeSinglePlaneProject() {
-  const project = new Project('proj', 'test');
-  const { graph } = project.addPlane(0, '1階', 'p1');
-  return { project, graph };
-}
-
 async function makeTwoRoomFixture() {
   const { project, graph } = makeSinglePlaneProject();
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0, { labeled: false, discipline: Discipline.ARCH });

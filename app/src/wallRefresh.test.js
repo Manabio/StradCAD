@@ -28,12 +28,7 @@ import { assignNumbers, applyNumbers } from './structural/memberNumbering.js';
 import { ERR_CATALOG_DUPLICATE } from './error.js';
 import { serializeGraph } from './graphSnapshot.js';
 import { makeStorePeek, makeStoreSave, decodeFloor } from './finish/equipment/equipmentTestFixtures.js';
-
-function makeSinglePlaneProject() {
-  const project = new Project('proj', 'test');
-  const { graph } = project.addPlane(0, '1階', 'p1');
-  return { project, graph };
-}
+import { makeSinglePlaneProject } from './graphTestFixtures.js';
 
 function addRectRoom(graph, name = '部屋A') {
   const x0 = graph.addCenterLine(CenterLineType.VERTICAL, 0,    { labeled: false, discipline: Discipline.ARCH });

@@ -1,12 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
+import { CenterLineType, Discipline } from '../core.js';
 import { CIRCLE_NUMS, circleRefSymbol, circleRefKindLabel } from './circleRef.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 test('circleRefSymbol: CIRCLE_NUMSの範囲内はUnicode丸数字、超えたら "(n)" にフォールバック', () => {
   assert.equal(circleRefSymbol(0), '①');

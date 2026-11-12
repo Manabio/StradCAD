@@ -3,22 +3,14 @@
 // 柱型があれば柱型の面が見える位置まで下がる／造作家具があれば下がる／多層帯は全層を見る」を固定する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '@core';
-import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
+import { Plane, PlanGraph } from '@core';
 import { cutPlaneOffsetMm, faceCutLine, faceViewSign,
   wallWorldRangesOnFacePlane, planeOverhangBeyondEnds } from './sectionCutPlane.js';
 import { composeRoomFaces } from '../elevationFaceList.js';
+import { makeRectRoom } from '../../graphTestFixtures.js';
 
 function makeGraph(name, level) {
   return new PlanGraph(new Plane(name, level, name, 1, 1));
-}
-function makeRectRoom(graph, x0v, y0v, x1v, y1v, name) {
-  const cl = (t, v) => graph.addCenterLine(t, v, { labeled: false, discipline: Discipline.ARCH });
-  const x0 = cl(CenterLineType.VERTICAL, x0v), x1 = cl(CenterLineType.VERTICAL, x1v);
-  const y0 = cl(CenterLineType.HORIZONTAL, y0v), y1 = cl(CenterLineType.HORIZONTAL, y1v);
-  const room = graph.addRoom(new Set([`${x0.id}:${y0.id}:${x1.id}:${y1.id}`]), name);
-  generateRoomWallsFromOutline(graph, room);
-  return room;
 }
 function facesOf(room, graph) {
   return composeRoomFaces(room, graph).filter(f => f.kind !== 'step');

@@ -5,15 +5,12 @@
 // 直接検証する（wallBeamAxes.test.js と同じ「実挙動を再現できないダックタイピングは使わない」方針）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline, RoomKind, RoomFeature } from '../core.js';
+import { CenterLineType, Discipline, RoomKind, RoomFeature } from '../core.js';
 import {
   buildSelfFootprintGate, buildExteriorSide, buildStructuralWallGate, footprintBreakCLs, createFootprintCache,
 } from './wallGate.js';
 import { worldToCell } from '../finish/gridCells.js';
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, '1階', 1, 1));
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 // 2部屋（ともにINTERIOR）をY方向に積んだグラフ。X:0..2000固定、Y:-1000..1000(room A)・1000..4000(room B)。
 // 境界Y=1000は「divider CLの候補ではあるが、両側とも建物内で帰属が変わらない」ケースを作るために置く

@@ -4,14 +4,8 @@
 // 穴があった（QA指摘）。この穴を塞ぐ。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PlanGraph } from './planGraph.js';
-import { Plane } from './plane.js';
 import { CenterLineType, Discipline } from './constants.js';
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
+import { makeFirstFloorGraph as makeGraph } from '../graphTestFixtures.js';
 
 test('Wall.materialRange: finishSide明示指定がaxisOffsetのnaiveな符号より優先される（CL偏芯で符号が食い違うケース）', () => {
   const graph = graphWithWall();

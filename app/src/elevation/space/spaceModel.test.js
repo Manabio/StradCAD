@@ -4,7 +4,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Plane, PlanGraph, CenterLineType, Discipline, edgeKey, RoomFeature } from '@core';
-import { generateRoomWallsFromOutline } from '../../finish/wallGeneration.js';
 import { buildSpaceIndex } from './spaceModel.js';
 import { makeProbeContext } from '../section/sectionProbe.js';
 import { PROBE_EPS_MM } from '../elevationStyle.js';
@@ -12,24 +11,9 @@ import { worldToCell, CEILING_CELL_GRID } from '../../finish/gridCells.js';
 import { makeGrid } from '../../plan/planTestFixtures.js';
 import { createZone } from '../../ceiling/ceilingZones.js';
 import { setRoomCeilingShape } from '../../ceiling/roomCeilingShape.js';
+import { makeFirstFloorGraph as makeGraph, makeRectRoom } from '../../graphTestFixtures.js';
 
 const CH = 2400; // DEFAULT_ROOM_CEILING_HEIGHT（core/constants.js）明示指定なしの既定値
-
-function makeGraph() {
-  const plane = new Plane('p1', 0, '1階', 1, 1);
-  return new PlanGraph(plane);
-}
-
-function makeRectRoom(graph, x0v, y0v, x1v, y1v, name = 'LDK') {
-  const x0 = graph.addCenterLine(CenterLineType.VERTICAL, x0v, { labeled: false, discipline: Discipline.ARCH });
-  const x1 = graph.addCenterLine(CenterLineType.VERTICAL, x1v, { labeled: false, discipline: Discipline.ARCH });
-  const y0 = graph.addCenterLine(CenterLineType.HORIZONTAL, y0v, { labeled: false, discipline: Discipline.ARCH });
-  const y1 = graph.addCenterLine(CenterLineType.HORIZONTAL, y1v, { labeled: false, discipline: Discipline.ARCH });
-  const key = `${x0.id}:${y0.id}:${x1.id}:${y1.id}`;
-  const room = graph.addRoom(new Set([key]), name);
-  generateRoomWallsFromOutline(graph, room);
-  return room;
-}
 
 // ---- 基本: 室内の1点は所有Room・floorZ(=layer基準)・ceilZ(=floorZ+CH)を返す ----
 test('【Phase1】buildSpaceIndex.cellAt: 室内の点は所有Room・floorZ・ceilZを返す', () => {

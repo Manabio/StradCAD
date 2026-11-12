@@ -3,21 +3,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ByteBuffer } from 'flatbuffers';
-import { Plane, PlanGraph } from './core.js';
 import { DetailSlot } from './core/constants.js';
 import {
   serializeGraph, restoreGraph, decodeFloorSnapshot, encodeFloorSnapshot,
 } from './graphSnapshot.js';
 import { snapshotRoomsState, restoreRoomsState } from './finish/roomReinterpret.js';
+import { makePlanGraph as makeGraph } from './graphTestFixtures.js';
 
 const GS_ROOMS = 9; // schema/graphFbs.js GS.ROOMS
 const RM_DETAIL_KEYS = 32; // schema/graphFbs.js RM.DETAIL_KEYS
 const RM_DETAIL_VALS = 33; // schema/graphFbs.js RM.DETAIL_VALS
 const { FLOOR_WALL, WALL_CEILING, FLOOR_STEP } = DetailSlot;
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, 'p1階', 1, 1));
-}
 
 /** 部屋 2 つ（id 固定）の階。 */
 function makeGraphWithRooms() {

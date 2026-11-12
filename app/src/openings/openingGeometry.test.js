@@ -62,7 +62,7 @@ test('【失敗系】S3c: maxOpeningWidthAt は extra が上限を食い潰す�
 // 符号の取り違えを独立に検出できる。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Plane, PlanGraph, CenterLineType, Discipline } from '../core.js';
+import { CenterLineType, Discipline } from '../core.js';
 import { OpeningCategory } from '../core.js';
 import {
   swingSideTowardPerp, isWallRadialHit, wallRadialHitDist, nearestWallHit, findCounterpartWall, exteriorSideDir,
@@ -70,11 +70,7 @@ import {
 } from './openingGeometry.js';
 import { footprintResolver } from './slideOutset.js';
 import { ERR_OPENING_OVERLAP } from '../error.js';
-
-function makeGraph(planeId = 'p1') {
-  const plane = new Plane(planeId, 0, `${planeId}階`, 1, 1);
-  return new PlanGraph(plane);
-}
+import { makePlanGraph as makeGraph } from '../graphTestFixtures.js';
 
 // openings/openingPlanSymbol.js swingLeafPrimitives の角度式をそのまま複製し、開いた状態(dir)の
 // perp成分符号を返す。

@@ -4,19 +4,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ByteBuffer } from 'flatbuffers';
 import {
-  Plane, PlanGraph, CenterLineType, Discipline, RoofSpec, RoofZone, ROOF_ZONE_KEYS, ROOF_SPEC_KEYS,
+  CenterLineType, Discipline, RoofSpec, RoofZone, ROOF_ZONE_KEYS, ROOF_SPEC_KEYS,
 } from './core.js';
 import { NON_DEFAULT_ROOF_SPEC } from './finish/roofTestFixtures.js';
 import {
   serializeGraph, restoreGraph, decodeFloorSnapshot, encodeFloorSnapshot, serializeGraphWithFreshLineIds,
 } from './graphSnapshot.js';
 import { remapLineIdsInSnapshot } from './lineIdRemap.js';
+import { makePlanGraph as makeGraph } from './graphTestFixtures.js';
 
 const ARCH = { labeled: false, discipline: Discipline.ARCH };
-
-function makeGraph() {
-  return new PlanGraph(new Plane('p1', 0, 'p1階', 1, 1));
-}
 
 /** 実在の線を指すセルキーを2つ持つ階。 */
 function makeLayout() {
