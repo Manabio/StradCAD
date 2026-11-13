@@ -301,7 +301,7 @@ canvasのlineCapはbutt（未指定）のままにし、Konvaへ渡す直前のp
 - 姿図と記号丸は穴の幅・中心で描く（採番・建具表はWのまま）。立面は外壁の建具だけを拾い外付け引き戸は屋内壁だけなので対象外。限界・先送り（F2）：走る面から見た扉とレールの描き分け、断面（`openingSection.js`の引き戸はlegacy）。
 
 ### 姿図の配置（S10 P5。2026-11-05）
-- 衛生・家具・空調の姿図の配置（`PlacedFigure`）は`elevation/elevationPlacedFigures.js appendPlacedFigures`が`elevationFigure.js`の`appendOpenings`の直後・`appendCornerSections`の前に重ねる。対象＝配置点を含む部屋（`room.cells`）の帯の面のうち、図の s 範囲が面の [0, run] に掛かるもの（遠近・遮蔽なし）。`elevation/`は`detail/`を直接引かず`finish/placedFigure/placedFigureViews.js`経由（`importGraph.test.js`の不変条件 (4) に注記）。
+- 衛生・家具・空調・電気の姿図の配置（`PlacedFigure`）は`elevation/elevationPlacedFigures.js appendPlacedFigures`が`elevationFigure.js`の`appendOpenings`の直後・`appendCornerSections`の前に重ねる。対象＝配置点を含む部屋（`room.cells`）の帯の面のうち、図の s 範囲が面の [0, run] に掛かるもの（遠近・遮蔽なし）。`elevation/`は`detail/`を直接引かず`finish/placedFigure/placedFigureViews.js`経由（`importGraph.test.js`の不変条件 (4) に注記）。
 - 向き: 平面の姿図は正面を図の下（局所 +t）へ向けて描く＝正面の世界方向 f＝(−sinθ, cosθ)。見る向き d＝部屋側から壁へ（−`face.inward`）。f＝−d→正面図・f＝d→背面図・見る人が図の右手側（右手 ρ＝(−f_y, f_x)。y 下向き正で南向きの右手は西）→右側面図・左手→左側面図。鏡像は f を変えず LEFT↔RIGHT を入れ替え全 view で s 反転。
 - 置き方: x0＝`localXOf`(面, 走行方向の配置座標)（dirSign を含む。これ以外の反転はしない＝世界座標順が正準なのは建具だけ）・y0＝`floorDyAt`(x0)−zMm。線は建具の詳細図と同じ`detailStrokesToElevationPrimitives`（line／polyline だけ）。
 - 限界: 遮蔽なし・左右対称前提・部分指定の子の部屋のセルにある配置は親の帯に出ない・床の段差は原点 1 点・面ごとに fit をやり直す。屋外部屋の帯と立面（facade-model.md）には同じ配置が出うる（意図どおり）。

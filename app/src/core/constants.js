@@ -665,6 +665,7 @@ export const DetailSubject = Object.freeze({
   SANITARY:     'sanitary',
   FURNITURE:    'furniture',
   HVAC:         'hvac',
+  ELECTRICAL:   'electrical',
   WALL:         'wall',
   FLOOR:        'floor',
   CEILING:      'ceiling',
@@ -736,16 +737,16 @@ export const DetailPlacementView = Object.freeze({
   CEILING: 'ceiling',
 });
 /** 平面に配置できる姿図の主題（views を持てる平面の姿図の subject）。 */
-export const PLACED_FIGURE_SUBJECTS = Object.freeze([DetailSubject.SANITARY, DetailSubject.FURNITURE, DetailSubject.HVAC]);
-/** PLACED_FIGURE_SUBJECTS のうち、天井側（見上げ）にも現れる主題。 */
-export const CEILING_PLACED_FIGURE_SUBJECTS = Object.freeze([DetailSubject.HVAC]);
+export const PLACED_FIGURE_SUBJECTS = Object.freeze([DetailSubject.SANITARY, DetailSubject.FURNITURE, DetailSubject.HVAC, DetailSubject.ELECTRICAL]);
+/** PLACED_FIGURE_SUBJECTS のうち、天井側（見上げ）にも現れる主題（下から見える設備＝空調・電気）。 */
+export const CEILING_PLACED_FIGURE_SUBJECTS = Object.freeze([DetailSubject.HVAC, DetailSubject.ELECTRICAL]);
 /** 有効な (category, view, subject) の組合せ表。検証（detail/detailModel.js）と割当て先の絞り込みが引く。 */
 export const DETAIL_VIEW_COMBOS = Object.freeze([
   ...[DetailView.PLAN, DetailView.SECTION].flatMap(view =>
     [DetailSubject.JAMB, DetailSubject.HEAD, DetailSubject.SILL, DetailSubject.SASH_SECTION, DetailSubject.NAGESHI, DetailSubject.SHIKII]
       .map(subject => ({ category: DetailCategory.PAIRED, view, subject }))),
   ...[DetailView.ELEVATION, DetailView.PLAN].flatMap(view =>
-    [DetailSubject.OPENING, DetailSubject.SANITARY, DetailSubject.FURNITURE, DetailSubject.HVAC]
+    [DetailSubject.OPENING, DetailSubject.SANITARY, DetailSubject.FURNITURE, DetailSubject.HVAC, DetailSubject.ELECTRICAL]
       .map(subject => ({ category: DetailCategory.FIGURE, view, subject }))),
   { category: DetailCategory.JUNCTION, view: DetailView.SECTION, subject: DetailSubject.FLOOR_WALL },
   { category: DetailCategory.JUNCTION, view: DetailView.SECTION, subject: DetailSubject.WALL_CEILING },

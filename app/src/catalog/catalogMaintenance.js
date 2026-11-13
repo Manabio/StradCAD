@@ -211,7 +211,7 @@ export function formatDetailViewLabel(value) {
   return typeof value === 'string' && Object.hasOwn(DETAIL_VIEW_LABELS, value) ? DETAIL_VIEW_LABELS[value] : formatReadonlyValue(value);
 }
 
-/** 部分詳細図の主題（subject・17種）の表示名。全 DetailSubject 値を持つことをテストで固定する。 */
+/** 部分詳細図の主題（subject）の表示名。全 DetailSubject 値を持つことをテストで固定する。 */
 export const DETAIL_SUBJECT_LABELS = Object.freeze({
   [DetailSubject.JAMB]:         '方立（縦枠）',
   [DetailSubject.HEAD]:         '上枠',
@@ -223,6 +223,7 @@ export const DETAIL_SUBJECT_LABELS = Object.freeze({
   [DetailSubject.SANITARY]:     '衛生器具',
   [DetailSubject.FURNITURE]:    '家具',
   [DetailSubject.HVAC]:         '空調機器',
+  [DetailSubject.ELECTRICAL]:   '電気設備',
   [DetailSubject.WALL]:         '壁',
   [DetailSubject.FLOOR]:        '床',
   [DetailSubject.CEILING]:      '天井',

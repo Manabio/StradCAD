@@ -275,6 +275,15 @@ test('comboOptions: category で view を、(category, view) で subject を絞�
   assert.deepEqual(comboOptions(DetailCategory.JUNCTION, DetailView.PLAN).subjects, []);
 });
 
+test('comboOptions: 姿図の主題の選択肢に電気設備が表示名つきで出る（平面・立面とも）。断面の姿図には出ない', () => {
+  for (const view of [DetailView.PLAN, DetailView.ELEVATION]) {
+    const s = comboOptions(DetailCategory.FIGURE, view).subjects;
+    assert.deepEqual(s.find(o => o.value === DetailSubject.ELECTRICAL), { value: 'electrical', label: '電気設備' });
+  }
+  assert.equal(comboOptions(DetailCategory.FIGURE, DetailView.SECTION).subjects.some(o => o.value === DetailSubject.ELECTRICAL), false);
+  assert.equal(formatDetailSubjectLabel(DetailSubject.ELECTRICAL), '電気設備');
+});
+
 test('comboOptions: 分類の選択肢に FITTING（建具一式）を出す（平面・断面のどちらの絞り込みでも）', () => {
   for (const view of [DetailView.PLAN, DetailView.SECTION]) {
     const values = comboOptions(DetailCategory.PAIRED, view).categories.map(c => c.value);
@@ -453,10 +462,10 @@ test('libraryRows: 呼称順で分類のラベルを持つ', () => {
   ]);
 });
 
-test('ラベル表: 全 enum 値を持つ（subject 17・role 16・mode 4・param 4・材の項目 3・kind 2・axis 2・方向）', () => {
+test('ラベル表: 全 enum 値を持つ（subject 18・role 16・mode 4・param 4・材の項目 3・kind 2・axis 2・方向）', () => {
   const keysOf = o => Object.keys(o).sort();
   assert.deepEqual(keysOf(DETAIL_SUBJECT_LABELS), Object.values(DetailSubject).sort());
-  assert.equal(Object.keys(DETAIL_SUBJECT_LABELS).length, 17);
+  assert.equal(Object.keys(DETAIL_SUBJECT_LABELS).length, 18);
   assert.deepEqual(keysOf(DETAIL_ROLE_LABELS), Object.values(DetailDatumRole).sort());
   assert.equal(Object.keys(DETAIL_ROLE_LABELS).length, 16);
   assert.deepEqual(keysOf(DETAIL_MODE_LABELS), Object.values(DetailLenMode).sort());
@@ -682,6 +691,7 @@ const VIEW_CATALOG = [
   mkFig('f_plan', DetailCategory.FIGURE, DetailView.PLAN, DetailSubject.SANITARY, '便器 平面'),
   mkFig('f_ceil', DetailCategory.FIGURE, DetailView.PLAN, DetailSubject.SANITARY, '便器 見上げ'),
   mkFig('f_hvac_ceil', DetailCategory.FIGURE, DetailView.PLAN, DetailSubject.HVAC, '空調 見上げ'),
+  mkFig('f_elec_ceil', DetailCategory.FIGURE, DetailView.PLAN, DetailSubject.ELECTRICAL, '電気 見上げ'),
 ];
 
 test('DETAIL_PLACEMENT_VIEW_LABELS: DetailPlacementView の全 5 値を網羅し、承認済みの文言になる', () => {
@@ -702,6 +712,11 @@ test('placementViewOptions: 先頭は「なし」。view ごとに置ける図�
   assert.deepEqual(placementViewOptions(f, VIEW_CATALOG, DetailPlacementView.CEILING), [{ value: '', label: 'なし' }]);
   const hvac = setClassification(f, 'subject', DetailSubject.HVAC);
   assert.deepEqual(placementViewOptions(hvac, VIEW_CATALOG, DetailPlacementView.CEILING).map(o => o.value), ['', 'f_hvac_ceil']);
+  // 電気の配置図には電気の見上げ図だけ（空調・衛生の図は返さない）。衛生の図には電気の図を返さない
+  const elec = setClassification(f, 'subject', DetailSubject.ELECTRICAL);
+  assert.deepEqual(placementViewOptions(elec, VIEW_CATALOG, DetailPlacementView.CEILING).map(o => o.value), ['', 'f_elec_ceil']);
+  assert.equal(placementViewOptions(f, VIEW_CATALOG, DetailPlacementView.CEILING).some(o => o.value === 'f_elec_ceil'), false);
+  assert.equal(placementViewOptions(hvac, VIEW_CATALOG, DetailPlacementView.CEILING).some(o => o.value === 'f_elec_ceil'), false);
   // 自分自身は除く
   const self = { ...f, key: 'f_front' };
   assert.deepEqual(placementViewOptions(self, VIEW_CATALOG, DetailPlacementView.FRONT).map(o => o.value), ['', 'f_front2']);

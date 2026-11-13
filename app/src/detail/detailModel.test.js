@@ -7,7 +7,7 @@ import {
   DetailSlot, FittingPartRole, FITTING_PART_TARGETS, FITTING_PART_KEY_SEPARATOR,
 } from '../core/constants.js';
 import {
-  validateDetailFigure, normalizeDetailFigure, isSupportedDetailFigure, moveParts, DetailValidationError as E,
+  validateDetailFigure, normalizeDetailFigure, isSupportedDetailFigure, moveParts, canHaveDetailViews, DetailValidationError as E,
   parseFittingPartKey, fittingPartFigure,
 } from './detailModel.js';
 import detailBuiltinFigures from './detailBuiltins.js';
@@ -245,9 +245,9 @@ test('列挙: DETAIL_SLOT_TARGETS の全エントリが DETAIL_VIEW_COMBOS に�
   assert.equal(Object.keys(DETAIL_SLOT_TARGETS).length, 15); // jamb/head/sill/sashSection/nageshi/shikii + figure（S6b）+ figureBack（T2）+ floorWall/wallCeiling（S8a）+ kneeTop/dropBottom（S8b-1）+ floorStep（S8b-3）+ ceilingStep（S8b-4a）+ fitting（C1）
 });
 
-test('列挙: DETAIL_VIEW_COMBOS は 28 組・重複なし・全要素が既知の語彙', () => {
-  assert.equal(DETAIL_VIEW_COMBOS.length, 28);
-  assert.equal(new Set(DETAIL_VIEW_COMBOS.map(c => `${c.category}/${c.view}/${c.subject}`)).size, 28);
+test('列挙: DETAIL_VIEW_COMBOS は 30 組・重複なし・全要素が既知の語彙', () => {
+  assert.equal(DETAIL_VIEW_COMBOS.length, 30);
+  assert.equal(new Set(DETAIL_VIEW_COMBOS.map(c => `${c.category}/${c.view}/${c.subject}`)).size, 30);
   for (const c of DETAIL_VIEW_COMBOS) {
     assert.ok(Object.values(DetailCategory).includes(c.category) && Object.values(DetailView).includes(c.view) && Object.values(DetailSubject).includes(c.subject));
   }
@@ -257,15 +257,27 @@ test('列挙: DETAIL_VIEW_COMBOS は 28 組・重複なし・全要素が既知�
 });
 
 test('列挙: 件数と既定の線の太さ', () => {
-  assert.equal(Object.keys(DetailSubject).length, 17);
+  assert.equal(Object.keys(DetailSubject).length, 18);
   assert.equal(Object.keys(DetailDatumRole).length, 16);
   assert.ok(Object.hasOwn(LINE_WEIGHT_MM, DETAIL_DEFAULT_WEIGHT_ROLE));
   assert.equal(Object.keys(DetailLenMode).length, 4);
   assert.deepEqual(Object.values(DetailPlacementView), ['front', 'back', 'left', 'right', 'ceiling']);
-  assert.deepEqual([...PLACED_FIGURE_SUBJECTS], [DetailSubject.SANITARY, DetailSubject.FURNITURE, DetailSubject.HVAC]);
-  assert.deepEqual([...CEILING_PLACED_FIGURE_SUBJECTS], [DetailSubject.HVAC]);
+  assert.deepEqual([...PLACED_FIGURE_SUBJECTS], [DetailSubject.SANITARY, DetailSubject.FURNITURE, DetailSubject.HVAC, DetailSubject.ELECTRICAL]);
+  assert.deepEqual([...CEILING_PLACED_FIGURE_SUBJECTS], [DetailSubject.HVAC, DetailSubject.ELECTRICAL]);
   for (const s of PLACED_FIGURE_SUBJECTS) {
     assert.ok(DETAIL_VIEW_COMBOS.some(c => c.category === DetailCategory.FIGURE && c.view === DetailView.PLAN && c.subject === s), `平面の姿図の組合せ表に ${s} が無い`);
+  }
+});
+
+test('電気設備（electrical）: 平面の配置図・立面の姿図は有効で、平面の配置図は views を持てる。空調を持たない組（断面系）では BAD_COMBO（失敗系）', () => {
+  const plan = { category: DetailCategory.FIGURE, view: DetailView.PLAN, subject: DetailSubject.ELECTRICAL };
+  assert.equal(canHaveDetailViews(plan), true);
+  assert.equal(canHaveDetailViews({ ...plan, view: DetailView.ELEVATION }), false);
+  const base = figureOf([strokeOf('a', [move(PenDir.RIGHT, fixedLen(20)), move(PenDir.DOWN, fixedLen(30))])], { key: 'df-el' });
+  assert.deepEqual(validateDetailFigure({ ...base, ...plan, views: { ceiling: 'df-ec' } }), { ok: true, errors: [] });
+  assert.deepEqual(validateDetailFigure({ ...base, ...plan, view: DetailView.ELEVATION }), { ok: true, errors: [] });
+  for (const bad of [{ category: DetailCategory.PAIRED, view: DetailView.PLAN }, { category: DetailCategory.PART, view: DetailView.SECTION }, { category: DetailCategory.FIGURE, view: DetailView.SECTION }]) {
+    assertHasCode({ ...base, ...bad, subject: DetailSubject.ELECTRICAL }, E.BAD_COMBO);
   }
 });
 
@@ -282,7 +294,7 @@ test('views: 5 キー全部・一部・空 {} は有効。views 無しも従来�
   assert.deepEqual(validateDetailFigure(placedFigure({ views: { front: 'df-f' } })), { ok: true, errors: [] });
   const all = { front: 'df-f', back: 'df-b', left: 'df-l', right: 'df-r', ceiling: 'df-c' };
   assert.deepEqual(validateDetailFigure(placedFigure({ views: all })), { ok: true, errors: [] });
-  for (const subject of [DetailSubject.FURNITURE, DetailSubject.HVAC]) {
+  for (const subject of [DetailSubject.FURNITURE, DetailSubject.HVAC, DetailSubject.ELECTRICAL]) {
     assert.equal(validateDetailFigure(placedFigure({ subject, views: all })).ok, true);
   }
 });
@@ -333,7 +345,7 @@ test('product: 4 項目全部・一部は有効（前後に空白があっても
   assert.deepEqual(validateDetailFigure(placedFigure({ product: { name: ' 洋風便器 ' } })), { ok: true, errors: [] });
   const all = { name: '洋風便器', maker: 'メーカーA', modelNumber: 'AB-123', colorName: 'ホワイト' };
   assert.deepEqual(validateDetailFigure(placedFigure({ product: all })), { ok: true, errors: [] });
-  for (const subject of [DetailSubject.FURNITURE, DetailSubject.HVAC]) {
+  for (const subject of [DetailSubject.FURNITURE, DetailSubject.HVAC, DetailSubject.ELECTRICAL]) {
     assert.equal(validateDetailFigure(placedFigure({ subject, product: all })).ok, true);
   }
 });

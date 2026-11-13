@@ -72,6 +72,21 @@ test('views.ceiling: 空調の図の見上げ図が fit 不能なら 1 行（鍵
   assert.deepEqual(run([pf('p1', 'hv')], [main('cok'), square('cok', { subject: DetailSubject.HVAC })]), []);
 });
 
+test('views.ceiling: 電気の図にも検査が掛かる。見上げ図の参照切れ・分類違い・fit 不能は各 1 行、正常は行なし', () => {
+  const main = key => square('el', { subject: DetailSubject.ELECTRICAL, views: { [DetailPlacementView.CEILING]: key } });
+  const gone = run([pf('p1', 'el')], [main('cgone')]);
+  assert.equal(gone.length, 1);
+  assert.equal(gone[0].key, `placedFigure|${DetailPlacementView.CEILING}|cgone`);
+  assert.equal(gone[0].reason, ERR_DETAIL_FIGURE_NOT_FOUND(DETAIL_TARGET_PLACED_FIGURE, DetailSlot.FIGURE));
+  const bad = run([pf('p1', 'el')], [main('cbad'), square('cbad', { subject: DetailSubject.ELECTRICAL, datums: wallFaceDatums(), label: '電気見上げ不良' })]);
+  assert.equal(bad.length, 1);
+  assert.equal(bad[0].label, '電気見上げ不良');
+  const wrong = run([pf('p1', 'el')], [main('csan'), square('csan', { subject: DetailSubject.SANITARY })]);
+  assert.equal(wrong.length, 1);
+  assert.match(wrong[0].reason, /対象ではありません/);
+  assert.deepEqual(run([pf('p1', 'el')], [main('cok'), square('cok', { subject: DetailSubject.ELECTRICAL })]), []);
+});
+
 test('views.ceiling が不良でも、天伏に出ない主題（衛生器具）の図は行にしない', () => {
   const main = square('sa', { subject: DetailSubject.SANITARY, views: { [DetailPlacementView.CEILING]: 'cgone' } });
   assert.deepEqual(run([pf('p1', 'sa')], [main]), []);

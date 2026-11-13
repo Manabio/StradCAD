@@ -483,7 +483,7 @@ const DEFAULT_ROLE_BY_AXIS = Object.freeze({
  * t＝origin が SILL・end が HEAD（detailElevationTargets が供給できる組）。
  */
 export function defaultRoleFor(form, axis, kind) {
-  // 姿図の配置（平面・立面側の衛生器具／家具／空調の姿図）: s・t とも配置の原点（他の分類とは分類が重ならないので順序に依らない）
+  // 姿図の配置（平面・立面側の衛生器具／家具／空調／電気設備の姿図）: s・t とも配置の原点（他の分類とは分類が重ならないので順序に依らない）
   if (isPlacementFigure(form)) return DetailDatumRole.PLACEMENT_ORIGIN;
   if (isElevationFigureForm(form) && axis === DetailAxis.T) {
     return kind === DetailDatumKind.END ? DetailDatumRole.HEAD : DetailDatumRole.SILL;

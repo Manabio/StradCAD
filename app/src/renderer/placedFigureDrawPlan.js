@@ -3,7 +3,7 @@
 //   入力: graph.placedFigures（PlacedFigure の配列）・figureOf（詳細図キー→エントリ。無ければ null）・direction
 //   出力: lines（世界 mm の平坦な頂点列＋線の太さの役割＋破線か）・marks（解決できない配置点の×）・boxes（描けた配置の外接。選択強調用）
 // 回転 +90° は画面時計回り（y 下向き正）。鏡像は図の局所 s を反転してから回転する。
-// 見下げ: 平面の配置図（FIGURE・PLAN・衛生/家具/空調）をすべて描く。
+// 見下げ: 平面の配置図（FIGURE・PLAN・衛生/家具/空調/電気）をすべて描く。
 // 見上げ: CEILING_PLACED_FIGURE_SUBJECTS の図だけ。views.ceiling の図が解ければそれを優先し、無い・参照切れ・分類違い・fit 不能は平面図自身へ落ちる。
 // 解決できない配置（参照切れ・配置図でない分類・基準の供給失敗・fit 失敗）は配置点の印（marks）にする。矩形で代用しない。
 // 依存は constants・placedFigureTargets・roomDetailTargets（失敗の語彙 RoomDetailError だけ）・detailPlacement（store.js・snap.js・.jsx・react・konva を引かない）。

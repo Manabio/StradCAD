@@ -20,7 +20,7 @@ export { computeEnvelope, computeUnderside, EnvelopeWeight } from './detailEnvel
 // 本体標準の図（組込み層）。同期で組込みを要る読み出し口（openings/openingCatalog.js detailFigureCatalog）がここから引く。
 // catalogKinds.js の loadBuiltin は従来どおり detailBuiltins.js を動的 import する（catalog/ は静的に引かない）。
 export { default as detailBuiltinFigures } from './detailBuiltins.js';
-// 平面の配置図（姿図・平面・衛生/家具/空調）かの判定。renderer/ が detail/ から引く口はここだけ。
+// 平面の配置図（姿図・平面・衛生/家具/空調/電気）かの判定。renderer/ が detail/ から引く口はここだけ。
 export { canHaveDetailViews, parseFittingPartKey, fittingPartFigure } from './detailModel.js';
 
 /**

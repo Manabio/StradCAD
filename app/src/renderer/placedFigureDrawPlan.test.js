@@ -134,6 +134,50 @@ test('(c) 【失敗系】views.ceiling が無い・参照切れ・分類違い�
   }
 });
 
+test('(b) 電気: 見下げ・見上げとも描く。見上げでも衛生・家具は描かず、電気だけ残る（lines・marks・boxes）', () => {
+  const list = [
+    lShape({ key: 'k-e', subject: DetailSubject.ELECTRICAL }),
+    lShape({ key: 'k-s', subject: DetailSubject.SANITARY }),
+    lShape({ key: 'k-f', subject: DetailSubject.FURNITURE }),
+  ];
+  const placed = [
+    new PlacedFigure({ id: 'e', figureKey: 'k-e', x: 410, y: 130 }),
+    new PlacedFigure({ id: 's', figureKey: 'k-s', x: 710, y: 130 }),
+    new PlacedFigure({ id: 'f', figureKey: 'k-f', x: 1010, y: 130 }),
+  ];
+  assert.deepEqual(placedFigureDrawPlan(placed, figs(...list), { direction: 'down' }).lines.map(l => l.figureId), ['e', 's', 'f']);
+  const up = placedFigureDrawPlan(placed, figs(...list), { direction: 'up' });
+  assert.deepEqual(up.lines.map(l => l.figureId), ['e']);
+  assert.deepEqual(up.boxes.map(b => b.figureId), ['e']);
+  assert.deepEqual(up.marks, []);
+  assert.deepEqual(placedFigureDrawPlan(placed.slice(1), figs(...list), { direction: 'up' }), { lines: [], marks: [], boxes: [] });
+});
+
+test('(c) 電気: 見上げは views.ceiling の電気の図（線数 2）を優先・見下げは平面図自身（線数 1）', () => {
+  const main = lShape({ key: 'k-e', subject: DetailSubject.ELECTRICAL, extra: { [DETAIL_VIEWS_FIELD]: { [DetailPlacementView.CEILING]: 'k-ec' } } });
+  const ceil = lWithSecondStroke('k-ec', DetailSubject.ELECTRICAL);
+  const p = [new PlacedFigure({ id: 'e', figureKey: 'k-e', x: 410, y: 130 })];
+  assert.equal(placedFigureDrawPlan(p, figs(main, ceil), { direction: 'up' }).lines.length, 2);
+  assert.equal(placedFigureDrawPlan(p, figs(main, ceil), { direction: 'down' }).lines.length, 1);
+});
+
+test('(c) 【失敗系】電気: views.ceiling が無い・参照切れ・分類違い（衛生の平面図）・fit 不能は平面図自身へ落ちる', () => {
+  const p = [new PlacedFigure({ id: 'e', figureKey: 'k-e', x: 410, y: 130 })];
+  const withCeiling = key => lShape({ key: 'k-e', subject: DetailSubject.ELECTRICAL, extra: key === undefined ? {} : { [DETAIL_VIEWS_FIELD]: { [DetailPlacementView.CEILING]: key } } });
+  const unfittable = { ...lWithSecondStroke('k-bad', DetailSubject.ELECTRICAL), datums: [...lShape().datums, { id: 'dx', role: DetailDatumRole.WALL_FINISH_FACE, axis: DetailAxis.S, kind: DetailDatumKind.ORIGIN, offsetMm: 0 }] };
+  const cases = [
+    ['views 無し', withCeiling(undefined), []],
+    ['参照切れ', withCeiling('k-none'), []],
+    ['分類違い（衛生の平面図）', withCeiling('k-sc'), [lWithSecondStroke('k-sc', DetailSubject.SANITARY)]],
+    ['fit 不能', withCeiling('k-bad'), [unfittable]],
+  ];
+  for (const [name, main, others] of cases) {
+    const plan = placedFigureDrawPlan(p, figs(main, ...others), { direction: 'up' });
+    assert.equal(plan.lines.length, 1, name);
+    assert.deepEqual(plan.marks, [], name);
+  }
+});
+
 test('(d) 【失敗系】解決できない配置は配置点の印 1 つ（lines・boxes 0）: 参照切れ・分類違い・基準の供給失敗・fit 失敗', () => {
   const datum = d => lShape({ datums: [...lShape().datums, { id: 'dx', offsetMm: 0, ...d }], key: 'df-x' });
   const cases = [

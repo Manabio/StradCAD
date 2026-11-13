@@ -50,6 +50,19 @@ test('立面側の姿図（FIGURE/ELEVATION/家具）・見上げの姿図（FIG
   }
 });
 
+test('電気の配置図（平面・立面側）にも基準を供給し、fitLocal が解く。見上げの置き先にもなり、衛生は置けない', () => {
+  for (const view of [DetailView.PLAN, DetailView.ELEVATION]) {
+    const fig = lShape({ view, subject: DetailSubject.ELECTRICAL });
+    const t = placedFigureTargets(fig);
+    assert.equal(t.error, undefined);
+    assert.deepEqual(t.targets.datums, { ds0: 0, dt0: 0 });
+    assert.equal(fitLocal(fig, t.targets).error, undefined);
+  }
+  assert.equal(isPlaceableViewFigure(lShape({ subject: DetailSubject.ELECTRICAL }), DetailPlacementView.CEILING), true);
+  assert.equal(isPlaceableViewFigure(lShape({ subject: DetailSubject.ELECTRICAL, view: DetailView.ELEVATION }), DetailPlacementView.CEILING), false);
+  assert.equal(isPlaceableViewFigure(lShape({ subject: DetailSubject.SANITARY }), DetailPlacementView.CEILING), false);
+});
+
 test('【失敗系】PLACEMENT_ORIGIN 以外の role・end は UNSUPPORTED_DATUM（文言の主語は「姿図の配置」）', () => {
   const unsupported = [
     { role: DetailDatumRole.WALL_FINISH_FACE, axis: DetailAxis.S, kind: DetailDatumKind.ORIGIN },
@@ -88,8 +101,8 @@ test('【失敗系】配置図でない分類（建具の姿図・paired・part�
   assert.doesNotThrow(() => placedFigureTargets({ ...lShape(), datums: [null, ...lShape().datums] }));
 });
 
-test('isPlacementFigure: 平面・立面側の衛生/家具/空調の姿図だけ true', () => {
-  for (const subject of [DetailSubject.SANITARY, DetailSubject.FURNITURE, DetailSubject.HVAC]) {
+test('isPlacementFigure: 平面・立面側の衛生/家具/空調/電気の姿図だけ true', () => {
+  for (const subject of [DetailSubject.SANITARY, DetailSubject.FURNITURE, DetailSubject.HVAC, DetailSubject.ELECTRICAL]) {
     assert.equal(isPlacementFigure(lShape({ subject })), true);
     assert.equal(isPlacementFigure(lShape({ subject, view: DetailView.ELEVATION })), true);
   }
@@ -98,7 +111,7 @@ test('isPlacementFigure: 平面・立面側の衛生/家具/空調の姿図だ�
   assert.equal(isPlacementFigure(null), false);
 });
 
-test('isPlaceableViewFigure: front〜right は FIGURE/ELEVATION/配置 subject・ceiling は FIGURE/PLAN/空調だけ', () => {
+test('isPlaceableViewFigure: front〜right は FIGURE/ELEVATION/配置 subject・ceiling は FIGURE/PLAN/空調・電気だけ', () => {
   const elev = lShape({ view: DetailView.ELEVATION, subject: DetailSubject.SANITARY });
   const ceil = lShape({ subject: DetailSubject.HVAC });
   for (const v of [DetailPlacementView.FRONT, DetailPlacementView.BACK, DetailPlacementView.LEFT, DetailPlacementView.RIGHT]) {
@@ -109,6 +122,8 @@ test('isPlaceableViewFigure: front〜right は FIGURE/ELEVATION/配置 subject�
   assert.equal(isPlaceableViewFigure(ceil, DetailPlacementView.CEILING), true);
   // subject 違い・分類違い・未知の view・null
   assert.equal(isPlaceableViewFigure(lShape({ subject: DetailSubject.SANITARY }), DetailPlacementView.CEILING), false, '衛生器具は見上げに出ない');
+  assert.equal(isPlaceableViewFigure(lShape({ subject: DetailSubject.FURNITURE }), DetailPlacementView.CEILING), false, '家具は見上げに出ない');
+  assert.equal(isPlaceableViewFigure(lShape({ subject: DetailSubject.ELECTRICAL }), DetailPlacementView.CEILING), true, '電気設備は見上げに出る');
   assert.equal(isPlaceableViewFigure(lShape({ view: DetailView.ELEVATION, subject: DetailSubject.OPENING }), DetailPlacementView.FRONT), false);
   assert.equal(isPlaceableViewFigure(elev, 'top'), false);
   assert.equal(isPlaceableViewFigure(null, DetailPlacementView.FRONT), false);

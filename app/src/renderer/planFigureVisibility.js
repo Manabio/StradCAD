@@ -17,7 +17,7 @@ export function shouldShowPlanFigure(appMode) {
 }
 
 // 姿図の配置（renderer/PlacedFiguresLayer.jsx）を描くモードか。平面図一式と同じ述語。天伏も通す
-// ——見上げは空調（hvac）だけという絞りは placedFigureDrawPlan 側で行う。
+// ——見上げは空調・電気だけという絞りは placedFigureDrawPlan 側で行う。
 export function shouldShowPlacedFigures(appMode) {
   return shouldShowPlanFigure(appMode);
 }
