@@ -389,8 +389,10 @@ export const PLACED_FIGURE_TAB_TEXT = Object.freeze({
 export const PLACED_FIGURE_MODE_PANEL_TEXT = Object.freeze({
   room: '部屋', noRoom: '（部屋なし）', direction: '向き', move: '移動', tapMoveTarget: '移動先をタップ',
 });
+// 表示名は製図の呼び方: 正面図に向かって左から見た図が「左側面図」。キーは器具自身の左右＝見る人が立つ側（right＝器具の右手側から見た図）。
+// 正面を向いた器具の右手側は正面図に向かって左なので、キー right の表示名が「左側面図」になる（食い違いは意図どおり）。キー・保存データは変えない。
 export const DETAIL_PLACEMENT_VIEW_LABEL_TEXT = Object.freeze({
-  front: '正面図', back: '背面図', left: '左側面図', right: '右側面図', ceiling: '見上げ図',
+  front: '正面図', back: '背面図', left: '右側面図', right: '左側面図', ceiling: '見上げ図',
 });
 export const detailSlotLabel = (slot) => (Object.hasOwn(DETAIL_SLOT_LABELS, slot) ? DETAIL_SLOT_LABELS[slot] : slot);
 export const ERR_DETAIL_FIT_FAILED = (label, symbolKey, reason, slot) =>

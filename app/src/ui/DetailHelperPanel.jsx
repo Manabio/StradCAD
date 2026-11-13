@@ -20,7 +20,7 @@ import {
   DETAIL_HELPER_TEXT, DETAIL_HELPER_MESSAGES, DETAIL_NUMPAD_LABELS, PEN_BUTTONS, PREVIEW_FRAME_PX,
   DETAIL_ROLE_LABELS, DETAIL_MODE_LABELS, DETAIL_PARAM_LABELS, DETAIL_MATERIAL_FIELD_LABELS, DETAIL_DATUM_KIND_LABELS, DETAIL_AXIS_LABELS,
   newDraft, entryFromForm, freshDocOf, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, undoDraft, penStep, penUp, setClosed, setDashRole, DETAIL_DASH_LABELS,
-  setMoveLen, setMoveMode, setMoveEdge, rebaseOrigin, rebaseDelta, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
+  setMoveLen, setMoveMode, setMoveEdge, rebaseOrigin, rebaseDelta, canRotateDraft, rotateDraft90, rotateDraftView90, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, saveDecision, planSave, afterSaveDoc,
   deleteConfirmMessage, defaultFitDimsFor, fitDimFieldsFor, tryFit, previewPrimitivesOf, labelOptions, pushHistory,
   displayLen, strokeLabel, strokeTitle, moveSpanLabel, distanceButtonLabel, offsetButtonLabel, fitDimButtonLabel,
@@ -51,7 +51,7 @@ import {
 } from '../structural/sectionFigure/figureView.js';
 import { useLongPress } from '../interaction/useLongPress.js';
 import { DXF_PROVENANCE_FIELDS, PdfReject, PDF_MAX_BYTES, PDF_SIGNATURE_SCAN_BYTES, PDF_PREVIEW_SCALE } from '../core/constants.js';
-import { ERR_DXF_FILE_READ_FAILED, ERR_PDF_PAGE_FAILED, DETAIL_PRODUCT_TEXT } from '../error.js';
+import { ERR_DXF_FILE_READ_FAILED, ERR_PDF_PAGE_FAILED, DETAIL_PRODUCT_TEXT, PLACED_FIGURE_TAB_TEXT } from '../error.js';
 
 /**
  * 部分詳細図ヘルパー（全画面パネル）。ペン入力で一筆書きの図を描き、基準・寸法を指定して
@@ -558,6 +558,8 @@ export function DetailHelperPanel({ onClose }) {
   const figureSvgRef = useRef(null);
   // 基準点を指す（ペン入力タブだけ。試し込み中・読み取り専用・忙しいときは使えない＝モードも解く）
   const canBasePoint = !showDxf && !wholeOn && !fitOn && !doc.readOnly && !busy && shownPrims.length > 0;
+  // 基準点まわりに 90° 回す（基準点を指せる状態で、図が回せる形のとき。回せないときは無効にするだけ）
+  const canRotate = canBasePoint && canRotateDraft(form);
   // モードは下書きの key に結び付く（別の下書きへ移ると解ける）。使えない状態の間は off として扱う。
   const basePointMode = basePointFor === form.key && canBasePoint;
   const setBasePointMode = on => setBasePointFor(on ? form.key : null);
@@ -572,6 +574,13 @@ export function DetailHelperPanel({ onClose }) {
       const delta = rebaseDelta(form, point);
       setShownView({ ...shownView, cx: shownView.cx + (delta.s ?? 0), cy: shownView.cy + (delta.t ?? 0) });
     }
+    setBasePointMode(false);
+    setBasePointMiss(false);
+  }
+  function handleRotate() {
+    edit(f => rotateDraft90(f));
+    // 画面の中心に映る図の点が回った先へ view の中心も動かす（回す前の form で計算する。view は undo の外。受容）
+    if (shownView) setShownView(rotateDraftView90(form, shownView));
     setBasePointMode(false);
     setBasePointMiss(false);
   }
@@ -1105,6 +1114,9 @@ export function DetailHelperPanel({ onClose }) {
                 onClick={() => { setBasePointMode(!basePointMode); setBasePointMiss(false); }}>
                 {DETAIL_HELPER_TEXT.basePoint}
               </button>
+            )}
+            {!showDxf && (
+              <button className="dthlp-btn" disabled={!canRotate} onClick={handleRotate}>{PLACED_FIGURE_TAB_TEXT.rotate}</button>
             )}
             <span className="dthlp-hint">{showDxf ? DETAIL_HELPER_TEXT.gestureHint : DETAIL_HELPER_TEXT.gestureHintPen}</span>
             {basePointMode && <span className="dthlp-hint">{basePointMiss ? DETAIL_HELPER_TEXT.basePointMiss : DETAIL_HELPER_TEXT.basePointHint}</span>}

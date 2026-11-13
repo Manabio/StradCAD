@@ -1006,7 +1006,7 @@ test('formatDetailViewLabel: plan→平面・section→断面・elevation→立�
 });
 
 test('formatDetailViews（P2-3）: DetailPlacementView の順に「ラベル: 図キー」。未知キーは後ろに生で・views 無し／空はフォールバック', () => {
-  assert.equal(formatDetailViews({ ceiling: 'c', front: 'a', left: 'l' }), '正面図: a・左側面図: l・見上げ図: c');
+  assert.equal(formatDetailViews({ ceiling: 'c', front: 'a', left: 'l' }), '正面図: a・右側面図: l・見上げ図: c'); // キー left の表示名は「右側面図」（製図の呼び方）
   assert.equal(formatDetailViews({ front: 'a', oblique: 'x' }), '正面図: a・oblique: x');
   assert.equal(formatDetailViews(undefined), '（未設定）');
   assert.equal(formatDetailViews({}), '（なし）');

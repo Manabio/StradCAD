@@ -2,11 +2,15 @@
 // 全頂点が回転式 s' = a − (t − b)・t' = b + (s − a)（(a, b)＝基準点）で動くことを、プレビューと fit（fitLocal＋placedFigureTargets）の両方で突き合わせる。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   toggleDxfComponent, draftFromDxf, previewPrimitivesOf, newDraft, applyPen, penUp, setClosed, setAnchor, setDatumField,
   setClassification, addDatum, removeDatum, rebaseOrigin, entryFromForm, formFromEntry, validation, tryFit,
-  canRotateDraft, rotateDraft90, rotateDraftPoint90,
+  canRotateDraft, rotateDraft90, rotateDraftPoint90, rotateDraftView90,
 } from './detailHelperForm.js';
+import { stripCommentsKeepStrings as stripComments, extractBodyAfterParams } from '../uiBusySourceScan.js';
+import { PLACED_FIGURE_TAB_TEXT } from '../error.js';
 import { dxfPoly as poly, dxfRect as rect, fixedId as ids, loadDxfBody as loadBody } from './detailHelperDxfTestFixtures.js';
 import { fitLocal } from '../detail/detailPlacement.js';
 import { placedFigureTargets } from '../finish/placedFigure/placedFigureTargets.js';
@@ -429,4 +433,125 @@ test('【失敗系】rotateDraftPoint90: 有限でない点・点が無い・形
   const blank = setDatumField(f, datumOf(f, 's').id, 'offset', '');
   const q = rotateDraftPoint90(blank, { s: 5, t: 2 });
   assert.deepEqual([q.s, q.t], [-2, 5]);
+});
+
+// ---- 表示位置（拡大表示の中心）----
+test('rotateDraftView90: 拡大表示の中心に映っていた図の頂点は、回した後も中心に映る（縮尺は不変・基準点 B≠0）', () => {
+  const f = classify(withOffsets(handAnchored(), 10, -5));
+  const rot = rotateDraft90(f);
+  const before = previewPts(f);
+  const after = previewPts(rot);
+  let checked = 0;
+  for (const [si, st] of before.entries()) {
+    for (const vi of [0, 2, st.length - 1]) {
+      const [s, t] = st[vi];
+      const view = rotateDraftView90(f, { scale: 3, cx: s, cy: t });
+      assert.equal(view.scale, 3);
+      assert.ok(Math.abs(view.cx - after[si][vi][0]) < 1e-9 && Math.abs(view.cy - after[si][vi][1]) < 1e-9, `stroke${si} P${vi}`);
+      checked++;
+    }
+  }
+  assert.ok(checked >= 6);
+  // 回す前の中心と別の位置へ動く（検出力: 基準点から離れた点）
+  const moved = rotateDraftView90(f, { scale: 2, cx: 40, cy: 30 });
+  assert.notDeepEqual([moved.cx, moved.cy], [40, 30]);
+});
+
+test('【失敗系】rotateDraftView90: 全体表示（null）は null・回せない図は中心を変えない・入力の view を書き換えない', () => {
+  const f = classify(handAnchored());
+  assert.equal(rotateDraftView90(f, null), null);
+  assert.equal(rotateDraftView90(f, undefined), undefined);
+  const view = { scale: 2, cx: 40, cy: 30 };
+  const unrotatable = newDraft({ idFactory: ids });
+  assert.equal(canRotateDraft(unrotatable), false);
+  const same = rotateDraftView90(unrotatable, view);
+  assert.deepEqual([same.scale, same.cx, same.cy], [2, 40, 30]);
+  rotateDraftView90(f, view);
+  assert.deepEqual([view.scale, view.cx, view.cy], [2, 40, 30]);
+});
+
+// ---- 配線（ソース走査。コメントは除くが文字列リテラルは残す）----
+const readSrc = rel => fs.readFileSync(path.join(import.meta.dirname, '..', rel), 'utf8');
+const panelSrc = () => stripComments(readSrc('ui/DetailHelperPanel.jsx')).replace(/\r\n/g, '\n');
+
+// ボタンは !showDxf（ペン入力タブ）の中・文言は文言表・無効条件は canRotate・押すと handleRotate
+const rotateButton = src => /\{!showDxf && \(\s*<button className="dthlp-btn" disabled=\{!canRotate\} onClick=\{handleRotate\}>\{PLACED_FIGURE_TAB_TEXT\.rotate\}<\/button>\s*\)\}/.test(src);
+// 宣言の 1 行まるごと（コメント・文字列に残した呼び出しでは通らない）
+const canRotateDef = src => /^\s*const canRotate = canBasePoint && canRotateDraft\(form\);\s*$/m.test(src);
+// 本体は波括弧と次の 4 文ちょうど（順序も固定。前後・間に別の文を足すと偽＝先頭の return や 2 回目の呼び出しを見逃さない）
+const HANDLE_ROTATE_LINES = [
+  '{',
+  'edit(f => rotateDraft90(f));',
+  'if (shownView) setShownView(rotateDraftView90(form, shownView));',
+  'setBasePointMode(false);',
+  'setBasePointMiss(false);',
+  '}',
+];
+const handleRotateBodyOk = body => {
+  if (!body) return false;
+  const lines = body.split('\n').map(l => l.trim()).filter(l => l !== '');
+  return lines.length === HANDLE_ROTATE_LINES.length && lines.every((l, i) => l === HANDLE_ROTATE_LINES[i]);
+};
+// handleRotate の宣言は行頭で、直前の文が if／else／for／while の途中で終わっていない
+const handleRotateDeclared = src => {
+  const m = /^[ \t]*function handleRotate\(\) \{/m.exec(src);
+  if (!m) return false;
+  const lastLine = src.slice(0, m.index).trimEnd().split('\n').pop();
+  return !/^\s*(if|else|for|while)\b/.test(lastLine) && !/\belse$/.test(lastLine.trim());
+};
+const rotateWiringOk = src => rotateButton(src) && canRotateDef(src) && handleRotateDeclared(src)
+  && handleRotateBodyOk(extractBodyAfterParams(src, 'function handleRotate('));
+
+test('【配線】［90° 回転］: ペン入力タブだけ・文言は表・disabled は canRotate・canRotate は canBasePoint かつ回せる図・handleRotate は edit で回し view を直しモードを解く', () => {
+  const src = panelSrc();
+  assert.ok(rotateButton(src), 'ボタン');
+  assert.ok(canRotateDef(src), 'canRotate');
+  assert.ok(handleRotateDeclared(src), '宣言');
+  assert.ok(handleRotateBodyOk(extractBodyAfterParams(src, 'function handleRotate(')), '本体');
+  assert.equal(PLACED_FIGURE_TAB_TEXT.rotate, '90° 回転');
+  assert.equal(src.includes(PLACED_FIGURE_TAB_TEXT.rotate), false, '文言を直書きしない');
+  assert.equal((src.match(/function handleRotate\(/g) ?? []).length, 1);
+});
+
+test('【検出力】配線の判定は壊した文字列で偽になり、コメント・文字列リテラルへ退避した呼び出しには反応しない', () => {
+  const src = panelSrc();
+  assert.equal(rotateWiringOk(src), true);
+  const mutate = (from, to) => {
+    assert.equal(src.split(from).length - 1, 1, `置換対象がちょうど 1 か所: ${from}`);
+    return src.replace(from, to);
+  };
+  // canRotate
+  assert.equal(rotateWiringOk(mutate('canBasePoint && canRotateDraft(form);', 'canBasePoint;')), false);
+  assert.equal(rotateWiringOk(mutate('canBasePoint && canRotateDraft(form);', 'canRotateDraft(form);')), false);
+  assert.equal(rotateWiringOk(mutate('const canRotate = canBasePoint && canRotateDraft(form);', 'const canRotate = true;')), false);
+  // ボタン
+  assert.equal(rotateWiringOk(mutate('disabled={!canRotate} ', '')), false);
+  assert.equal(rotateWiringOk(mutate('onClick={handleRotate}', 'onClick={() => {}}')), false);
+  assert.equal(rotateWiringOk(mutate('{PLACED_FIGURE_TAB_TEXT.rotate}</button>', '90° 回転</button>')), false);
+  assert.equal(rotateWiringOk(mutate('{!showDxf && (\n              <button className="dthlp-btn" disabled={!canRotate}', '{(\n              <button className="dthlp-btn" disabled={!canRotate}')), false);
+  // 本体
+  const call = '    edit(f => rotateDraft90(f));';
+  assert.equal(rotateWiringOk(mutate(call, '    rotateDraft90(form);')), false); // edit を外して直接呼ぶ
+  assert.equal(rotateWiringOk(mutate(call, '')), false);
+  assert.equal(rotateWiringOk(mutate(call, '    if (false) edit(f => rotateDraft90(f));')), false);
+  assert.equal(rotateWiringOk(mutate(call, '    const unused = "edit(f => rotateDraft90(f));";')), false);
+  assert.equal(rotateWiringOk(stripComments(mutate(call, '    // edit(f => rotateDraft90(f));'))), false);
+  assert.equal(rotateWiringOk(stripComments(mutate(call, '    /* edit(f => rotateDraft90(f)); */'))), false);
+  assert.equal(rotateWiringOk(mutate('rotateDraftView90(form, shownView)', 'shownView')), false);
+  assert.equal(rotateWiringOk(mutate('    if (shownView) setShownView(rotateDraftView90(form, shownView));\n', '')), false);
+  assert.equal(rotateWiringOk(mutate('    setBasePointMode(false);\n    setBasePointMiss(false);\n  }\n  const pickRectNow', '    setBasePointMiss(false);\n  }\n  const pickRectNow')), false);
+  // 本体に別の文を足す（先頭で抜ける・拡大表示のときだけ抜ける・2 回まわす・表示位置を全体表示へ戻す・文の順を入れ替える）
+  assert.equal(rotateWiringOk(mutate(call, `    return;\n${call}`)), false);
+  assert.equal(rotateWiringOk(mutate(call, `    if (shownView) return;\n${call}`)), false);
+  assert.equal(rotateWiringOk(mutate(call, `${call}\n${call}`)), false);
+  assert.equal(rotateWiringOk(mutate('    setBasePointMiss(false);\n  }\n  const pickRectNow', '    setBasePointMiss(false);\n    setShownView(null);\n  }\n  const pickRectNow')), false);
+  assert.equal(rotateWiringOk(mutate(`${call}\n`, '').replace('    setBasePointMode(false);\n    setBasePointMiss(false);\n  }\n  const pickRectNow', `    setBasePointMode(false);\n    setBasePointMiss(false);\n${call}\n  }\n  const pickRectNow`)), false);
+  // handleRotate の前の行に if (false) を挟む
+  assert.equal(rotateWiringOk(mutate('  function handleRotate() {', '  if (false)\n  function handleRotate() {')), false);
+  // 呼び出しをコメント・文字列へ退避したボタン
+  const btn = '<button className="dthlp-btn" disabled={!canRotate} onClick={handleRotate}>{PLACED_FIGURE_TAB_TEXT.rotate}</button>';
+  assert.equal(rotateButton(`{!showDxf && (\n ${btn}\n )}`), true);
+  assert.equal(rotateButton(stripComments(`{!showDxf && (\n // ${btn}\n )}`)), false);
+  assert.equal(rotateButton(stripComments(`{!showDxf && (\n /* ${btn} */\n )}`)), false);
+  assert.equal(rotateButton(`{!showDxf && (\n "${btn}"\n )}`), false);
 });

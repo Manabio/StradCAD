@@ -8,9 +8,9 @@
 //   C 南壁 y=3300 水平 inward −1 dirSign −1 originWorld 4142.5 run 4085   d=(0,+1)
 //   D 西壁 x=0   垂直 inward +1 dirSign −1 originWorld 3242.5 run 3185   d=(−1,0)
 // 配置 (1300, 700)・回転 90（正面 f＝(−1,0) 西向き）・zMm 850:
-//   A: d=(0,−1)・右手 ρ＝(0,−1) で −d＝(0,1) は ρ でない→左側面・x0＝(1300−57.5)＝1242.5
+//   A: d=(0,−1)・右手 ρ＝(0,−1) で −d＝(0,1) は ρ でない→left の図・x0＝(1300−57.5)＝1242.5
 //   B: d=(1,0)＝−f→正面・x0＝(700−57.5)＝642.5
-//   C: d=(0,1)・−d＝(0,−1)＝ρ→右側面・x0＝(1300−4142.5)×(−1)＝2842.5
+//   C: d=(0,1)・−d＝(0,−1)＝ρ→right の図・x0＝(1300−4142.5)×(−1)＝2842.5
 //   D: d=(−1,0)＝f→背面・x0＝(700−3242.5)×(−1)＝2542.5
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,7 +21,7 @@ import {
 } from '../core/constants.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { fixedLen, move } from '../finish/roomDetailTestFixtures.js';
-import { square, wallFaceDatums } from '../finish/placedFigure/placedFigureTestFixtures.js';
+import { square, wallFaceDatums, bumpViewFigures, bumpEnds } from '../finish/placedFigure/placedFigureTestFixtures.js';
 import { buildRoomFaces } from './elevationFaces.js';
 import { ElevationDash, ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { appendPlacedFigures } from './elevationPlacedFigures.js';
@@ -98,14 +98,14 @@ test('前提: 部屋 A の 4 面の向き・dirSign・originWorld・run が上�
   assert.deepEqual(got, [[false, 1, 1, 57.5, 4085], [true, -1, 1, 57.5, 3185], [false, -1, -1, 4142.5, 4085], [true, 1, -1, 3242.5, 3185]]);
 });
 
-test('配置 (1300,700)・回転 90: 北＝左側面・東＝正面・南＝右側面・西＝背面。x0＝面ローカル x（dirSign 負の面を含む）・y0＝−zMm', () => {
+test('配置 (1300,700)・回転 90: 北＝left・東＝front・南＝right・西＝back の図。x0＝面ローカル x（dirSign 負の面を含む）・y0＝−zMm', () => {
   const { graph, a } = twoRooms();
   withPlaced(graph, {});
   // [面, 期待 x 範囲, 期待 y 範囲]
   const expected = [
-    ['A', [1242.5, 1342.5], [-850, -350]],   // 左側面 eL 100×500（s 0..100・t 0..500）
+    ['A', [1242.5, 1342.5], [-850, -350]],   // left の図 eL 100×500（s 0..100・t 0..500）
     ['B', [442.5, 792.5], [-950, -600]],     // 正面 eF（x0 642.5＋s −200..150・y0 −850＋t −100..250）
-    ['C', [2842.5, 3142.5], [-850, -800]],   // 右側面 eR 300×50
+    ['C', [2842.5, 3142.5], [-850, -800]],   // right の図 eR 300×50
     ['D', [2542.5, 2562.5], [-850, -830]],   // 背面 eB 20×20
   ];
   for (const [letter, x, y] of expected) {
@@ -117,19 +117,19 @@ test('配置 (1300,700)・回転 90: 北＝左側面・東＝正面・南＝右�
   }
 });
 
-test('鏡像: 左右が入れ替わり（北＝右側面 eR・南＝左側面 eL）、すべての図が s 反転（正面 eF は x0−150..x0+200）', () => {
+test('鏡像: left と right が入れ替わり（北＝right の図 eR・南＝left の図 eL）、すべての図が s 反転（正面 eF は x0−150..x0+200）', () => {
   const { graph, a } = twoRooms();
   withPlaced(graph, { mirror: true });
   const expected = [
-    ['A', [942.5, 1242.5], [-850, -800]],    // 右側面 eR を反転: x0 1242.5 − 300..0
+    ['A', [942.5, 1242.5], [-850, -800]],    // right の図 eR を反転: x0 1242.5 − 300..0
     ['B', [492.5, 842.5], [-950, -600]],     // 正面 eF を反転: x0 642.5 − 150..+200
-    ['C', [2742.5, 2842.5], [-850, -350]],   // 左側面 eL を反転: x0 2842.5 − 100..0
+    ['C', [2742.5, 2842.5], [-850, -350]],   // left の図 eL を反転: x0 2842.5 − 100..0
     ['D', [2522.5, 2542.5], [-850, -830]],   // 背面 eB を反転: x0 2542.5 − 20..0
   ];
   for (const [letter, x, y] of expected) assert.deepEqual(xyRange(run(graph, a, letter)), { x, y }, `面 ${letter}`);
 });
 
-test('左側面の図が無ければ右側面の鏡像で代用する（北面＝eR を反転）。右も無ければ北面は出ない', () => {
+test('left の図が無ければ right の図の鏡像で代用する（北面＝eR を反転）。right も無ければ北面は出ない', () => {
   const { graph, a } = twoRooms();
   withPlaced(graph, {});
   const noLeft = catalogOf(square('main', { views: { [FRONT]: 'eF', [RIGHT]: 'eR' } }), ...FIGS);
@@ -139,10 +139,56 @@ test('左側面の図が無ければ右側面の鏡像で代用する（北面�
   assert.equal(run(graph, a, 'B', { figureOf: noSide }).length, 1, '正面は出る');
 });
 
-// 鏡像＋左側面の代用（手計算）: mirror・回転 90・(1300,700)・views={front:eF, right:eR}
+// 左右の対応（世界座標で固定）: 回転 0（正面 f＝(0,1)＝世界の +y＝図の下）・(1300,700)。図の +s は世界の +x、正面側＝世界の +y が図の +t。
+// 非対称の図 eBump（s 0..300・t 0..150）は +s の端（s=300）だけが細い帯（t 0..50）。世界の along 座標＝originWorld＋x×dirSign。
+//   東壁 B（d=(1,0)・見る人は器具の右手＝西側で東を見る）: right の図・反転なし。x＝642.5＋s → 世界 y＝57.5＋x＝700＋s。帯の端（s=300）は世界 y=1000＝器具の正面側
+//   西壁 D（d=(−1,0)・東側で西を見る）: left が無く right の鏡像。x＝2542.5−s → 世界 y＝3242.5−x＝700＋s。帯の端は同じく世界 y=1000＝見る人の左
+//   北壁 A（d=(0,−1)＝−f・正面図を見る面）: front・反転なし。x＝1242.5＋s → 世界 x＝57.5＋x＝1300＋s。帯の端は世界 x=1600＝見る人の右
+// 全高の側の高さ（t の下端）は図ごとに変え、どの view の図が選ばれたかも見分ける（right 150・front 250・left 350）
+const alongOf = (face, x) => face.originWorld + x * face.dirSign;
+const endsOf = (prims, face) => bumpEnds(prims, x => alongOf(face, x));
+const bumpOf = (views) => catalogOf(square('main', { views }), ...bumpViewFigures());
+
+test('左右の対応: 東壁 B は right の図が反転なしで出て、+s の端（帯）は世界 +y（器具の正面側・見る人の右）に来る', () => {
+  const { graph, a } = twoRooms();
+  withPlaced(graph, { rotationDeg: 0 });
+  const prims = run(graph, a, 'B', { figureOf: bumpOf({ [FRONT]: 'eBumpF', [RIGHT]: 'eBumpR', [LEFT]: 'eBumpL' }) });
+  assert.equal(prims.length, 1);
+  assert.deepEqual(xyRange(prims).x, [642.5, 942.5], '反転なし: x＝642.5＋s');
+  const e = endsOf(prims, faceOf(a, graph, 'B'));
+  assert.deepEqual([e.wMin, e.wMax], [700, 1000], '世界 y＝700＋s（正面側 +y が図の右）');
+  assert.deepEqual(e.ysMax, [-850, -800], '世界 y=1000 の端は帯（t 0..50）');
+  assert.deepEqual(e.ysMin, [-850, -700], '世界 y=700 の端は全高');
+});
+
+test('左右の対応: 西壁 D は left が無ければ right の鏡像で、突起の側（帯）はやはり世界 +y（見る人の左）に来る', () => {
+  const { graph, a } = twoRooms();
+  withPlaced(graph, { rotationDeg: 0 });
+  const prims = run(graph, a, 'D', { figureOf: bumpOf({ [FRONT]: 'eBumpF', [RIGHT]: 'eBumpR' }) });
+  assert.equal(prims.length, 1);
+  assert.deepEqual(xyRange(prims).x, [2242.5, 2542.5], '鏡像: x＝2542.5−s');
+  const e = endsOf(prims, faceOf(a, graph, 'D'));
+  assert.deepEqual([e.wMin, e.wMax], [700, 1000]);
+  assert.deepEqual(e.ysMax, [-850, -800], '世界 y=1000 の端は帯');
+  assert.deepEqual(e.ysMin, [-850, -700]);
+});
+
+test('左右の対応: 北壁 A の front は反転なしで、+s の端（帯）は見る人の右＝世界 +x に来る（平面の配置図の +s と同じ側）', () => {
+  const { graph, a } = twoRooms();
+  withPlaced(graph, { rotationDeg: 0 });
+  const prims = run(graph, a, 'A', { figureOf: bumpOf({ [FRONT]: 'eBumpF', [RIGHT]: 'eBumpR' }) });
+  assert.equal(prims.length, 1);
+  assert.deepEqual(xyRange(prims).x, [1242.5, 1542.5], '反転なし: x＝1242.5＋s');
+  const e = endsOf(prims, faceOf(a, graph, 'A'));
+  assert.deepEqual([e.wMin, e.wMax], [1300, 1600], '世界 x＝1300＋s');
+  assert.deepEqual(e.ysMax, [-850, -800], '世界 x=1600 の端は帯');
+  assert.deepEqual(e.ysMin, [-850, -600], '世界 x=1300 の端は全高（front の図＝高さ 250）');
+});
+
+// 鏡像＋left の代用（手計算）: mirror・回転 90・(1300,700)・views={front:eF, right:eR}
 //   北 A: 左→鏡像で右。本体 eR（代用なし）→ flip＝true（鏡像のみ）→ s −300..0 → x 942.5..1242.5
 //   南 C: 右→鏡像で左。left 無し→eR で代用（代用の反転）→ 鏡像の反転と打ち消して flip＝false → s 0..300 → x 2842.5..3142.5
-test('鏡像＋左側面の代用: 北面は eR を反転、南面は代用の反転と鏡像の反転が打ち消して反転なし', () => {
+test('鏡像＋left の代用: 北面は eR を反転、南面は代用の反転と鏡像の反転が打ち消して反転なし', () => {
   const { graph, a } = twoRooms();
   withPlaced(graph, { mirror: true });
   const sub = catalogOf(square('main', { views: { [FRONT]: 'eF', [RIGHT]: 'eR' } }), ...FIGS);
@@ -150,7 +196,7 @@ test('鏡像＋左側面の代用: 北面は eR を反転、南面は代用の�
   assert.deepEqual(xyRange(run(graph, a, 'C', { figureOf: sub })), { x: [2842.5, 3142.5], y: [-850, -800] });
 });
 
-// 鏡像の範囲外判定（手計算）: mirror・回転 90・(1300→4150,700)・北 A は右側面 eOut（s −100..0）を反転して s 0..100
+// 鏡像の範囲外判定（手計算）: mirror・回転 90・(1300→4150,700)・北 A は right の図 eOut（s −100..0）を反転して s 0..100
 //   x0＝4150−57.5＝4092.5 → 4092.5..4192.5 は run 4085 の右の外（反転しない式なら 3992.5..4092.5 で掛かってしまう）
 test('鏡像のときの範囲外判定: 反転後の範囲で判定する', () => {
   const { graph, a } = twoRooms();
@@ -166,7 +212,7 @@ test('別の部屋の配置は出ない（部屋 B の配置は A の 4 面に 0
   for (const l of ['A', 'B', 'C', 'D']) assert.equal(run(graph, b, l).length, 1, `B の面 ${l}`);
 });
 
-test('s 範囲が面の [0, run] の外なら出ない（南面 x0=−7.5 の右側面 s −100..0・北面 x0=4092.5 の左側面 s 0..100）。範囲に掛かれば出る', () => {
+test('s 範囲が面の [0, run] の外なら出ない（南面 x0=−7.5 の right の図 s −100..0・北面 x0=4092.5 の left の図 s 0..100）。範囲に掛かれば出る', () => {
   const { graph, a } = twoRooms();
   const outFig = catalogOf(square('main', { views: { [RIGHT]: 'eOut', [LEFT]: 'eL' } }), rect('eOut', 100, 40, { originVertex: 1 }), ...FIGS);
   withPlaced(graph, { x: 4150, y: 700 });
@@ -239,7 +285,7 @@ test('【失敗系】図の参照切れ・分類違い・fit 不能・部屋な�
   const { graph, a } = twoRooms();
   withPlaced(graph, {});
   const gone = catalogOf(square('main', { views: { ...VIEWS, [LEFT]: 'nope' } }), ...FIGS);
-  assert.deepEqual(run(graph, a, 'A', { figureOf: gone }), [], '左側面の参照切れ（右では代用しない）');
+  assert.deepEqual(run(graph, a, 'A', { figureOf: gone }), [], 'left の参照切れ（right では代用しない）');
   const wrongClass = catalogOf(square('main', { views: { ...VIEWS, [LEFT]: 'plan' } }), square('plan'), ...FIGS);
   assert.deepEqual(run(graph, a, 'A', { figureOf: wrongClass }), [], '平面の図は側面に置けない');
   const bad = catalogOf(square('main', { views: VIEWS }), ...FIGS.filter(f => f.key !== 'eL'), rect('eL', 100, 500, { over: { datums: wallFaceDatums() } }));

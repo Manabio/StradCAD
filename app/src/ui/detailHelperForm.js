@@ -938,6 +938,16 @@ export function rotateDraftPoint90(form, p) {
   return { s: a - (p.t - b), t: b + (p.s - a) };
 }
 
+/**
+ * 回した後の表示位置。view（{ scale, cx, cy }。cx・cy はプレビューの図座標 mm）の中心を rotateDraftPoint90 で写した新しい view。
+ * 全体表示（null）は null のまま。回せない図は cx・cy を変えない（rotateDraftPoint90 が点を変えない）。
+ */
+export function rotateDraftView90(form, view) {
+  if (!view) return view;
+  const c = rotateDraftPoint90(form, { s: view.cx, t: view.cy });
+  return { ...view, cx: c.s, cy: c.t };
+}
+
 /** あるストロークがある基準に載せている頂点（無ければ null）。 */
 export function anchorVertex(form, strokeId, datumId) {
   const a = form.anchors.find(x => x.strokeId === strokeId && x.datumId === datumId);

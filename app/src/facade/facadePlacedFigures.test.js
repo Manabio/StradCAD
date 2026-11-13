@@ -6,8 +6,8 @@
 //   南 n(0,1)  u= x  uMin −57.5     東 n(1,0)  u=−y  uMin −3057.5
 //   西 n(−1,0) u= y  uMin −57.5     北 n(0,−1) u=−x  uMin −4057.5
 // 配置 (1300, 4000)（南外壁の外面 y=3057.5 の外）・回転 0（正面 f＝(0,1)＝南向き）・zMm 850:
-//   南: d＝−n＝(0,−1)＝−f → 正面・u0＝1300       東: d＝(−1,0)・右手 ρ＝(−1,0)・−d＝(1,0)≠ρ → 左側面・u0＝−4000
-//   西: d＝(1,0)・−d＝(−1,0)＝ρ → 右側面・u0＝4000   北: d＝(0,1)＝f → 背面・u0＝−1300（建物の北壁に隠れる）
+//   南: d＝−n＝(0,−1)＝−f → 正面・u0＝1300       東: d＝(−1,0)・右手 ρ＝(−1,0)・−d＝(1,0)≠ρ → left の図・u0＝−4000
+//   西: d＝(1,0)・−d＝(−1,0)＝ρ → right の図・u0＝4000   北: d＝(0,1)＝f → 背面・u0＝−1300（建物の北壁に隠れる）
 // 図の Y＝glZ − flMm − zMm ＋ t ＝ −450 − 0 − 850 ＋ t ＝ −1300 ＋ t。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,7 +19,7 @@ import {
 import { ElevationDash, ElevationLineRole, weightForRole } from '../elevation/elevationStyle.js';
 import { generateExteriorWalls } from '../finish/wallGeneration.js';
 import { fixedLen, move } from '../finish/roomDetailTestFixtures.js';
-import { square, wallFaceDatums } from '../finish/placedFigure/placedFigureTestFixtures.js';
+import { square, wallFaceDatums, bumpViewFigures, bumpEnds } from '../finish/placedFigure/placedFigureTestFixtures.js';
 import { buildFacadeInputs } from './facadeInputs.js';
 import { buildFacadeModel, facadeExtentsMm } from './facadeFigure.js';
 import { facadeViews, facadeFloorProfiles } from './facadeGeometry.js';
@@ -93,13 +93,13 @@ const xyRange = prims => {
 };
 const { SOUTH, EAST, WEST, NORTH } = FacadeDirection;
 
-test('配置 (1300,4000)・回転 0: 南＝正面・東＝左側面・西＝右側面・北＝背面（北壁に隠れて 0 本）。X＝u0−uMin＋s・Y＝−1300＋t', () => {
+test('配置 (1300,4000)・回転 0: 南＝front・東＝left・西＝right・北＝back の図（北壁に隠れて 0 本）。X＝u0−uMin＋s・Y＝−1300＋t', () => {
   const { inputs } = setup([{}]);
   // [面, 期待 X 範囲, 期待 Y 範囲]
   const expected = [
     [SOUTH, [1157.5, 1507.5], [-1400, -1050]],   // 正面 eF: u0 1300−(−57.5)＝1357.5 ＋ s −200..150
-    [EAST, [-942.5, -842.5], [-1300, -800]],     // 左側面 eL 100×500: u0 −4000−(−3057.5)＝−942.5 ＋ s 0..100
-    [WEST, [4057.5, 4357.5], [-1300, -1250]],    // 右側面 eR 300×50: u0 4000−(−57.5)＝4057.5 ＋ s 0..300
+    [EAST, [-942.5, -842.5], [-1300, -800]],     // left の図 eL 100×500: u0 −4000−(−3057.5)＝−942.5 ＋ s 0..100
+    [WEST, [4057.5, 4357.5], [-1300, -1250]],    // right の図 eR 300×50: u0 4000−(−57.5)＝4057.5 ＋ s 0..300
   ];
   for (const [dir, x, y] of expected) {
     const prims = run(inputs, dir);
@@ -112,17 +112,17 @@ test('配置 (1300,4000)・回転 0: 南＝正面・東＝左側面・西＝右�
   assert.deepEqual(run(inputs, NORTH), [], '北: 背面 eB はあるが北壁（手前）に隠れる');
 });
 
-test('鏡像: 左右が入れ替わり（東＝右側面 eR を反転・西＝左側面 eL を反転）、正面 eF は s 反転（−150..200）', () => {
+test('鏡像: left と right が入れ替わり（東＝right の図 eR を反転・西＝left の図 eL を反転）、正面 eF は s 反転（−150..200）', () => {
   const { inputs } = setup([{ mirror: true }]);
   const expected = [
     [SOUTH, [1207.5, 1557.5], [-1400, -1050]],   // 正面 eF を反転: 1357.5 − 150..+200
-    [EAST, [-1242.5, -942.5], [-1300, -1250]],   // 右側面 eR を反転: −942.5 − 300..0
-    [WEST, [3957.5, 4057.5], [-1300, -800]],     // 左側面 eL を反転: 4057.5 − 100..0
+    [EAST, [-1242.5, -942.5], [-1300, -1250]],   // right の図 eR を反転: −942.5 − 300..0
+    [WEST, [3957.5, 4057.5], [-1300, -800]],     // left の図 eL を反転: 4057.5 − 100..0
   ];
   for (const [dir, x, y] of expected) assert.deepEqual(xyRange(run(inputs, dir)), { x, y }, `面 ${dir}`);
 });
 
-test('左側面の図が無ければ右側面の鏡像で代用する（東＝eR を反転）。右も無ければ東は出ない。鏡像と代用の反転は打ち消す', () => {
+test('left の図が無ければ right の図の鏡像で代用する（東＝eR を反転）。right も無ければ東は出ない。鏡像と代用の反転は打ち消す', () => {
   const noLeft = catalogOf(square('main', { views: { [FRONT]: 'eF', [RIGHT]: 'eR' } }), ...FIGS);
   const { inputs } = setup([{}]);
   assert.deepEqual(xyRange(run(inputs, EAST, { figureOf: noLeft })), { x: [-1242.5, -942.5], y: [-1300, -1250] });
@@ -132,9 +132,51 @@ test('左側面の図が無ければ右側面の鏡像で代用する（東＝eR
   assert.equal(run(inputs, SOUTH, { figureOf: noSide }).length, 1, '正面は出る');
   const mirrored = setup([{ mirror: true }]).inputs;
   const noRight = catalogOf(square('main', { views: { [FRONT]: 'eF', [LEFT]: 'eL' } }), ...FIGS);
-  // 鏡像の西: 左側面 eL をそのまま（own）・配置の鏡像で反転 → 3957.5..4057.5。東: 右側面（無し）→ eL の代用で反転が打ち消す → −942.5..−842.5
+  // 鏡像の西: left の図 eL をそのまま（own）・配置の鏡像で反転 → 3957.5..4057.5。東: right の図（無し）→ eL の代用で反転が打ち消す → −942.5..−842.5
   assert.deepEqual(xyRange(run(mirrored, WEST, { figureOf: noRight })).x, [3957.5, 4057.5]);
   assert.deepEqual(xyRange(run(mirrored, EAST, { figureOf: noRight })).x, [-942.5, -842.5]);
+});
+
+// 左右の対応（世界座標で固定）: 非対称の図（bumpViewFigures）は +s の端（s=300）だけが細い帯（t 0..50）。回転 0＝図の +s は世界の +x・正面側は世界の +y。
+// 面の u（見る人の右へ増える）から世界の along 座標へ戻す: 南 x＝u・西 y＝u・東 y＝−u（u＝X＋uMin）。
+//   西 n(−1,0)（見る人は器具の右手＝西側で東を見る）: right の図・反転なし。X＝u0−uMin＋s → 世界 y＝4000＋s。帯の端は世界 y=4300＝器具の正面側＝見る人の右
+//   東 n(1,0)（東側で西を見る）: left が無く right の鏡像。X＝u0−uMin−s → 世界 y＝4000＋s。帯の端は同じく世界 y=4300＝見る人の左
+//   南 n(0,1)（正面図を見る面）: front・反転なし。世界 x＝1300＋s。帯の端は世界 x=1600＝見る人の右
+const WORLD_OF = { [SOUTH]: u => u, [WEST]: u => u, [EAST]: u => -u };
+const bumpCatalog = views => catalogOf(square('main', { views }), ...bumpViewFigures());
+const endsOf = (prims, dir) => bumpEnds(prims, x => WORLD_OF[dir](x + UMIN[dir]));
+
+test('左右の対応: 西面は right の図が反転なしで出て、+s の端（帯）は世界 +y（器具の正面側・見る人の右）に来る', () => {
+  const { inputs } = setup([{}]);
+  const prims = run(inputs, WEST, { figureOf: bumpCatalog({ [FRONT]: 'eBumpF', [RIGHT]: 'eBumpR', [LEFT]: 'eBumpL' }) });
+  assert.equal(prims.length, 1);
+  assert.deepEqual(xyRange(prims).x, [4057.5, 4357.5], '反転なし: X＝4057.5＋s');
+  const e = endsOf(prims,WEST);
+  assert.deepEqual([e.wMin, e.wMax], [4000, 4300], '世界 y＝4000＋s（正面側 +y が図の右）');
+  assert.deepEqual(e.ysMax, [-1300, -1250], '世界 y=4300 の端は帯（t 0..50）');
+  assert.deepEqual(e.ysMin, [-1300, -1150], '世界 y=4000 の端は全高（right の図＝高さ 150）');
+});
+
+test('左右の対応: 東面は left が無ければ right の鏡像で、突起の側（帯）はやはり世界 +y（見る人の左）に来る', () => {
+  const { inputs } = setup([{}]);
+  const prims = run(inputs, EAST, { figureOf: bumpCatalog({ [FRONT]: 'eBumpF', [RIGHT]: 'eBumpR' }) });
+  assert.equal(prims.length, 1);
+  assert.deepEqual(xyRange(prims).x, [-1242.5, -942.5], '鏡像: X＝−942.5−s');
+  const e = endsOf(prims,EAST);
+  assert.deepEqual([e.wMin, e.wMax], [4000, 4300]);
+  assert.deepEqual(e.ysMax, [-1300, -1250], '世界 y=4300 の端は帯');
+  assert.deepEqual(e.ysMin, [-1300, -1150]);
+});
+
+test('左右の対応: 南面の front は反転なしで、+s の端（帯）は見る人の右＝世界 +x に来る（平面の配置図の +s と同じ側）', () => {
+  const { inputs } = setup([{}]);
+  const prims = run(inputs, SOUTH, { figureOf: bumpCatalog({ [FRONT]: 'eBumpF', [RIGHT]: 'eBumpR' }) });
+  assert.equal(prims.length, 1);
+  assert.deepEqual(xyRange(prims).x, [1357.5, 1657.5], '反転なし: X＝1357.5＋s');
+  const e = endsOf(prims,SOUTH);
+  assert.deepEqual([e.wMin, e.wMax], [1300, 1600], '世界 x＝1300＋s');
+  assert.deepEqual(e.ysMax, [-1300, -1250], '世界 x=1600 の端は帯');
+  assert.deepEqual(e.ysMin, [-1300, -1050], '世界 x=1300 の端は全高（front の図＝高さ 250）');
 });
 
 test('Y は階の FL を引く（FL 3000 の階: Y＝−450−3000−850＋t）', () => {
@@ -172,12 +214,12 @@ test('面の範囲（bounds・幅・高さ・倍率用の寸法）に姿図の�
   const base = buildFacadeModel(setup([]).inputs, { figureOf });
   const { inputs } = setup([{}]);
   const model = buildFacadeModel(inputs, { figureOf });
-  // 東: 左側面 eL は u −4000..−3900。建物の u −3057.5..57.5 より 942.5 左へ広がる（幅 3115 → 4057.5）。図は X 0..100
+  // 東: left の図 eL は u −4000..−3900。建物の u −3057.5..57.5 より 942.5 左へ広がる（幅 3115 → 4057.5）。図は X 0..100
   assert.equal(dirOf(base, EAST).widthMm, 3115);
   assert.equal(dirOf(model, EAST).widthMm, 4057.5);
   assert.equal(dirOf(model, EAST).bounds.maxX, 4057.5);
   assert.deepEqual(xyRange(dirOf(model, EAST).primitives.filter(p => p.source === DETAIL_PRIM_SOURCE)).x, [0, 100]);
-  // 西: 右側面 eR は u 4000..4300。建物の u −57.5..3057.5 より右へ（幅 3115 → 4357.5）
+  // 西: right の図 eR は u 4000..4300。建物の u −57.5..3057.5 より右へ（幅 3115 → 4357.5）
   assert.equal(dirOf(model, WEST).widthMm, 4357.5);
   // 南: 配置が建物の u の内側なら幅は不変。高さは配置が壁より高ければ伸びる（zMm 5000 → zTop 5100・GL −450 から 5550）
   assert.equal(dirOf(model, SOUTH).widthMm, dirOf(base, SOUTH).widthMm);
@@ -240,7 +282,7 @@ test('細線: 破線の指定は残る（極太でも line＋DASHED・太さは�
 test('【失敗系】図の参照切れ・分類違い・fit 不能・配置なし・不正な要素は何も足さず例外にしない', () => {
   const { inputs } = setup([{}]);
   const gone = catalogOf(square('main', { views: { ...VIEWS, [LEFT]: 'nope' } }), ...FIGS);
-  assert.deepEqual(run(inputs, EAST, { figureOf: gone }), [], '左側面の参照切れ（右では代用しない）');
+  assert.deepEqual(run(inputs, EAST, { figureOf: gone }), [], 'left の参照切れ（right では代用しない）');
   const wrongClass = catalogOf(square('main', { views: { ...VIEWS, [LEFT]: 'plan' } }), square('plan'), ...FIGS);
   assert.deepEqual(run(inputs, EAST, { figureOf: wrongClass }), [], '平面の図は側面に置けない');
   const bad = catalogOf(square('main', { views: VIEWS }), ...FIGS.filter(f => f.key !== 'eL'), rect('eL', 100, 500, { over: { datums: wallFaceDatums() } }));

@@ -696,7 +696,8 @@ const VIEW_CATALOG = [
 
 test('DETAIL_PLACEMENT_VIEW_LABELS: DetailPlacementView の全 5 値を網羅し、承認済みの文言になる', () => {
   assert.deepEqual(Object.keys(DETAIL_PLACEMENT_VIEW_LABELS), Object.values(DetailPlacementView));
-  assert.deepEqual(Object.values(DETAIL_PLACEMENT_VIEW_LABELS), ['正面図', '背面図', '左側面図', '右側面図', '見上げ図']);
+  assert.deepEqual(Object.values(DETAIL_PLACEMENT_VIEW_LABELS), ['正面図', '背面図', '右側面図', '左側面図', '見上げ図']); // 表示名は製図の呼び方（キー left＝右側面図・right＝左側面図）。並びはキーの並び
+  assert.deepEqual([DETAIL_PLACEMENT_VIEW_LABELS.left, DETAIL_PLACEMENT_VIEW_LABELS.right], ['右側面図', '左側面図']);
   assert.equal(DETAIL_HELPER_TEXT.viewsGroup, '図の束');
 });
 
