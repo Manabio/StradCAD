@@ -47,11 +47,13 @@
  * 呼び分けはclMenuGating.jsを経由せず、usePointerInteraction.jsがusesBeamAxisMoveSnapを直接利用する。
  *
  * import ゼロに近い規約（extractedModuleImportInvariant）: ./centerLine.js（centerLineKind・
- * isGridCenterLine）と ./constants.js（CenterLineType）のみに依存する。store.js/snap.js/.jsx/
- * core.js バレル/error.js は静的 import しない——node:test から本ファイルを単体 import 可能に保つため。
+ * isGridCenterLine）と ./constants.js（CenterLineType）と ./placedFigureModes.js（図面モードの導出。
+ * 自身は constants.js と無 import の error.js だけを引く葉）のみに依存する。store.js/snap.js/.jsx/
+ * core.js バレルは静的 import しない——node:test から本ファイルを単体 import 可能に保つため。
  */
 import { centerLineKind, isGridCenterLine, BeamAxisOrigin } from './centerLine.js';
-import { CenterLineType, CL_OVERLAP_TOL_MM } from './constants.js';
+import { CenterLineType, CL_OVERLAP_TOL_MM, CORE_APP_MODES } from './constants.js';
+import { PLACED_FIGURE_MODE_REGISTRY } from './placedFigureModes.js';
 
 // 末尾の 'ceiling'（天井芯。天伏モードの天井セルだけを割る線。S8a・2026-10-10）は既存4種別の並びを変えない
 // ——CL_KINDS の並びは addCenterLineFromDialog の相手選択の優先順にも使われる。
@@ -60,7 +62,11 @@ export const CL_KINDS = Object.freeze(['struct', 'center', 'aux', 'beam', 'ceili
 // ui/ModeBar.jsx の MODES（mode値）∪ ['opening']。建具モードはモードバーにボタンを持たないが、
 // App.jsx の appMode としては存在する（ModeBar.jsx冒頭コメント参照。平面モードでの建具追加・
 // 他モードでの建具ターゲットクリックの2経路から遷移する）。
-export const APP_MODES = Object.freeze(['floorplan', 'finish', 'ceiling', 'opening', 'structure', 'site', 'elevation', 'facade']);
+// 既存の並び（constants.js の CORE_APP_MODES）＋図面モードの id（定義表 PLACED_FIGURE_MODES から導出。当面は空）。
+export function buildAppModes(registry) {
+  return Object.freeze([...CORE_APP_MODES, ...registry.modeIds]);
+}
+export const APP_MODES = buildAppModes(PLACED_FIGURE_MODE_REGISTRY);
 
 function assertKnownKind(kind) {
   if (!CL_KINDS.includes(kind)) throw new Error(`未知のCL種別: ${kind}`);
@@ -80,7 +86,8 @@ function assertKnownMode(appMode) {
 // の移動スナップ吸着先。floorplan で可視な種別の和で決まる。下記コメント参照）が自動的に広がる/
 // 狭まる——floorplan は他の可視モード表と違い、複数の独立した導出先を持つため変更時は影響範囲を
 // この2箇所も含めて確認すること。
-export const VISIBLE_KINDS_BY_MODE = Object.freeze({
+// 既存モードの行（内容・キーの順は不変）。図面モードの行は buildVisibleKindsByMode が後ろへ足す。
+const CORE_VISIBLE_KINDS_BY_MODE = {
   floorplan: Object.freeze(['struct', 'center', 'aux']),
   finish:    Object.freeze(['struct', 'center', 'aux']),
   // 天伏は天井芯だけが「可視＝操作対象」。通り芯・中心線・補助線は下の DISPLAY_ONLY_KINDS_BY_MODE（描くだけ）。
@@ -91,7 +98,20 @@ export const VISIBLE_KINDS_BY_MODE = Object.freeze({
   elevation: Object.freeze([]),
   // 立面（外壁立面図）も専用画面（SceneLayers の早期return）で GutterLayer を通らない＝展開と同じ。
   facade:    Object.freeze([]),
-});
+};
+
+/**
+ * 可視モード表＝既存モードの行 ＋ 図面モード（姿図配置モード）ごとの行。図面モードは操作できる線を持たない
+ * （姿図の配置だけを扱う）ため可視種別は空——通り芯・中心線・補助線は下の描くだけの表で描く。
+ * 本番は PLACED_FIGURE_MODE_REGISTRY（定義表が空なので行は増えない）を渡す。
+ */
+export function buildVisibleKindsByMode(registry) {
+  return Object.freeze({
+    ...CORE_VISIBLE_KINDS_BY_MODE,
+    ...Object.fromEntries(registry.modeIds.map(id => [id, Object.freeze([])])),
+  });
+}
+export const VISIBLE_KINDS_BY_MODE = buildVisibleKindsByMode(PLACED_FIGURE_MODE_REGISTRY);
 
 // ---- 原始事実1b: 描くだけの種別表（可視モード表の外） ----
 // appMode で描画はするが、ヒットにも・関係の導出（kindsVisibleWith＝直交端部候補・同方向障害物・移動スナップ
@@ -99,9 +119,19 @@ export const VISIBLE_KINDS_BY_MODE = Object.freeze({
 // 操作はできず（hitTestKinds に入らない）、天井芯の移動・延長の相手にもならない
 // （VISIBLE_KINDS_BY_MODE へ足すと可視＝操作対象の導出に全部乗ってしまうため別表にする。2026-10-10 設計）。
 // 読むのは kindsRenderedIn（→ isRenderTarget）だけ。
-export const DISPLAY_ONLY_KINDS_BY_MODE = Object.freeze({
-  ceiling: Object.freeze(['struct', 'center', 'aux']),
-});
+// 天伏と図面モードが共有する「描くだけ」の並び（通り芯・中心線・補助線＝位置の目印）。
+export const PLACED_FIGURE_MODE_DISPLAY_KINDS = Object.freeze(['struct', 'center', 'aux']);
+const CORE_DISPLAY_ONLY_KINDS_BY_MODE = {
+  ceiling: PLACED_FIGURE_MODE_DISPLAY_KINDS,
+};
+/** 描くだけの表＝既存の行（天伏）＋ 図面モードごとの行（同じ並びを共有）。本番は定義表が空なので増えない。 */
+export function buildDisplayOnlyKindsByMode(registry) {
+  return Object.freeze({
+    ...CORE_DISPLAY_ONLY_KINDS_BY_MODE,
+    ...Object.fromEntries(registry.modeIds.map(id => [id, PLACED_FIGURE_MODE_DISPLAY_KINDS])),
+  });
+}
+export const DISPLAY_ONLY_KINDS_BY_MODE = buildDisplayOnlyKindsByMode(PLACED_FIGURE_MODE_REGISTRY);
 
 // ---- 原始事実1c: 追加ダイアログの吸着専用の種別表（可視モード表の外） ----
 // appMode で描かず・ヒットせず・関係の導出（kindsVisibleWith）にも入れないが、CL追加ダイアログ

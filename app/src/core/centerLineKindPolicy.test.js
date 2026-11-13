@@ -10,9 +10,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runInAction } from 'mobx';
-import { CenterLineType, Discipline, CL_OVERLAP_TOL_MM } from './constants.js';
+import { CenterLineType, Discipline, CL_OVERLAP_TOL_MM, DetailSubject, CORE_APP_MODES } from './constants.js';
 import { centerLineKind, BeamAxisOrigin } from './centerLine.js';
+import { buildPlacedFigureModeRegistry, PLACED_FIGURE_MODE_IDS } from './placedFigureModes.js';
 import {
+  buildAppModes, buildVisibleKindsByMode, buildDisplayOnlyKindsByMode, PLACED_FIGURE_MODE_DISPLAY_KINDS,
   CL_KINDS, APP_MODES, VISIBLE_KINDS_BY_MODE, HIT_EXCLUDED_KINDS_BY_MODE, COEXISTENCE, BEAM_ON_ARCH_LINES_COEXISTENCE,
   DISPLAY_ONLY_KINDS_BY_MODE, SAME_DIRECTION_OBSTACLE_OVERRIDE, kindsRenderedIn,
   CEILING_CELL_DIVIDER_KINDS, CEILING_ONLY_KINDS, isCeilingCellDivider, isCeilingOnlyKind,
@@ -98,18 +100,58 @@ test('DISPLAY_ONLY_KINDS_BY_MODE: 天伏は通り芯・中心線・補助線を�
 
 test('kindsRenderedIn: 可視表 ∪ 描くだけ表（CL_KINDS順）。天伏だけが増え、他モードは可視表と同一', () => {
   assert.deepEqual(kindsRenderedIn('ceiling'), ['struct', 'center', 'aux', 'ceiling']);
-  for (const mode of APP_MODES.filter(m => m !== 'ceiling')) {
+  for (const mode of APP_MODES.filter(m => !Object.hasOwn(DISPLAY_ONLY_KINDS_BY_MODE, m))) {
     assert.deepEqual(kindsRenderedIn(mode), [...VISIBLE_KINDS_BY_MODE[mode]], `mode=${mode}`);
   }
   assert.throws(() => kindsRenderedIn('renovation'), /未知のappMode: renovation/);
 });
 
-test('【不変条件】APP_MODES は ui/ModeBar.jsx の MODES の mode 値 ∪ [\'opening\'] と一致する', () => {
+test('【不変条件】APP_MODES は ui/ModeBar.jsx の MODES の mode 値 ∪ [\'opening\'] ∪ 図面モードの id と一致する', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '../ui/ModeBar.jsx'), 'utf8');
   const modeValues = [...src.matchAll(/mode:\s*'([a-z]+)'/g)].map(m => m[1]);
   assert.ok(modeValues.length >= 4, 'ModeBar.jsx から mode 値を抽出できなかった（正規表現がソースと食い違っている可能性）');
-  const expected = [...new Set([...modeValues, 'opening'])].sort();
+  const expected = [...new Set([...modeValues, 'opening', ...PLACED_FIGURE_MODE_IDS])].sort();
   assert.deepEqual([...APP_MODES].sort(), expected);
+});
+
+// 図面モード（姿図配置モード）の接続。本番の定義表は空なので、試験用の registry を表の合成の純関数へ渡して確かめる
+// （本番の接続＝APP_MODES・可視表・描くだけ表は同じ関数に本番の registry を渡した結果）。
+const TEMPLATE_TEST_REGISTRY = buildPlacedFigureModeRegistry([
+  { mode: 'plumbingTest', label: '給排水（試験）', subjects: [DetailSubject.SANITARY] },
+  { mode: 'hvacTest', label: '空調（試験）', subjects: [DetailSubject.HVAC] },
+], CORE_APP_MODES);
+
+test('図面モードの接続: 試験用の 2 行が APP_MODES・可視表（操作対象なし）・描くだけ表（通り芯・中心線・補助線）へ現れる', () => {
+  const modes = buildAppModes(TEMPLATE_TEST_REGISTRY);
+  assert.deepEqual([...modes], [...CORE_APP_MODES, 'plumbingTest', 'hvacTest']);
+  const visible = buildVisibleKindsByMode(TEMPLATE_TEST_REGISTRY);
+  const displayOnly = buildDisplayOnlyKindsByMode(TEMPLATE_TEST_REGISTRY);
+  for (const id of ['plumbingTest', 'hvacTest']) {
+    assert.deepEqual([...visible[id]], [], `${id}: 操作対象なし`);
+    assert.deepEqual([...displayOnly[id]], ['struct', 'center', 'aux'], `${id}: 表示だけ 3 種`);
+    // 公開関数 kindsRenderedIn／hitTestKinds が同じ表から導く値（可視表 ∪ 描くだけ表・可視表 − ヒット除外）
+    assert.deepEqual(CL_KINDS.filter(k => visible[id].includes(k) || displayOnly[id].includes(k)), ['struct', 'center', 'aux'], `${id}: 描画`);
+    assert.deepEqual(visible[id].filter(k => !(HIT_EXCLUDED_KINDS_BY_MODE[id] ?? []).includes(k)), [], `${id}: ヒット対象なし`);
+    assert.equal(displayOnly[id], PLACED_FIGURE_MODE_DISPLAY_KINDS, `${id}: 描くだけの並びは天伏と共有`);
+    assert.equal(displayOnly[id], DISPLAY_ONLY_KINDS_BY_MODE.ceiling, `${id}: 天伏の行と同じ並び`);
+  }
+  assert.ok(Object.isFrozen(visible) && Object.isFrozen(displayOnly) && Object.isFrozen(modes));
+  assert.ok(Object.isFrozen(visible.hvacTest) && Object.isFrozen(displayOnly.hvacTest));
+});
+
+test('図面モードの接続: 既存 8 モードの行は試験用の行を足しても不変（内容・キーの順）', () => {
+  const visible = buildVisibleKindsByMode(TEMPLATE_TEST_REGISTRY);
+  const displayOnly = buildDisplayOnlyKindsByMode(TEMPLATE_TEST_REGISTRY);
+  assert.deepEqual(Object.keys(visible), [...CORE_APP_MODES, 'plumbingTest', 'hvacTest']);
+  for (const m of CORE_APP_MODES) assert.deepEqual([...visible[m]], [...VISIBLE_KINDS_BY_MODE[m]], m);
+  assert.deepEqual(Object.keys(displayOnly), ['ceiling', 'plumbingTest', 'hvacTest']);
+  assert.deepEqual([...displayOnly.ceiling], ['struct', 'center', 'aux']);
+});
+
+test('図面モードの接続: 本番は定義表が空なので APP_MODES・可視表・描くだけ表のキーは既存 8 モードだけ', () => {
+  assert.deepEqual([...APP_MODES], [...CORE_APP_MODES]);
+  assert.deepEqual(Object.keys(VISIBLE_KINDS_BY_MODE), [...CORE_APP_MODES]);
+  assert.deepEqual(Object.keys(DISPLAY_ONLY_KINDS_BY_MODE), ['ceiling']);
 });
 
 test('HIT_EXCLUDED_KINDS_BY_MODE: structure=[struct]のみ、他モードは除外エントリを持たない', () => {
@@ -222,6 +264,13 @@ test('【不変条件】error.js の CROSS_FLOOR_KIND_ORDER は centerLineKindPo
   assert.ok(m, 'error.js から CROSS_FLOOR_KIND_ORDER の配列リテラルを抽出できなかった（正規表現がソースと食い違っている可能性）');
   const extracted = m[1].split(',').map(s => s.trim().replace(/^'|'$/g, '')).filter(Boolean);
   assert.deepEqual(extracted, [...CROSS_FLOOR_COUNTERPART_KINDS]);
+});
+
+// 【不変条件】error.js は静的 import を持たない葉のまま保つ（centerLineKindPolicy → placedFigureModes → error の向きが循環しないため）。
+test('【不変条件】error.js のソースに静的 import が 0 件（行頭コメント・ブロックコメントを除く）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '../error.js'), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+  assert.equal(/^\s*import\s/m.test(code), false);
 });
 
 test('【不変条件】原始事実の表（VISIBLE_KINDS_BY_MODE・COEXISTENCE・ORTHO_ANCHOR_OVERRIDE 他）はすべて Object.freeze されている', () => {
@@ -1732,7 +1781,7 @@ test('【不変条件】isRenderTarget と isHitTestTarget は天伏以外の全
   const nearby = findNearbyCenterLines(graph, 0, 0, 1e9, 1, 1, CenterLineType.VERTICAL);
   assert.deepEqual(nearby.map(centerLineKind).sort(), ['aux', 'beam', 'ceiling', 'center'], '入力に通り芯は含まれない');
   const ids = (list) => list.map(cl => cl.id);
-  for (const mode of APP_MODES.filter(m => m !== 'ceiling')) {
+  for (const mode of APP_MODES.filter(m => !Object.hasOwn(DISPLAY_ONLY_KINDS_BY_MODE, m))) {
     assert.deepEqual(ids(nearby.filter(cl => isRenderTarget(cl, mode))), ids(nearby.filter(cl => isHitTestTarget(cl, mode))),
       `${mode}: 描画対象とヒット対象の絞りが食い違う`);
   }

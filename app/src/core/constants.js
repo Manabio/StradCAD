@@ -743,6 +743,20 @@ export const DetailPlacementView = Object.freeze({
 export const PLACED_FIGURE_SUBJECTS = Object.freeze([DetailSubject.SANITARY, DetailSubject.FURNITURE, DetailSubject.HVAC, DetailSubject.ELECTRICAL]);
 /** PLACED_FIGURE_SUBJECTS のうち、天井側（見上げ）にも現れる主題（下から見える設備＝空調・電気）。 */
 export const CEILING_PLACED_FIGURE_SUBJECTS = Object.freeze([DetailSubject.HVAC, DetailSubject.ELECTRICAL]);
+/**
+ * 既存の appMode（モードバーの MODES の mode 値 ∪ 建具モード）。図面モードの id との衝突検査の相手
+ * （core/placedFigureModes.js）と、core/centerLineKindPolicy.js の APP_MODES の前半。
+ * 値と並びは従来の APP_MODES のまま（ui/ModeBar.jsx の MODES・App.jsx の appMode と対応）。
+ */
+export const CORE_APP_MODES = Object.freeze(['floorplan', 'finish', 'ceiling', 'opening', 'structure', 'site', 'elevation', 'facade']);
+/**
+ * 図面モード（姿図配置モード）の定義表。1 行 = 1 モード（core/placedFigureModes.js が表から導出する）。
+ * 行の形: { mode: string（appMode の値）, label: string（モードバー・パネルの表示名）,
+ *           subjects: DetailSubject[]（このモードが扱う姿図の配置の分類。PLACED_FIGURE_SUBJECTS の部分集合）}
+ * 行どうしで subjects は重ならない。天伏（見上げ）に出すかは持たない
+ * （CEILING_PLACED_FIGURE_SUBJECTS と subjects の共通部分で導く）。本番の表は当面空（行は後の手順で足す）。
+ */
+export const PLACED_FIGURE_MODES = Object.freeze([]);
 /** 有効な (category, view, subject) の組合せ表。検証（detail/detailModel.js）と割当て先の絞り込みが引く。 */
 export const DETAIL_VIEW_COMBOS = Object.freeze([
   ...[DetailView.PLAN, DetailView.SECTION].flatMap(view =>

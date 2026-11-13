@@ -412,6 +412,12 @@ export const ERR_DETAIL_DATUM_UNSUPPORTED = (datumId, role, target = '三方枠'
 // 姿図の配置（PlacedFigure）に配置図でない分類（category・view・subject）の図を渡したとき（finish/placedFigure/placedFigureTargets.js）。
 export const ERR_DETAIL_NOT_PLACED_FIGURE = (classification) =>
   `${DETAIL_TARGET_PLACED_FIGURE}の対象ではありません: ${classification}`;
+// ---- 図面モードの定義表の検証（core/placedFigureModes.js。表の誤りは起動時に投げて気づく）----
+export const ERR_PLACED_FIGURE_MODE_DUPLICATE = (id) => `図面モードの定義が重複しています: ${id}`;
+export const ERR_PLACED_FIGURE_MODE_CONFLICT = (id) => `図面モードの id が既存のモードと衝突しています: ${id}`;
+export const ERR_PLACED_FIGURE_MODE_NO_SUBJECTS = (id) => `図面モード ${id} の対象の分類が空です`;
+export const ERR_PLACED_FIGURE_MODE_BAD_SUBJECT = (id, subject) => `図面モード ${id} の対象に配置できない分類があります: ${subject}`;
+export const ERR_PLACED_FIGURE_MODE_OVERLAP = (id, id2, subject) => `図面モード ${id} と ${id2} の対象の分類が重なっています: ${subject}`;
 // 部分詳細図ヘルパー（全画面パネル）の動的 import が失敗したときのトースト。
 export const ERR_DETAIL_HELPER_LOAD_FAILED = '部分詳細ヘルパーの読み込みに失敗しました';
 // ---- DXF 読込み（部分詳細図 S7a。detail/dxf/ と ui/detailHelperForm.js）----

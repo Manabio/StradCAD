@@ -20,6 +20,9 @@
 ## 可視モード表（VISIBLE_KINDS_BY_MODE）
 appModeごとにCL種別が**描画対象**になるかだけを持つ表（`core/centerLineKindPolicy.js`）。ヒット対象は本表そのものではなく、本表からの例外（`HIT_EXCLUDED_KINDS_BY_MODE`。構造モードは通り芯がヒットしない等）を引いて別途導出する。直交端部候補・同方向障害物・移動スナップ吸着先はここから自動導出されるため、表を変えると連動先も一緒に動く。設計意図は`.claude/data-model.md`「CL種別間の関係は単一のポリシーから導出し…」節。
 
+## 図面モード（姿図配置モード）
+定義表（`core/constants.js` の `PLACED_FIGURE_MODES`）の1行から立つ、姿図の配置を平面で編集するモード。給排水・空調・電気を想定。操作できる線は持たない。設計意図は`.claude/mode-system.md`。
+
 ## 走査API（centerLineKindPolicy）
 `graph.centerLines`を種別条件で絞り込んで相手候補を返す関数群（`orthoAnchorCandidates(ForNew)`・`sameDirectionObstacles`・`sameCoordCounterparts`・`mergeCandidates`・`candidatesVisibleIn`・`gridCenterLines(OnAxis)`・`structuralAnchorAt`／`structuralAnchorCandidates`・`beamAxisCenterLines`・`manualColumnAnchorLines`等）。呼び出し元が種別条件を個別実装すると非表示種別を巻き込む不具合の温床になるため、相手選択はすべてこの経由に統一する（`core/centerLineKindPolicy.guard.test.js`が新規の素の直接走査を禁じる）。
 
