@@ -107,7 +107,7 @@ function LibraryRow({ row, active, disabled, onSelect }) {
 const sha256OfBytes = bytes => sha256HexWith(globalThis.crypto?.subtle)(bytes);
 
 /** 読込み結果の共通部分（警告・連結成分の一覧・出所欄・下書きへ写す）。DXF と PDF で共用。配線だけ。 */
-function ImportResult({ state, warnings, busy, canCopy, copyNotice, onToggle, onField, onCopy, onClearPick, onToggleLayer, onAllLayersOn }) {
+function ImportResult({ state, warnings, busy, canCopy, copyNotice, onToggle, onField, onCopy, onClearPick, onToggleLayer, onAllLayersOn, atDrawingOrigin, onAtDrawingOrigin }) {
   const rows = state.scene ? pickedComponentRows(state, dxfComponentRows(state)) : [];
   const layerRows = dxfLayerRows(state);
   const pickSummary = pickSummaryOf(state);
@@ -168,13 +168,19 @@ function ImportResult({ state, warnings, busy, canCopy, copyNotice, onToggle, on
         </label>
       </div>
       {copyNotice && <div className="dthlp-error">{copyNotice}</div>}
+      {onAtDrawingOrigin && (
+        <label className="dthlp-layer-row">
+          <input type="checkbox" checked={atDrawingOrigin} disabled={busy} onChange={() => onAtDrawingOrigin(!atDrawingOrigin)} />
+          <span>{DETAIL_HELPER_TEXT.copyAtDrawingOrigin}</span>
+        </label>
+      )}
       <button className="dthlp-btn dthlp-btn--primary" disabled={busy || !canCopy || !!copyNotice} onClick={onCopy}>{DETAIL_HELPER_TEXT.dxfCopy}</button>
     </>
   );
 }
 
 /** 左ペインの「図面読込み」タブ（DXF）。配線だけ（判断は detailHelperForm.js）。 */
-function DxfPane({ dxf, message, busy, copyNotice, onOpen, onUnit, onToggle, onField, onCopy, onClearPick, onToggleLayer, onAllLayersOn }) {
+function DxfPane({ dxf, message, busy, copyNotice, onOpen, onUnit, onToggle, onField, onCopy, onClearPick, onToggleLayer, onAllLayersOn, atDrawingOrigin, onAtDrawingOrigin }) {
   return (
     <div className="dthlp-dxf">
       <button className="dthlp-btn" disabled={busy} onClick={onOpen}>{DETAIL_HELPER_TEXT.dxfOpen}</button>
@@ -185,7 +191,7 @@ function DxfPane({ dxf, message, busy, copyNotice, onOpen, onUnit, onToggle, onF
           <button className="dthlp-btn dthlp-btn--small" disabled={busy} onClick={onUnit}>
             {DETAIL_HELPER_TEXT.dxfUnit}: {displayLen(dxf.unitText)}（{dxfUnitHint(dxf)}）
           </button>
-          <ImportResult state={dxf} warnings={dxfWarningTexts(dxf)} busy={busy} canCopy={dxf.selected.length > 0} copyNotice={copyNotice} onToggle={onToggle} onField={onField} onCopy={onCopy} onClearPick={onClearPick} onToggleLayer={onToggleLayer} onAllLayersOn={onAllLayersOn} />
+          <ImportResult state={dxf} warnings={dxfWarningTexts(dxf)} busy={busy} canCopy={dxf.selected.length > 0} copyNotice={copyNotice} onToggle={onToggle} onField={onField} onCopy={onCopy} onClearPick={onClearPick} onToggleLayer={onToggleLayer} onAllLayersOn={onAllLayersOn} atDrawingOrigin={atDrawingOrigin} onAtDrawingOrigin={onAtDrawingOrigin} />
         </>
       )}
     </div>
@@ -452,6 +458,7 @@ export function DetailHelperPanel({ onClose }) {
   const [leftTab, setLeftTab] = useState(DETAIL_HELPER_TABS.PEN);
   const [dxf, setDxf] = useState(null);
   const [pdf, setPdf] = useState(null); // PDF 読込みの状態（DXF と排他。dxf を読むと null）
+  const [atDrawingOrigin, setAtDrawingOrigin] = useState(false); // DXF を写すとき図面の原点を基準点にする（保存しない）
   const [dxfMessage, setDxfMessage] = useState(null); // { text, isError }（DXF・PDF 共通）
   const [importView, setImportView] = useState(null); // 図読込みのプレビューの view（bindView(scene, view)）
   const [draftView, setDraftView] = useState(null);   // ペン入力のプレビューの view（bindView(下書きの key, view)）
@@ -751,7 +758,7 @@ export function DetailHelperPanel({ onClose }) {
   }
   // 選んだ成分を新規下書きへ写す（未保存の下書きがあれば破棄の確認を通す）。DXF・PDF 共通。
   function handleDxfCopy() {
-    const r = draftFromDxf({ dxf: imported, idFactory: newKeyPart });
+    const r = draftFromDxf({ dxf: imported, idFactory: newKeyPart, atDrawingOrigin });
     if (r.error) { setDxfMessage({ text: r.error, isError: true }); return; }
     if (fitting) {
       // 一式: 写し先は選んでいる部品（分類は役割の分類・キーは合成キーのまま）。未保存の編集があれば破棄の確認を通す
@@ -993,6 +1000,7 @@ export function DetailHelperPanel({ onClose }) {
               onClearPick={() => setDxf(d => clearPickRect(d))}
               onToggleLayer={name => applyDxfResult(toggleDxfLayer(dxf, name))}
               onAllLayersOn={() => applyDxfResult(setDxfLayers(dxf, []))}
+              atDrawingOrigin={atDrawingOrigin} onAtDrawingOrigin={setAtDrawingOrigin}
             />
           )}
           {!showDxf && (<>

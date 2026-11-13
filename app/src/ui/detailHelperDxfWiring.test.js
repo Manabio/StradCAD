@@ -44,7 +44,7 @@ test('【配線】handleDxfCopy: draftFromDxf → guardDiscard → replaceDoc(dr
   const panel = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
   assert.ok(copiesThroughGuard(extractBalancedBody(panel, 'function handleDxfCopy() {')));
   const form = stripComments(readSrc('ui/detailHelperForm.js'));
-  assert.ok(buildsViaFormFromEntry(extractBalancedBody(form, 'export function draftFromDxf({ dxf, idFactory }) {')));
+  assert.ok(buildsViaFormFromEntry(extractBalancedBody(form, 'export function draftFromDxf({ dxf, idFactory, atDrawingOrigin = false }) {')));
 });
 
 test('【検出力】判定は壊れた配線を落とす（accept 付き・runBusy の外で読む・guardDiscard を通さない・formFromEntry を通さない）', () => {

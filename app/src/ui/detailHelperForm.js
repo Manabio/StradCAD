@@ -127,6 +127,7 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   airEdge: '空気との境目', // 手の印（Move.edge='air'）の切替。展開図で中線になる（S8a）
   // DXF 読込み（S7a）
   tabPen: 'ペン', tabDxf: '図面読込み（DXF／PDF）', dxfOpen: 'DXF／PDF を開く', dxfCopy: '下書きへ写す',
+  copyAtDrawingOrigin: '図面の原点を基準点にする',
   dxfUnit: '単位（1 単位 = ? mm）', dxfUnitDetected: '読み取り値', dxfComponents: '連結成分', dxfProvenance: '出所',
   dxfMaker: 'メーカー', dxfSeries: 'シリーズ', dxfLicense: 'ライセンス注記', dxfWarnings: '警告',
   dxfNoComponents: '輪郭が見つかりません', dxfEmptyPreview: 'DXF／PDF を開くとここに表示されます',
@@ -1439,12 +1440,15 @@ const dxfProvenanceInput = dxf => ({
   fileName: dxf.fileName, sha256: dxf.sha256, maker: dxf.maker, series: dxf.series, licenseNote: dxf.licenseNote,
 });
 
+/** 読込み状態が PDF 由来か（それ以外は DXF）。 */
+const isPdfImportState = state => state.source === DetailProvenanceSource.PDF;
+
 /**
  * 読込み状態（DXF の dxf／PDF の pdf）の出所。PDF（source==='pdf'）は抽出したときのページ・範囲・縮尺（scene が持つ）を載せる。
  * @returns {{provenance: object, warnings: {code:string}[]}}
  */
 export function importProvenanceOf(state) {
-  if (state.source !== DetailProvenanceSource.PDF) return buildDxfProvenance(dxfProvenanceInput(state));
+  if (!isPdfImportState(state)) return buildDxfProvenance(dxfProvenanceInput(state));
   const { page, clip, scaleDenominator } = state.scene;
   return buildPdfProvenance({ ...dxfProvenanceInput(state), page, clip, scaleDenominator });
 }
@@ -1471,9 +1475,10 @@ export function dxfPreviewPrimitives(dxf) {
  * 分類・基準・stretch はユーザーが後から指定する（基準は軸ごとの原点 2 つ、各ストロークの頂点 0 を載せる）。
  * 出所（provenance）はフォームの extra に載り、保存でそのままエントリへ入る。
  * 複数成分の位置関係は Anchor.offsetMm で保つ。basePoint は基準点 P（選んだ成分の bbox 合併の左下。図の座標 mm）。
+ * atDrawingOrigin が true かつ DXF 由来のときだけ P を図面の原点（scene の (0,0)）にする（PDF 由来・true 以外は左下のまま）。
  * @returns {{form: object, basePoint: {s:number, t:number}} | {error: string}}
  */
-export function draftFromDxf({ dxf, idFactory }) {
+export function draftFromDxf({ dxf, idFactory, atDrawingOrigin = false }) {
   const picked = dxf.scene.components.filter(c => dxf.selected.includes(c.index));
   if (picked.length === 0) return { error: DETAIL_HELPER_MESSAGES.dxfNothingSelected };
   const drawn = picked.flatMap(c => c.strokes);
@@ -1484,10 +1489,12 @@ export function draftFromDxf({ dxf, idFactory }) {
   // 位置関係を保つ: 基準点 P＝選んだ成分の bbox の合併の左下（minS, maxT。t は下向き正）。
   // 各ストロークの頂点 0 は P から (start − P) の位置に置く（Anchor.offsetMm。0 でも書く）。
   const boxes = picked.map(c => c.bbox).filter(Boolean);
-  const basePoint = {
-    s: Math.min(...boxes.map(b => b.minS)),
-    t: Math.max(...boxes.map(b => b.maxT)),
-  };
+  const basePoint = atDrawingOrigin === true && !isPdfImportState(dxf)
+    ? { s: 0, t: 0 }
+    : {
+      s: Math.min(...boxes.map(b => b.minS)),
+      t: Math.max(...boxes.map(b => b.maxT)),
+    };
   const anchors = strokes.flatMap((s, i) => originDatums.map(d => ({
     datumId: d.id, strokeId: s.id, vertexIndex: 0,
     offsetMm: drawn[i].start[d.axis] - basePoint[d.axis],
