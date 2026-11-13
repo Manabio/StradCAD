@@ -395,7 +395,7 @@ export const ERR_SLIDE_ON_EXTERIOR_WALL = '外壁にある引き戸は外付け�
 export const DETAIL_OWNER_OPENING = '建具個別の指定';
 export const DETAIL_OWNER_FITTING = '建具一式';
 export const ERR_DETAIL_FIGURE_NOT_FOUND = (owner, slot) =>
-  `${owner} の${detailSlotLabel(slot)}の詳細図がカタログに見つかりません（DXF・PDF 由来の図は保存ファイルに入らないため、別の端末では見つかりません）`;
+  `${owner} の${detailSlotLabel(slot)}の詳細図がカタログに見つかりません（保存ファイルに図が入っていません。以前の保存か、ライブラリから削除された図です）`;
 // 詳細図の基準（Datum）が取り付け先（既定は三方枠。建具の姿図なら「建具の姿図」）の供給できない組（role・軸・種別）のとき。
 export const DETAIL_TARGET_ELEVATION = '建具の姿図';
 export const DETAIL_TARGET_JUNCTION = '部屋の取り合い';
@@ -430,10 +430,6 @@ export const ERR_DXF_BAD_GROUP_CODE = (line) => `DXF として読めません（
 export const ERR_DXF_TRUNCATED = 'DXF が途中で切れているため読み込めません';
 export const ERR_DXF_UNEXPECTED = (message) => `DXF の読み込み中に想定外の問題が起きました: ${message}`;
 export const ERR_DXF_FILE_READ_FAILED = 'ファイルを読み込めませんでした';
-// DXF・PDF 由来の図は保存ファイルに同梱しない（R10）。ヘルパー・保守パネルの出所の表示に添える。
-export const MSG_IMPORTED_NOT_IN_FILE = 'この図は保存ファイルに入りません（この端末のライブラリにだけ残ります）';
-// 使用中の DXF・PDF 由来の図を削除するときの確認文（文書の同梱へ写せないため）。
-export const MSG_IMPORTED_DELETE_IN_USE = '使用中です。DXF・PDF 由来の図は保存ファイルに入らないため、削除すると現在の文書は既定の描き方に戻ります。';
 
 // ---- PDF 読込み（部分詳細図 S7b。detail/pdf/ と ui/detailHelperPdf.js）----
 // 警告（WARN_PDF_*。保存は止めない）。コードは core/constants.js の PdfWarning、対応は ui/detailHelperPdf.js の describePdfWarning。

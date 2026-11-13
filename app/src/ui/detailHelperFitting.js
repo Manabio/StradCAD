@@ -330,7 +330,7 @@ export function fittingAssemblyPrimitives(doc, dims, { view = ASSEMBLY_VIEW.PLAN
  * （FITTING_PART_TARGETS[役割]）で上書きする（category→view→subject の 3 回）。手戻しは今の form を積む。
  * 一式でない・部品が無い・読み取り専用は { error }（呼び出し側が文言を出す）。
  * 出所（R10）: 部品の本体は provenance を持てないので、読み込んだ出所（DXF・PDF）は一式の最上位 provenance へ移す
- * （一式が既に読み込み由来なら保持）。これで isImportedFigure が真になり、一式ごと文書へ同梱されない。
+ * （一式が既に読み込み由来なら保持）。一式の出所の表示・編集がこれを読む。同梱の可否は出所によらない（使用中なら一式ごと同梱）。
  * @returns {{doc: object} | {error: string}}
  */
 export function importIntoPart(doc, importedForm) {

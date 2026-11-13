@@ -792,8 +792,8 @@ async function saveCatalogDocument(floorRecords) {
   // collectCurrentCatalogUsage（削除確認の「現在の使用キー」収集）と同じ判定式を共有し、
   // 二重実装しない（片方だけ内装・境界マスター経路を外す退行を1箇所の修正で防ぐ）。
   // 前段に部分詳細図の推移展開（使用中の建具記号の detailFigures → 詳細図 → その material 束縛の材）。
-  // 同梱だけ DXF・PDF 由来の図を除く（excludeImported）。使用中の判定（collectCurrentCatalogUsage）は除かない。
-  const usedKeysByKind = expandUsedMaterialsTransitively(expandUsedDetailFiguresTransitively(rawUsedKeysByKind, resolvedByKind, { excludeImported: true }), resolvedByKind);
+  // DXF・PDF 由来の図も手描きと同じく使用中なら同梱する（元ファイルのバイト列は保存しない）。
+  const usedKeysByKind = expandUsedMaterialsTransitively(expandUsedDetailFiguresTransitively(rawUsedKeysByKind, resolvedByKind), resolvedByKind);
 
   // QA指摘Minor-4: 空の種別を手元でふるい落とさなくても、splitBundleByKindのbundleAliases側が
   // 「非空のときだけ添える」判定を持つため設計上は同値——フィルタの唯一の判定箇所をそちらに寄せる。

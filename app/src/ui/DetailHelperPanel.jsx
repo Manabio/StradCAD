@@ -868,7 +868,7 @@ export function DetailHelperPanel({ onClose }) {
       setBusy(false);
     }
     setConfirm({
-      message: deleteConfirmMessage({ label: prevEntry.label, used: used.has(prevEntry.key), dirty, entry: prevEntry }),
+      message: deleteConfirmMessage({ label: prevEntry.label, used: used.has(prevEntry.key), dirty }),
       buttons: [
         { label: DETAIL_HELPER_MESSAGES.confirmDeleteButton, value: 'ok', primary: true, danger: true },
         { label: DETAIL_HELPER_MESSAGES.cancelButton, value: 'cancel' },

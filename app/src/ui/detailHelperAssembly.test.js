@@ -17,7 +17,8 @@ import {
 import { buildDxfProvenance } from '../detail/dxf/dxfProvenance.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { setOverlay, clearOverlays, composeCatalog } from '../catalog/catalogRegistry.js';
-import { expandUsedDetailFiguresTransitively, isImportedFigure } from '../catalog/usedEntries.js';
+import { expandUsedDetailFiguresTransitively, reexpandTransitiveDetailFigures } from '../catalog/usedEntries.js';
+import { emptyBundle, withEntries, bundleEntries } from '../catalog/catalogBundle.js';
 import { DetailProvenanceSource, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD } from '../core/constants.js';
 
 const R = FittingPartRole;
@@ -236,7 +237,7 @@ test('importIntoPart（失敗側）: 部品が未選択（部品 0 個）は err
   assert.equal(importIntoPart(single, importedForm()).error, DETAIL_HELPER_MESSAGES.fittingSelectPart);
 });
 
-// ---- 出所（R10。DXF／PDF 由来の線を持つ一式は同梱しない） ----
+// ---- 出所（R10。DXF／PDF 由来の線を持つ一式の出所は最上位へ。同梱の可否は出所によらない） ----
 
 const DXF_PROV = buildDxfProvenance({ fileName: 'a.dxf', sha256: 'ab', maker: 'M', series: 'S', licenseNote: 'n' }).provenance;
 const userSetDoc = () => fittingDocFromEntry({ ...SET, key: 'df-user-set', label: '自作一式', provenance: { source: DetailProvenanceSource.MANUAL } });
@@ -248,22 +249,34 @@ const bundledKeys = entry => {
   setOverlay(FS, { user: [{ key: 'WF', label: '記号', category: 'fitting', mechanism: 'frameOnly', profile: 'solid', [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { fitting: entry.key } }] });
   const resolved = new Map([DF, FS].map(k => [k, composeCatalog(k, [])]));
   const raw = new Map([[DF, new Set([entry.key])], [FS, new Set(['WF'])]]);
-  const out = [...expandUsedDetailFiguresTransitively(raw, resolved, { excludeImported: true }).get(DF)];
+  const out = [...expandUsedDetailFiguresTransitively(raw, resolved).get(DF)];
   clearOverlays();
   return out;
 };
 
-test('R10: DXF 由来の form を部品へ写すと一式の最上位 provenance が読み込んだ出所になり、isImportedFigure が真・同梱から外れる', () => {
+test('R10: DXF 由来の form を部品へ写すと一式の最上位 provenance が読み込んだ出所になり、手描きの一式と同じく同梱される', () => {
   const doc = userSetDoc();
-  assert.equal(isImportedFigure(fittingEntryOf(doc)), false);
   const r = importIntoPart(doc, dxfForm());
   const saved = fittingEntryOf(r.doc);
   assert.deepEqual(saved.provenance, DXF_PROV);
-  assert.equal(isImportedFigure(saved), true);
-  assert.deepEqual(bundledKeys(saved), [], 'DXF 由来の部品を持つ一式は同梱しない');
-  // 対: 手描きの部品だけの一式は同梱される
-  assert.equal(isImportedFigure(fittingEntryOf(doc)), false);
+  assert.deepEqual(bundledKeys(saved), ['df-user-set'], 'DXF 由来の部品を持つ一式も使用中なら同梱する');
+  // 対: 手描きの部品だけの一式も同梱される
   assert.deepEqual(bundledKeys(fittingEntryOf(doc)), ['df-user-set']);
+});
+
+test('R10: 読み込み由来の一式は、回収経路（旧束の記号が指す一式）でも同梱へ足される', () => {
+  const saved = fittingEntryOf(importIntoPart(userSetDoc(), dxfForm()).doc);
+  const DF = CatalogKind.DETAIL_FIGURE;
+  const FS = CatalogKind.FIXTURE_SYMBOL;
+  setOverlay(DF, { user: [saved] });
+  const sym = { key: 'WF', label: '記号', category: 'fitting', mechanism: 'frameOnly', profile: 'solid', [FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD]: { fitting: saved.key } };
+  const recovered = withEntries(emptyBundle(), FS, [sym]);
+  const r = reexpandTransitiveDetailFigures(recovered, composeCatalog(DF, []));
+  const keys = bundleEntries(r.bundle, DF).map(e => e.key);
+  const unresolved = r.unresolvedDetailFigureKeys.size;
+  clearOverlays();
+  assert.deepEqual(keys, ['df-user-set']);
+  assert.equal(unresolved, 0);
 });
 
 test('R10: 一式が既に読み込み由来なら、別の読み込みで出所を上書きしない（保持）。部品の切替でも出所は残る', () => {

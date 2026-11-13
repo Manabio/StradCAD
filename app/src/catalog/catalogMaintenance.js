@@ -28,14 +28,14 @@ import { diffPairs, fieldLabel } from './catalogDiffView.js';
 import { nextSerial, parseMaterialCode, formatMaterialCode, isMaterialCode } from './materialCode.js';
 import { emptyBundle, withEntries } from './catalogBundle.js';
 import { encodeCatalogBundle } from './catalogCodec.js';
-import { stripOverridesBuiltin, isImportedFigure, IMPORTED_SOURCES } from './usedEntries.js';
+import { stripOverridesBuiltin, IMPORTED_SOURCES } from './usedEntries.js';
 
-export { isImportedFigure, IMPORTED_SOURCES };
+export { IMPORTED_SOURCES };
 import {
   DetailCategory, DetailView, DetailSubject, DetailSlot, DETAIL_SLOT_TARGETS, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD,
   DetailProvenanceSource, DetailPlacementView, FittingPartRole,
 } from '../core/constants.js';
-import { MSG_IMPORTED_NOT_IN_FILE, DETAIL_PLACEMENT_VIEW_LABEL_TEXT } from '../error.js';
+import { DETAIL_PLACEMENT_VIEW_LABEL_TEXT } from '../error.js';
 
 /** 材の役割（カテゴリ）。materialData.js の MATERIAL_CATEGORY と同じ3値
  * （本体マスタは静的 import できないため、ここでは値の集合だけを持つ）。 */
@@ -276,7 +276,7 @@ const PROVENANCE_TEXT = Object.freeze({
 
 /**
  * 部分詳細図の出所（provenance）の表示文。手描き・無し（null）は「手描き」。DXF・PDF 由来はファイル名・（PDF はページ・縮尺）・
- * メーカー・シリーズ・ライセンス注記と「この図は保存ファイルに入りません」（R10）。未知の source は formatReadonlyValue にフォールバックする。
+ * メーカー・シリーズ・ライセンス注記。未知の source は formatReadonlyValue にフォールバックする。
  * @param {object|null|undefined} provenance
  * @returns {string}
  */
@@ -293,7 +293,6 @@ export function formatDetailProvenance(provenance) {
     `${PROVENANCE_TEXT.maker}: ${or(provenance.maker)}`,
     `${PROVENANCE_TEXT.series}: ${or(provenance.series)}`,
     `${PROVENANCE_TEXT.license}: ${or(provenance.licenseNote)}`,
-    MSG_IMPORTED_NOT_IN_FILE,
   ].join('・');
 }
 
@@ -1190,8 +1189,7 @@ export function planRemoveUserEntry(kind, key, { usedKeys = new Set() } = {}) {
   if (!target) throw new Error(`ユーザーライブラリに無いキーです: ${key}`);
   const nextUser = user.filter(e => def.keyOf(e) !== key);
   const docHasKey = doc.some(e => def.keyOf(e) === key);
-  // DXF・PDF 由来の図は保存ファイルに入らない（R10）ので、使用中でも文書へ写さない（参照は既定の描き方に戻る）。
-  const docAppend = (usedKeys.has(key) && !docHasKey && !isImportedFigure(target)) ? stripOverridesBuiltin(target) : null;
+  const docAppend = (usedKeys.has(key) && !docHasKey) ? stripOverridesBuiltin(target) : null;
   return { nextUser, docAppend };
 }
 

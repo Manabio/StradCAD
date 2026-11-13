@@ -12,12 +12,10 @@ import {
   dxfComponentRows, describeDxfWarning,
 } from './detailHelperForm.js';
 import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
-import { isImportedFigure } from '../catalog/usedEntries.js';
 import { formatDetailProvenance } from '../catalog/catalogMaintenance.js';
 import {
   WARN_PDF_SCALE_MISSING, WARN_PDF_TEXT_IGNORED, WARN_PDF_PAGE_LIMIT, WARN_DXF_LICENSE_UNKNOWN, WARN_DXF_NO_DIGEST, WARN_PDF_NO_PATHS,
   ERR_PDF_NO_PAGES, ERR_PDF_NOT_PDF, ERR_PDF_LOAD_FAILED, ERR_PDF_WORKER_UNAVAILABLE, ERR_PDF_SIZE_LIMIT, ERR_PDF_PAGE_NOT_FOUND, ERR_PDF_PAGE_FAILED,
-  MSG_IMPORTED_NOT_IN_FILE,
 } from '../error.js';
 import {
   PdfDrawOp, PdfReject, PdfWarning, DxfWarning, DetailProvenanceSource, DXF_PROVENANCE_FIELDS, PDF_MAX_BYTES, PDF_MAX_PAGES, PenDir,
@@ -205,9 +203,7 @@ test('通し: 読込み→範囲→縮尺→抽出→成分選択→新規下書
     source: DetailProvenanceSource.PDF, fileName: 'SM3300.pdf', sha256: pdf.sha256, page: 1, clip: CLIP, scaleDenominator: 6,
     maker: 'YKK', series: 'SM3300', licenseNote: '',
   });
-  assert.equal(isImportedFigure(entry), true, '保存した図は文書の同梱から外れる');
   const notice = provenanceNoticeOf(form);
-  assert.ok(notice.includes(MSG_IMPORTED_NOT_IN_FILE));
   assert.ok(notice.startsWith('PDF・'));
   assert.ok(notice.includes('ページ: 1') && notice.includes('縮尺: 1/6'));
   assert.equal(formatDetailProvenance(entry.provenance), notice, '保守パネルの出所表示と同じ文');

@@ -23,17 +23,8 @@ import {
 import { parseBaseboardHeightMm } from '../core/baseboardHeight.js';
 import { moveParts, canHaveDetailViews } from '../detail/detailModel.js';
 
-// 読み込んだ外部ファイル（DXF・PDF）由来の出所。文書に同梱しない対象（R10）。
+// 読み込んだ外部ファイル（DXF・PDF）由来の出所（出所欄の表示・編集の判定に使う。同梱の可否には使わない）。
 export const IMPORTED_SOURCES = Object.freeze([DetailProvenanceSource.DXF, DetailProvenanceSource.PDF]);
-
-/**
- * 外部ファイル（DXF・PDF）由来の詳細図か（provenance.source が 'dxf' か 'pdf'）。文書に同梱しない対象（R10）。
- * @param {object|null|undefined} figure
- * @returns {boolean}
- */
-export function isImportedFigure(figure) {
-  return IMPORTED_SOURCES.includes(figure?.provenance?.source);
-}
 
 /**
  * snapshot（1階分）が参照する材コードを Set で返す（12桁数字として不正な値は含めない）。
@@ -272,7 +263,7 @@ export function expandUsedMaterialsTransitively(usedKeysByKind, resolvedByKind) 
  * @param {Map<string, Map<string, object>>} resolvedByKind
  * @returns {Map<string, Set<string>>}
  */
-export function expandUsedDetailFiguresTransitively(usedKeysByKind, resolvedByKind, { excludeImported = false } = {}) {
+export function expandUsedDetailFiguresTransitively(usedKeysByKind, resolvedByKind) {
   if (!usedKeysByKind.has(CatalogKind.DETAIL_FIGURE)) return usedKeysByKind;
   const figureKeys = new Set(usedKeysByKind.get(CatalogKind.DETAIL_FIGURE));
   for (const symbolKey of usedKeysByKind.get(CatalogKind.FIXTURE_SYMBOL) ?? []) {
@@ -290,13 +281,6 @@ export function expandUsedDetailFiguresTransitively(usedKeysByKind, resolvedByKi
   for (const figureKey of [...figureKeys]) {
     for (const viewKey of placedFigureViewKeys(figuresResolved?.get(figureKey))) {
       if (figuresResolved.has(viewKey)) figureKeys.add(viewKey);
-    }
-  }
-  // 同梱（excludeImported）のときだけ、外部ファイル（DXF・PDF）由来の図を対象から外す（R10。割当てのキーは文書に残り、
-  // 図を持たない環境では既定の描きに戻る。材の推移展開にも載せない）。使用中の判定（削除確認・使用中バッジ）では外さない。
-  if (excludeImported) {
-    for (const figureKey of [...figureKeys]) {
-      if (isImportedFigure(resolvedByKind.get(CatalogKind.DETAIL_FIGURE)?.get(figureKey))) figureKeys.delete(figureKey);
     }
   }
   const next = new Map(usedKeysByKind);
@@ -445,9 +429,7 @@ export function reexpandTransitiveDetailFigures(bundle, detailFigureMap, { viewO
   const unresolvedDetailFigureKeys = new Set();
   for (const key of wanted) {
     if (existingKeys.has(key)) continue;
-    const entry = detailFigureMap?.get(key);
-    if (isImportedFigure(entry)) continue; // DXF・PDF 由来の図は同梱しない（未解決にも数えない）
-    if (entry) newEntries.push(stripOverridesBuiltin(entry));
+    const entry = detailFigureMap?.get(key);    if (entry) newEntries.push(stripOverridesBuiltin(entry));
     else unresolvedDetailFigureKeys.add(key);
   }
   if (newEntries.length === 0) return { bundle, unresolvedDetailFigureKeys };

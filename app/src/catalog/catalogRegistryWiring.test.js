@@ -523,8 +523,8 @@ test('【不変条件・ステップ7c→12b改訂】store.js: saveCatalogDocume
   const body = extractBodyAfterParams(src, 'async function saveCatalogDocument(floorRecords) {');
   assert.ok(body, 'store.js に saveCatalogDocument が見つからない');
   assert.ok(
-    /^\s*const usedKeysByKind = expandUsedMaterialsTransitively\(\s*expandUsedDetailFiguresTransitively\(\s*rawUsedKeysByKind,\s*resolvedByKind,\s*\{ excludeImported: true \}\s*\),\s*resolvedByKind\s*\);/m.test(body),
-    'saveCatalogDocument が expandUsedMaterialsTransitively(expandUsedDetailFiguresTransitively(rawUsedKeysByKind, resolvedByKind, { excludeImported: true }), resolvedByKind) を呼んでいない（詳細図の推移展開は材の推移展開の前段。同梱だけ DXF・PDF 由来を除く）',
+    /^\s*const usedKeysByKind = expandUsedMaterialsTransitively\(\s*expandUsedDetailFiguresTransitively\(\s*rawUsedKeysByKind,\s*resolvedByKind\s*\),\s*resolvedByKind\s*\);/m.test(body),
+    'saveCatalogDocument が expandUsedMaterialsTransitively(expandUsedDetailFiguresTransitively(rawUsedKeysByKind, resolvedByKind), resolvedByKind) を呼んでいない（詳細図の推移展開は材の推移展開の前段。DXF・PDF 由来の図も手描きと同じく同梱の対象）',
   );
   // 展開ロジック（usedInteriorMasters/usedBoundaryMastersの手組み立て・expandTransitiveMaterials
   // 直接呼び出し）をsaveCatalogDocument側で再実装していないことを固定する。

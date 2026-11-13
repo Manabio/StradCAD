@@ -30,7 +30,7 @@ import { buildPdfProvenance } from '../detail/pdf/pdfProvenance.js';
 import {
   WARN_DXF_UNIT_UNKNOWN, WARN_DXF_CONTOUR_OPEN, WARN_DXF_SELF_INTERSECT, WARN_DXF_LICENSE_UNKNOWN, WARN_DXF_INSERT_DEPTH,
   WARN_DXF_INSERT_CYCLE, WARN_DXF_UNSUPPORTED_ENTITY, WARN_DXF_NONUNIFORM_SCALE, WARN_DXF_ENTITY_LIMIT,
-  WARN_DXF_SELF_INTERSECT_UNCHECKED, WARN_DXF_NO_DIGEST, MSG_IMPORTED_DELETE_IN_USE, DETAIL_VIEWS_GROUP_LABEL, ROOM_DETAIL_REF_TEXT,
+  WARN_DXF_SELF_INTERSECT_UNCHECKED, WARN_DXF_NO_DIGEST, DETAIL_VIEWS_GROUP_LABEL, ROOM_DETAIL_REF_TEXT,
   ERR_DXF_BINARY, ERR_DXF_BAD_GROUP_CODE, ERR_DXF_TRUNCATED, ERR_DXF_UNEXPECTED, ERR_DXF_NOT_BYTES,
 } from '../error.js';
 import { validateDetailFigure, DetailValidationError, canHaveDetailViews } from '../detail/detailModel.js';
@@ -40,7 +40,7 @@ import { fitLocal } from '../detail/detailPlacement.js';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import {
   formatDetailSubjectLabel, formatDetailViewLabel, formatCategoryLabel, categoryOptionsFor, rowEditState, planSaveEntry,
-  formatDetailProvenance, isImportedFigure, IMPORTED_SOURCES, planRevertToBuiltin,
+  formatDetailProvenance, IMPORTED_SOURCES, planRevertToBuiltin,
   DETAIL_PLACEMENT_VIEW_LABELS, DETAIL_OPTION_NOTE_WRONG_SLOT, DETAIL_OPTION_NOTE_MISSING,
 } from '../catalog/catalogMaintenance.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
@@ -459,12 +459,9 @@ export function afterSaveDoc(doc, entry, form) {
 }
 
 /** 削除の確認文。使用中（文書が参照している）なら同梱へ写すこと、未保存の編集があれば破棄されることを添える。 */
-export function deleteConfirmMessage({ label, used, dirty, entry = null }) {
-  const imported = isImportedFigure(entry);
+export function deleteConfirmMessage({ label, used, dirty }) {
   const parts = [`「${label}」をライブラリから削除します。`];
-  // DXF・PDF 由来の図は文書の同梱へ写せない（保存ファイルに入らない）ので、同梱へ写す文言ではなく専用の文で告げる。
-  if (used && imported) parts.push(MSG_IMPORTED_DELETE_IN_USE);
-  else if (used) parts.push('この文書が使用中のため、文書の同梱へ写します（文書は未保存扱いになります）。');
+  if (used) parts.push('この文書が使用中のため、文書の同梱へ写します（文書は未保存扱いになります）。');
   if (dirty) parts.push('編集中の内容は破棄されます。');
   return parts.join('');
 }
@@ -1468,7 +1465,7 @@ export function draftDocOf(form) {
   return { form, history: [], baseline: null, prevEntry: null };
 }
 
-/** 下書きの出所の表示文（DXF・PDF 由来のときだけ。手描きは null）。「この図は保存ファイルに入りません」を含む。 */
+/** 下書きの出所の表示文（DXF・PDF 由来のときだけ。手描きは null）。 */
 export function provenanceNoticeOf(form) {
   return isImportedProvenance(form?.extra?.provenance) ? formatDetailProvenance(form.extra.provenance) : null;
 }

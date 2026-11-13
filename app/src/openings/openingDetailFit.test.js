@@ -49,7 +49,7 @@ test('【失敗系】読み出し口: 参照先の図がカタログに無い記
   assert.equal(detailFiguresFor(dangling), null);
   const nf = fitDetailLocalMemo({ figureKey: 'df-dangling', slot: JAMB, ...DIMS });
   assert.equal(nf.error.code, 'noFigure');
-  assert.equal(nf.error.message, 'df-dangling の方立（縦枠）の詳細図がカタログに見つかりません（DXF・PDF 由来の図は保存ファイルに入らないため、別の端末では見つかりません）');
+  assert.equal(nf.error.message, 'df-dangling の方立（縦枠）の詳細図がカタログに見つかりません（保存ファイルに図が入っていません。以前の保存か、ライブラリから削除された図です）');
   assert.equal(fitDetailLocalMemo({ figureKey: 'df-none', slot: HEAD, ...DIMS }).error.code, 'noFigure');
 });
 

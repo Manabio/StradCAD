@@ -743,22 +743,21 @@ test('collectUsedKeys: 暗黙の組込みキーは明示の detailRefs と併存
     assert.deepEqual(bundleEntries(none.bundle, DF).map(e => e.key), ['A'], '起点を渡さなければ束の図は起点にならない');
   });
 
-  test('views 回収経路(viewOrigins): views の先が DXF 由来なら外し、未解決にも数えない。ライブラリに無い先は未解決として返る', () => {
+  test('views 回収経路(viewOrigins): views の先が DXF 由来でも手描きと同じく入る。ライブラリに無い先は辿らず、未解決にも数えない', () => {
     const lib = new Map([
       ['B', { ...elevFig('B'), provenance: { source: DetailProvenanceSource.DXF } }], ['C', elevFig('C')],
     ]);
     const recovered = withEntries(emptyBundle(), DF, [planFig('A', DetailSubject.SANITARY, { front: 'B', back: 'C', left: 'ghost' })]);
     const r = reexpandTransitiveDetailFigures(recovered, lib, { viewOrigins: ['A'] });
-    assert.deepEqual(bundleEntries(r.bundle, DF).map(e => e.key).sort(), ['A', 'C']);
-    assert.equal(r.unresolvedDetailFigureKeys.size, 0, '参照切れ(ghost)は辿らず、DXF 由来は未解決に数えない');
+    assert.deepEqual(bundleEntries(r.bundle, DF).map(e => e.key).sort(), ['A', 'B', 'C']);
+    assert.equal(r.unresolvedDetailFigureKeys.size, 0, '参照切れ(ghost)は views の辿りでは足さず、未解決にも数えない');
   });
 
-  test('views: excludeImported のときは views の先の外部由来(DXF)の図も外す。既定では入る', () => {
+  test('views: views の先の外部由来(DXF)の図も、手描きと同じく同梱の対象に入る', () => {
     const resolved = resolvedOf([
       planFig('A', DetailSubject.SANITARY, { front: 'B', back: 'C' }),
       { ...elevFig('B'), provenance: { source: DetailProvenanceSource.DXF } }, elevFig('C'),
     ]);
-    assert.deepEqual([...expandUsedDetailFiguresTransitively(usedOf(['A']), resolved, { excludeImported: true }).get(DF)].sort(), ['A', 'C']);
     assert.deepEqual([...expandUsedDetailFiguresTransitively(usedOf(['A']), resolved).get(DF)].sort(), ['A', 'B', 'C']);
   });
 }
