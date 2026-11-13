@@ -867,6 +867,77 @@ export function rebaseDelta(form, p) {
   return delta;
 }
 
+// ---- 下書きを基準点まわりに時計回りへ 90° 回す（H2）----
+// 基準点 B＝(a, b)（a＝s の原点の基準の offset・b＝t の原点の基準の offset。欄が数でなければ 0＝rebaseDelta と同じ）を中心に、
+// 画面で時計回りに 90°: s' = a − (t − b)・t' = b + (s − a)。基準（datums）は動かさず、手の向きと Anchor の付け替え先だけを変える
+// （プレビューも fit も「軸ごとに、その軸の原点の Anchor の頂点を 基準＋offset に合わせて平行移動」なので、これで全頂点が回る）。
+const ROTATE_CW_DIR = Object.freeze({
+  [PenDir.RIGHT]: PenDir.DOWN, [PenDir.DOWN]: PenDir.LEFT, [PenDir.LEFT]: PenDir.UP, [PenDir.UP]: PenDir.RIGHT,
+});
+
+// 斜めの向きの符号（ss・st）は省略か ±1 だけを回す。それ以外（検証が BAD_VECTOR_SIGN で弾く値）を回すと、壊れた図が通る図に変わりうる
+const isVectorSign = v => v === undefined || v === 1 || v === -1;
+const isRotatableVector = raw => raw !== null && typeof raw === 'object' && !Array.isArray(raw) && isVectorSign(raw.ss) && isVectorSign(raw.st);
+const isRotatableMove = m => (m?.dir === PenDir.VECTOR ? isRotatableVector(m.raw) : Object.hasOwn(ROTATE_CW_DIR, m?.dir));
+
+/** 回せる図なら { s, t }（各軸の原点の基準）、回せないなら null。end の基準が無い・原点が軸ごとにちょうど 1 つ（別々の基準）・ストロークが 1 本以上あり全部の手の向きが既知。 */
+function rotationOrigins(form) {
+  if (!Array.isArray(form?.datums) || !Array.isArray(form.anchors) || !Array.isArray(form.strokes) || form.strokes.length === 0) return null;
+  if (form.datums.some(d => d?.kind === DetailDatumKind.END)) return null;
+  const originOn = axis => {
+    const list = form.datums.filter(d => d?.kind === DetailDatumKind.ORIGIN && d.axis === axis);
+    return list.length === 1 ? list[0] : null;
+  };
+  const s = originOn(DetailAxis.S);
+  const t = originOn(DetailAxis.T);
+  if (!s || !t || s.id === t.id) return null;
+  return form.strokes.every(st => Array.isArray(st?.moves) && st.moves.every(isRotatableMove)) ? { s, t } : null;
+}
+
+function rotateMove90(m) {
+  if (m.dir !== PenDir.VECTOR) return { ...m, dir: ROTATE_CW_DIR[m.dir] };
+  const { raw } = m;
+  return { ...m, raw: { ...raw, dx: raw.dy, dy: raw.dx, ss: -(raw.st ?? 1), st: raw.ss ?? 1 } };
+}
+
+const originOffsetOf = datum => {
+  const off = parseNumberText(datum.offset);
+  return Number.isFinite(off) ? off : 0;
+};
+
+/** 下書きを基準点まわりに時計回りへ 90° 回せるか（回せる条件は rotationOrigins）。 */
+export function canRotateDraft(form) {
+  return rotationOrigins(form) !== null;
+}
+
+/**
+ * 下書きを基準点まわりに時計回りへ 90° 回す。手の向き R→D・D→L・L→U・U→R、斜めは dx／dy を入れ替えて ss' = −st・st' = ss（省略は +1。両方を明示で書く）。
+ * 基準は不変。s の原点の基準に載る Anchor は t の原点の基準へ、t のものは s の基準へ付け替え（t→s の offsetMm は符号反転）。
+ * 回せないときは同じ form（参照）を返す＝edit が弾く（無効な undo の 1 手を積まない）。入力は書き換えない。
+ */
+export function rotateDraft90(form) {
+  const o = rotationOrigins(form);
+  if (!o) return form;
+  const toDatum = new Map([[o.s.id, o.t.id], [o.t.id, o.s.id]]);
+  const anchors = form.anchors.map(a => {
+    const to = toDatum.get(a?.datumId);
+    if (to === undefined) return a;
+    const next = { ...a, datumId: to };
+    if (a.datumId === o.t.id && Object.hasOwn(a, 'offsetMm') && typeof a.offsetMm === 'number') next.offsetMm = 0 - a.offsetMm; // 0 − x（−0 を作らない）
+    return next;
+  });
+  return { ...form, strokes: form.strokes.map(s => ({ ...s, moves: s.moves.map(rotateMove90) })), anchors };
+}
+
+/** 点 p（プレビューの図座標 mm）を rotateDraft90 と同じ回転（基準点中心）で写す。回せない図・有限でない点は p をそのまま返す。 */
+export function rotateDraftPoint90(form, p) {
+  const o = rotationOrigins(form);
+  if (!o || !Number.isFinite(p?.s) || !Number.isFinite(p?.t)) return p;
+  const a = originOffsetOf(o.s);
+  const b = originOffsetOf(o.t);
+  return { s: a - (p.t - b), t: b + (p.s - a) };
+}
+
 /** あるストロークがある基準に載せている頂点（無ければ null）。 */
 export function anchorVertex(form, strokeId, datumId) {
   const a = form.anchors.find(x => x.strokeId === strokeId && x.datumId === datumId);

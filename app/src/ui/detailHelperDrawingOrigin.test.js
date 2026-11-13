@@ -4,35 +4,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { webcrypto } from 'node:crypto';
 import {
-  loadDxf, toggleDxfComponent, draftFromDxf, previewPrimitivesOf, setClassification, tryFit, validation, entryFromForm,
+  toggleDxfComponent, draftFromDxf, previewPrimitivesOf, setClassification, tryFit, validation, entryFromForm,
   setDxfUnit, DETAIL_HELPER_TEXT, DETAIL_HELPER_MESSAGES, dxfLayerRows, toggleDxfLayer,
 } from './detailHelperForm.js';
 import { loadPdf, setPdfPageView, setPdfClip, setPdfScale, extractPdf } from './detailHelperPdf.js';
-import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
+import { dxfRect as rect, dxfDigest as digest, fixedId as ids, loadDxfBody as loadBody } from './detailHelperDxfTestFixtures.js';
 import { validateDetailFigure } from '../detail/detailModel.js';
 import { fitLocal } from '../detail/detailPlacement.js';
 import { placedFigureTargets } from '../finish/placedFigure/placedFigureTargets.js';
 import { SvgFigurePrimitiveType, DetailCategory, DetailView, DetailSubject, PdfDrawOp } from '../core/constants.js';
 import { stripCommentsKeepStrings as stripComments, extractBodyAfterParams, topLevelBlock } from '../uiBusySourceScan.js';
 
-const text = arr => `${arr.map(([c, v]) => `${c}\n${v}`).join('\n')}\n`;
-const line = (x1, y1, x2, y2, layer = '0') => [[0, 'LINE'], [8, layer], [10, x1], [20, y1], [11, x2], [21, y2]];
-const rect = (x, y, w, h, layer) => [
-  ...line(x, y, x + w, y, layer), ...line(x + w, y, x + w, y + h, layer), ...line(x + w, y + h, x, y + h, layer), ...line(x, y + h, x, y, layer),
-];
-const bytesOf = body => new TextEncoder().encode(text([
-  [0, 'SECTION'], [2, 'HEADER'], [9, '$INSUNITS'], [70, 4], [0, 'ENDSEC'],
-  [0, 'SECTION'], [2, 'ENTITIES'], ...body, [0, 'ENDSEC'], [0, 'EOF'],
-]));
-const digest = sha256HexWith(webcrypto.subtle);
-const ids = () => 'fixed-id';
-const loadBody = async body => {
-  const r = await loadDxf({ bytes: bytesOf(body), fileName: 'o.dxf', digest });
-  assert.equal(r.ok, true, r.message);
-  return r.dxf;
-};
 const pick = (dxf, ...idx) => idx.reduce((d, i) => toggleDxfComponent(d, i), dxf);
 const polylines = prims => prims.filter(p => p.type === SvgFigurePrimitiveType.POLYLINE && p.strokeId);
 const vertex0Of = (form, strokeId) => polylines(previewPrimitivesOf(form)).find(p => p.strokeId === strokeId).points[0];
