@@ -12,7 +12,7 @@
 import {
   PLACED_FIGURE_WEIGHT_ROLE, DetailDash, DetailPlacementView, DETAIL_VIEWS_FIELD, CEILING_PLACED_FIGURE_SUBJECTS,
 } from '../core/constants.js';
-import { placedFigureTargets, isPlaceableViewFigure } from '../finish/placedFigure/placedFigureTargets.js';
+import { placedFigureTargets, isPlaceableViewFigure, placedFigureBelongsTo } from '../finish/placedFigure/placedFigureTargets.js';
 import { RoomDetailError } from '../finish/roomDetailTargets.js';
 import { fitLocal, placeStrokes, canHaveDetailViews } from '../detail/detailPlacement.js';
 
@@ -48,12 +48,13 @@ const flatten = pts => pts.flatMap(p => [p[0], p[1]]);
 /**
  * @param {ReadonlyArray<object>} placedFigures graph.placedFigures
  * @param {(key:string) => (object|null)} figureOf 詳細図キー → エントリ
- * @param {{direction?: 'down'|'up'}} [opts]
+ * @param {{direction?: 'down'|'up', subjects?: (ReadonlyArray<string>|null)}} [opts] subjects を渡すと、その分類に所属しない配置は何も出さない
+ *   （分類不明は placedFigureBelongsTo の規則で所属＝従来どおり×）。省略は絞らない。
  * @returns {{lines: Array<{key:string, figureId:string, points:number[], weight:string, dashed:boolean}>,
  *            marks: Array<{figureId:string, x:number, y:number, code:(string|null)}>,
  *            boxes: Array<{figureId:string, minX:number, minY:number, maxX:number, maxY:number}>}}
  */
-export function placedFigureDrawPlan(placedFigures, figureOf, { direction = 'down' } = {}) {
+export function placedFigureDrawPlan(placedFigures, figureOf, { direction = 'down', subjects = null } = {}) {
   const lines = [];
   const marks = [];
   const boxes = [];
@@ -62,6 +63,7 @@ export function placedFigureDrawPlan(placedFigures, figureOf, { direction = 'dow
   const cache = new Map();
   for (const pf of placedFigures) {
     if (pf === null || typeof pf !== 'object') continue;
+    if (!placedFigureBelongsTo(pf, figureOf, subjects)) continue;
     const mark = code => marks.push({ figureId: pf.id, x: pf.x, y: pf.y, code });
     const fig = figureOf(pf.figureKey);
     if (!fig) { mark(null); continue; }

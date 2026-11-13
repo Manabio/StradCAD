@@ -46,6 +46,17 @@ export function placedFigureSubjectOf(placedFigure, figureOf) {
 }
 
 /**
+ * 配置が図面モード（subjects＝そのモードの分類の配列）に所属するか。描画の絞り・ヒット判定・モード状態はこの関数だけで所属を決める。
+ * subjects が null／undefined は絞らない（true）。分類不明（図が引けない・配置図でない）はどのモードにも出す
+ * （壊れた参照をどのモードからでも見つけて消せるようにするため）。新しく置く図キーの可否だけは別規則（分類不明は置けない。モード状態の beginFigurePlacement）。
+ */
+export function placedFigureBelongsTo(placedFigure, figureOf, subjects) {
+  if (subjects === null || subjects === undefined) return true;
+  const subject = placedFigureSubjectOf(placedFigure, figureOf);
+  return subject === null || subjects.includes(subject);
+}
+
+/**
  * fitLocal に渡す targets を作る。datums は図の Datum.id をキーにする（fit が id で引くため）。
  * @param {object} fig DetailFigure（不正でも例外にせず fit の検証へ回す）
  * @returns {{targets:{datums:Object<string,number>, params:{}, materials:{}}} | {error:{code:string, message:string}}}
