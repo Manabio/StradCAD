@@ -91,6 +91,22 @@ test('【不変条件】placedFigureViews.js は直接 import が許可表の内
   assert.deepEqual(transitiveOffenders(views).offenders, []);
 });
 
+test('【不変条件】図面モードのパネルの純モジュール（placedFigureModePanelRows.js・placedFigureRooms.js）は直接 import が許可表の内側で、推移的にも store.js・snap.js・appViewport.js・storage/・.jsx・react 系を静的に引かない', () => {
+  const cases = [
+    ['placedFigureModePanelRows.js', ['core/constants.js', 'detail/detailModel.js', 'error.js', 'catalog/catalogMaintenance.js']],
+    ['placedFigureRooms.js', ['finish/edgeClassify.js', 'finish/gridCells.js', 'finish/interiorTabRooms.js']],
+  ];
+  for (const [name, allowedList] of cases) {
+    const file = path.join(srcDir, 'finish', 'placedFigure', name);
+    const direct = specifiersOf(file).filter(spec => spec.startsWith('.')).map(spec => norm(path.relative(srcDir, path.resolve(path.dirname(file), spec))));
+    assert.ok(direct.length > 0, `${name} の import を読めていない`);
+    assert.deepEqual(direct.filter(t => !allowedList.includes(t)), [], name);
+    const { offenders, seen } = transitiveOffenders(file);
+    assert.ok(seen.size > 1, `${name} から先を辿れていない`);
+    assert.deepEqual(offenders, [], name);
+  }
+});
+
 test('【不変条件】検出力: 禁止先・許可表の外を引くソース文字列は offenders に出る', () => {
   const bad = [
     "import { x } from '../../store.js';",

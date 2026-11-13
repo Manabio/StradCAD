@@ -89,6 +89,7 @@ import { parseOpenedFileBytes, openDocumentFileTarget, writeDocumentFileTarget, 
 import { SaveFileDialog } from './ui/SaveFileDialog.jsx';
 import { SiteInfoPanel }       from './ui/SiteInfoPanel.jsx';
 import { CeilingPanel }        from './ceiling/CeilingPanel.jsx';
+import { PlacedFigureModePanel } from './finish/placedFigure/PlacedFigureModePanel.jsx';
 import {
   confirmSiteLineLen, confirmSiteTriangle, cycleSiteLineKind, deleteSiteRow,
 } from './transform/siteEdit.js';
@@ -3288,6 +3289,12 @@ const App = observer(() => {
       {/* 天伏モード: 専用パネル（内部・階段の一覧。仕上げ表とは独立） */}
       {appMode === 'ceiling' && mode && (
         <CeilingPanel graph={graph} mode={mode} project={project} isLandscape={isLandscape} />
+      )}
+
+      {/* 図面モード（姿図配置モード）: 汎用パネル。表の 1 行ごとに足さない。mode.def の判定は、appMode だけ先に変わって
+          mode が前のモードの State のままの 1 描画で、他モードの State をパネルへ渡さないため */}
+      {isPlacedFigureMode(appMode) && mode?.def?.mode === appMode && (
+        <PlacedFigureModePanel graph={graph} mode={mode} isLandscape={isLandscape} />
       )}
 
       {/* 建具モード: 記号別採番リスト＋姿図・数値編集パネル */}
