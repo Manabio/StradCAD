@@ -42,11 +42,10 @@ import { ceilingStepHeightsByOwner } from '../ceiling/ceilingSurfaces.js';
 import { floorStepHeightsByOwner } from '../elevation/elevationStepFace.js';
 import { detailFigureCatalog } from '../openings/openingCatalog.js';
 import { REMOVED_MATERIALS } from '../catalog/legacyMaterialCodes.js';
-import { PlacedFigure } from '../core/placedFigure.js';
-import { PLACED_FIGURE_POSITION_STEP_MM, PLACED_FIGURE_ROTATION_STEP_DEG, FULL_TURN_DEG } from '../core/constants.js';
+import { updatePlacedFigure as updatePlacedFigureIn } from '../finish/placedFigure/placedFigureOps.js';
 import {
-  addPlacedFigure as addPlacedFigureTo, updatePlacedFigure as updatePlacedFigureIn, removePlacedFigure as removePlacedFigureFrom,
-} from '../finish/placedFigure/placedFigureOps.js';
+  placeFigure, updatePlacedFigureWithUndo, rotatePlacedFigureWithUndo, togglePlacedFigureMirrorWithUndo, removePlacedFigureWithUndo,
+} from '../finish/placedFigure/placedFigureCommands.js';
 import { collectPlacedFigureFailures } from '../finish/placedFigure/placedFigureFitCheck.js';
 
 function setsEqual(a, b) {
@@ -1105,13 +1104,7 @@ export class FinishModeState {
 
   /** 配置待ちの図を (wx, wy) を PLACED_FIGURE_POSITION_STEP_MM で丸めた点に置き、配置待ちを解いて置いた図を選択する。1回で undo 1エントリ。 */
   _placeFigureAt(wx, wy) {
-    const figureKey = this.placingFigureKey;
-    const x = Math.round(wx / PLACED_FIGURE_POSITION_STEP_MM) * PLACED_FIGURE_POSITION_STEP_MM;
-    const y = Math.round(wy / PLACED_FIGURE_POSITION_STEP_MM) * PLACED_FIGURE_POSITION_STEP_MM;
-    const id = crypto.randomUUID();
-    withFinishUndo(this.graph, () => this.graph.setPlacedFigures(
-      addPlacedFigureTo(this.graph.placedFigures, new PlacedFigure({ id, figureKey, x, y })),
-    ));
+    const id = placeFigure(this.graph, { id: crypto.randomUUID(), figureKey: this.placingFigureKey, x: wx, y: wy });
     this.placingFigureKey = null;
     this.selectPlacedFigure(id);
   }
@@ -1128,27 +1121,21 @@ export class FinishModeState {
 
   /** 配置の項目（x・y・zMm・rotationDeg・mirror・note など）を直す。無い id は何もしない（undo も積まない）。1回で undo 1エントリ。 */
   updatePlacedFigure(id, changes) {
-    if (updatePlacedFigureIn(this.graph.placedFigures, id, changes) === null) return;
-    withFinishUndo(this.graph, () => this.graph.setPlacedFigures(updatePlacedFigureIn(this.graph.placedFigures, id, changes)));
+    updatePlacedFigureWithUndo(this.graph, id, changes);
   }
 
   /** 配置を PLACED_FIGURE_ROTATION_STEP_DEG だけ（画面時計回りに）回す。 */
   rotatePlacedFigure(id) {
-    const pf = this.graph.placedFigures.find(p => p.id === id);
-    if (!pf) return;
-    this.updatePlacedFigure(id, { rotationDeg: (pf.rotationDeg + PLACED_FIGURE_ROTATION_STEP_DEG) % FULL_TURN_DEG });
+    rotatePlacedFigureWithUndo(this.graph, id);
   }
 
   togglePlacedFigureMirror(id) {
-    const pf = this.graph.placedFigures.find(p => p.id === id);
-    if (!pf) return;
-    this.updatePlacedFigure(id, { mirror: !pf.mirror });
+    togglePlacedFigureMirrorWithUndo(this.graph, id);
   }
 
   /** 配置を消す（確認なし。undo で戻る）。選択中なら選択も外す。無い id は何もしない。 */
   removePlacedFigure(id) {
-    if (removePlacedFigureFrom(this.graph.placedFigures, id) === null) return;
-    withFinishUndo(this.graph, () => this.graph.setPlacedFigures(removePlacedFigureFrom(this.graph.placedFigures, id)));
+    if (!removePlacedFigureWithUndo(this.graph, id)) return;
     if (this.selectedPlacedFigureId === id) this.selectedPlacedFigureId = null;
   }
 

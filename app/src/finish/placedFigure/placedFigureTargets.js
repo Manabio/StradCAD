@@ -37,6 +37,15 @@ export function isPlaceableViewFigure(fig, view) {
 }
 
 /**
+ * 配置の分類（DetailSubject）を図から引く。figureOf（キー→図エントリ）で図が引け、平面の配置図（canHaveDetailViews）ならその subject。
+ * 図が引けない・配置図でない・配置が無いときは null（分類不明）。
+ */
+export function placedFigureSubjectOf(placedFigure, figureOf) {
+  const fig = figureOf(placedFigure?.figureKey);
+  return canHaveDetailViews(fig) ? fig.subject : null;
+}
+
+/**
  * fitLocal に渡す targets を作る。datums は図の Datum.id をキーにする（fit が id で引くため）。
  * @param {object} fig DetailFigure（不正でも例外にせず fit の検証へ回す）
  * @returns {{targets:{datums:Object<string,number>, params:{}, materials:{}}} | {error:{code:string, message:string}}}
