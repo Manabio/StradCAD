@@ -869,6 +869,15 @@ export const DETAIL_FIGURE_VERSION = 1;
 export const FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD = 'detailFigures';
 /** 平面の姿図が別の向きの図を束ねる任意項目名（views）。カタログ層が読み替え・推移展開・照合で引く。 */
 export const DETAIL_VIEWS_FIELD = 'views';
+/** 平面の姿図が持つ製品情報の任意項目名（product。名称・メーカー・型番・色名。配置ごとでなく図の側に持つ）。 */
+export const DETAIL_PRODUCT_FIELD = 'product';
+/** product のキー（値は文字列）。 */
+export const DetailProductField = Object.freeze({
+  NAME:         'name',
+  MAKER:        'maker',
+  MODEL_NUMBER: 'modelNumber',
+  COLOR_NAME:   'colorName',
+});
 /** 建具一式（DetailCategory.FITTING）の部品の列を持つ項目名（図エントリの最上位）。 */
 export const DETAIL_PARTS_FIELD = 'parts';
 /** 詳細図キーの接頭辞（S4 の生成が使う。S2 の登録表は書式を検査しない）。 */

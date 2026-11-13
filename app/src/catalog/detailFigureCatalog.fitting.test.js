@@ -61,12 +61,13 @@ function subType(key, over) {
   return { category: 'fitting', key, label: `種別${key}`, mechanism: 'swing', defaultWidth: 800, defaultHeight: 2000, ...over };
 }
 
-test('登録表: parts は knownFields・compareFields に入り、dedupeFields の先頭・matchFields の末尾', () => {
+test('登録表: parts は knownFields・compareFields に入り、dedupeFields の先頭・matchFields の末尾（product が後ろに足されてからは末尾の 1 つ前）', () => {
   const def = kindDef(DF);
   assert.ok(def.knownFields.includes('parts'));
   assert.ok(def.compareFields.includes('parts'));
   assert.equal(def.dedupeFields[0], 'parts');
-  assert.equal(def.matchFields.at(-1), 'parts', 'parts は末尾（先頭だと一式の無い図の閾値が下がる）');
+  assert.equal(def.matchFields.at(-2), 'parts', 'parts は先頭でない（先頭だと一式の無い図の閾値が下がる）。末尾は product（S1）');
+  assert.equal(def.matchFields.at(-1), 'product');
 });
 
 function reconcilePlan(doc, app) {

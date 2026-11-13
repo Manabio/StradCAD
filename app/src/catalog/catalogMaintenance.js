@@ -33,9 +33,9 @@ import { stripOverridesBuiltin, IMPORTED_SOURCES } from './usedEntries.js';
 export { IMPORTED_SOURCES };
 import {
   DetailCategory, DetailView, DetailSubject, DetailSlot, DETAIL_SLOT_TARGETS, FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD,
-  DetailProvenanceSource, DetailPlacementView, FittingPartRole,
+  DetailProvenanceSource, DetailPlacementView, FittingPartRole, DETAIL_PRODUCT_FIELD, DetailProductField,
 } from '../core/constants.js';
-import { DETAIL_PLACEMENT_VIEW_LABEL_TEXT } from '../error.js';
+import { DETAIL_PLACEMENT_VIEW_LABEL_TEXT, DETAIL_PRODUCT_TEXT } from '../error.js';
 
 /** 材の役割（カテゴリ）。materialData.js の MATERIAL_CATEGORY と同じ3値
  * （本体マスタは静的 import できないため、ここでは値の集合だけを持つ）。 */
@@ -256,6 +256,32 @@ export function formatDetailViews(views) {
   const unknown = Object.keys(views).filter(k => !known.includes(k));
   return [...known.map(v => [DETAIL_PLACEMENT_VIEW_LABELS[v], views[v]]), ...unknown.map(k => [k, views[k]])]
     .map(([label, value]) => `${label}: ${formatReadonlyValue(value)}`).join('・');
+}
+
+/** 製品情報（product）の項目ごとの表示名。 */
+const DETAIL_PRODUCT_FIELD_LABELS = Object.freeze({
+  [DetailProductField.NAME]:         DETAIL_PRODUCT_TEXT.name,
+  [DetailProductField.MAKER]:        DETAIL_PRODUCT_TEXT.maker,
+  [DetailProductField.MODEL_NUMBER]: DETAIL_PRODUCT_TEXT.modelNumber,
+  [DetailProductField.COLOR_NAME]:   DETAIL_PRODUCT_TEXT.colorName,
+});
+
+/**
+ * 詳細図の product（製品情報）を閲覧用の 1 行にする。DetailProductField の順に「名称: 値」を「・」で並べる。
+ * 未知のキー・文字列でない値は後ろに生のまま足す（壊れた値を隠さない）。product が無い（null/undefined）・空は formatReadonlyValue に委ねる。
+ */
+export function formatDetailProduct(product) {
+  if (product === null || typeof product !== 'object' || Array.isArray(product) || Object.keys(product).length === 0) return formatReadonlyValue(product);
+  const known = Object.values(DetailProductField).filter(f => Object.hasOwn(product, f));
+  const unknown = Object.keys(product).filter(k => !known.includes(k));
+  return [...known.map(f => [DETAIL_PRODUCT_FIELD_LABELS[f], product[f]]), ...unknown.map(k => [k, product[k]])]
+    .map(([label, value]) => `${label}: ${formatReadonlyValue(value)}`).join('・');
+}
+
+/** 製品の表示名。product.name が（空白を除いて）空なら図の呼称（label）。後の給排水パネルが使う。 */
+export function productDisplayName(figure) {
+  const name = figure?.[DETAIL_PRODUCT_FIELD]?.[DetailProductField.NAME];
+  return typeof name === 'string' && name.trim() !== '' ? name.trim() : (figure?.label ?? '');
 }
 
 /**

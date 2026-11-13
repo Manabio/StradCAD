@@ -20,7 +20,7 @@
 // 増えていないかで都度確認すること。
 // ================================================================
 
-import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD } from '../core/constants.js';
+import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD, DETAIL_PRODUCT_FIELD } from '../core/constants.js';
 import { isSupportedDetailFigure } from '../detail/detailModel.js';
 
 function isPlainObject(v) {
@@ -608,22 +608,24 @@ const REGISTRY = Object.assign(Object.create(null), {
       return { key };
     },
     encoding: 'json',
-    knownFields: ['key', 'version', 'label', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD],
+    knownFields: ['key', 'version', 'label', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD, DETAIL_PRODUCT_FIELD],
     requiredFields: ['key', 'label', 'category', 'view', 'strokes'],
     keyBoundFields: ['key'],
     overrideLockedFields: [],
     // views（平面の姿図が束ねる別の図）は入れ子のため厳密比較。建具記号の detailFigures と同じく compare だけ（dedupe には入れない）。
-    compareFields: ['version', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD],
+    compareFields: ['version', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD, DETAIL_PRODUCT_FIELD],
     silentDiffFields: ['label'],
     // strokes を先頭に置く: 末尾から外す段階的探索でも strokes は最後まで残る（線が違う図を
     // 呼称・分類だけで「同じもの」と見なさない）。入れ子は厳密比較（規約）。
     // parts は末尾: 一式の無い図の段は不変（parts は両方 undefined で一致扱い・最後の段 ['strokes'] の実質は変わらない）。
     // 一式は部品が違えば propose・同じなら alias。先頭に足すと最後の段が strokes だけになり一式の無い図の閾値が下がるので不可。
-    matchFields: ['strokes', 'category', 'view', 'subject', 'label', DETAIL_PARTS_FIELD],
+    // product（製品情報）も末尾（parts の後ろ）: 持たない図の段は不変。色違い（線・label が同じで product だけ違う図）は最後の段で外れて propose になる。
+    matchFields: ['strokes', 'category', 'view', 'subject', 'label', DETAIL_PARTS_FIELD, DETAIL_PRODUCT_FIELD],
     minMatchFields: 2,
     // 建具一式（parts）は最上位の strokes が空なので、parts で一式どうしを区別し同じ図に畳まない
     // （views は dedupe に入れないが、parts は入れる。Q-C2）。
-    dedupeFields: [DETAIL_PARTS_FIELD, 'strokes', 'label', 'category', 'view', 'subject'],
+    // product も入れる: 入れないと、線・label が同じで製品情報だけ違う「色違い」の図が重複エラーになる。
+    dedupeFields: [DETAIL_PARTS_FIELD, 'strokes', 'label', 'category', 'view', 'subject', DETAIL_PRODUCT_FIELD],
     // 浅い型検査だけ（必須項目の存在・配列か・文字列か）。深い検査（語彙・長さ・Anchor 規則）を例外にすると、
     // validateBundle の例外で全種別の overlay が立たなくなる——深い検査は isSupported（unsupported 通知）へ。
     // version・subject・datums・anchors は省略可（省略は isSupported/検証側が扱う）。

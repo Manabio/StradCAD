@@ -3,7 +3,7 @@ import './DetailHelperPanel.css';
 import { CatalogKind } from '../catalog/catalogKinds.js';
 import { overlayFor, docDiffMap } from '../catalog/catalogRegistry.js';
 import { planRemoveUserEntry, applyCatalogEditPlan, FITTING_PART_ROLE_TEXT } from '../catalog/catalogMaintenance.js';
-import { DetailLenMode, DetailEdgeMark, DetailCategory } from '../core/constants.js';
+import { DetailLenMode, DetailEdgeMark, DetailCategory, DETAIL_PRODUCT_FIELD, DetailProductField } from '../core/constants.js';
 import { canHaveDetailViews } from '../detail/detailModel.js';
 import { detailFigureCatalog } from '../openings/openingCatalog.js';
 import { detailBuiltinFigures } from '../detail/detailPlacement.js';
@@ -24,7 +24,7 @@ import {
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, saveDecision, planSave, afterSaveDoc,
   deleteConfirmMessage, defaultFitDimsFor, fitDimFieldsFor, tryFit, previewPrimitivesOf, labelOptions, pushHistory,
   displayLen, strokeLabel, strokeTitle, moveSpanLabel, distanceButtonLabel, offsetButtonLabel, fitDimButtonLabel,
-  libraryMetaLabel, wallThicknessNotice, DETAIL_PLACEMENT_VIEW_LABELS, placementViewOptions, setPlacementView,
+  libraryMetaLabel, wallThicknessNotice, DETAIL_PLACEMENT_VIEW_LABELS, placementViewOptions, setPlacementView, setProductField,
   helperLibraryRows, libraryOriginOf, libraryRowActions, libraryEntryOf, planRevert, unlockDoc, LIBRARY_ORIGIN,
   loadDxf, setDxfUnit, toggleDxfLayer, setDxfLayers, dxfLayerRows, toggleDxfComponent, setDxfProvenanceField, dxfComponentRows, dxfUnitHint, dxfWarningTexts,
   dxfPreviewPrimitives, draftFromDxf, draftDocOf, provenanceNoticeOf, DETAIL_HELPER_TABS, setProvenanceField,
@@ -51,7 +51,7 @@ import {
 } from '../structural/sectionFigure/figureView.js';
 import { useLongPress } from '../interaction/useLongPress.js';
 import { DXF_PROVENANCE_FIELDS, PdfReject, PDF_MAX_BYTES, PDF_SIGNATURE_SCAN_BYTES, PDF_PREVIEW_SCALE } from '../core/constants.js';
-import { ERR_DXF_FILE_READ_FAILED, ERR_PDF_PAGE_FAILED } from '../error.js';
+import { ERR_DXF_FILE_READ_FAILED, ERR_PDF_PAGE_FAILED, DETAIL_PRODUCT_TEXT } from '../error.js';
 
 /**
  * 部分詳細図ヘルパー（全画面パネル）。ペン入力で一筆書きの図を描き、基準・寸法を指定して
@@ -76,6 +76,8 @@ const FIELD_OPTIONS = labelOptions(DETAIL_MATERIAL_FIELD_LABELS);
 const KIND_OPTIONS = labelOptions(DETAIL_DATUM_KIND_LABELS);
 const AXIS_OPTIONS = labelOptions(DETAIL_AXIS_LABELS);
 const PLACEMENT_VIEW_OPTIONS = labelOptions(DETAIL_PLACEMENT_VIEW_LABELS);
+/** 製品情報の 4 欄（DetailProductField の値と表示名。キーは error.js の DETAIL_PRODUCT_TEXT と同名）。 */
+const PRODUCT_FIELD_ROWS = Object.freeze(Object.values(DetailProductField).map(field => ({ field, label: DETAIL_PRODUCT_TEXT[field] })));
 
 function Select({ value, options, onChange, disabled, empty, title }) {
   return (
@@ -499,6 +501,8 @@ export function DetailHelperPanel({ onClose }) {
   const fitFields = fitDimFieldsFor(form);
   // 図の束の候補（三層合成後の詳細図。配置図のときだけ読む）
   const viewCatalog = canHaveDetailViews(form) ? [...detailFigureCatalog().values()] : null;
+  // 製品情報の欄は配置図のときだけ出す（図の束と同じ頭の図）
+  const showProduct = canHaveDetailViews(form);
   // 部屋の取り合いの材束縛を解く材マップ（材コード→材。材の一覧が読めるまでは null＝材束縛の図は UNRESOLVED_MATERIAL）
   const materialMap = useMemo(() => (materialList ? new Map(materialList.map(m => [m.code, m])) : null), [materialList]);
   const fitted = useMemo(() => (fitOn && !partless ? tryFit(form, fitDims, { materialMap }) : null), [fitOn, partless, form, fitDims, materialMap]);
@@ -1151,6 +1155,17 @@ export function DetailHelperPanel({ onClose }) {
                   <label key={view} className="dthlp-row">{label}
                     <Select value={form.views?.[view] ?? ''} options={placementViewOptions(form, viewCatalog, view)} disabled={readOnly}
                       onChange={key => edit(f => setPlacementView(f, view, key))} />
+                  </label>
+                ))}
+              </div>
+            )}
+            {showProduct && (
+              <div>
+                <span>{DETAIL_PRODUCT_TEXT.group}</span>
+                {PRODUCT_FIELD_ROWS.map(({ field, label }) => (
+                  <label key={field} className="dthlp-row">{label}
+                    <input className="dthlp-input" value={form[DETAIL_PRODUCT_FIELD]?.[field] ?? ''} readOnly={readOnly}
+                      onChange={e => edit(f => setProductField(f, field, e.target.value), { track: false })} />
                   </label>
                 ))}
               </div>

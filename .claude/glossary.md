@@ -595,6 +595,9 @@ S造スラブ（`SteelSlab`）のセルキー。梁で囲まれた区画（ベ�
 ## 図の束（views）
 平面の配置図が持つ任意項目。正面・背面・左・右・天井（`DetailPlacementView`）ごとに、別の詳細図（立面の姿図）のキーを指す。展開・立面は見る向きに応じて束から図を選ぶ。
 
+## 製品情報（product）
+平面の配置図が持つ任意項目。名称・メーカー・型番・色名（`DetailProductField`）。配置ごとでなく図の側に持ち、色違いは図を複製して表す。名称は呼称（label）と別で、空なら呼称で表示する。出所（provenance）のメーカーとは別物。
+
 ## 配置原点（DetailDatumRole.PLACEMENT_ORIGIN）
 配置図の基準の役割。この基準が姿図の配置点（x, y）そのものに当たる（`finish/placedFigure/placedFigureTargets.js`）。
 

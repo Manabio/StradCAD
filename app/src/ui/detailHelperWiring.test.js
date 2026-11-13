@@ -243,6 +243,32 @@ test('【検出力】図の束 select の配線を壊すと判定が落ちる（
   assert.ok(!placementViewsWired(src.replace("import { detailFigureCatalog } from '../openings/openingCatalog.js';", "import { detailFigureCatalog } from '../catalog/catalogRegistry.js';")));
 });
 
+// S1: 製品情報の 4 欄。配置図（canHaveDetailViews）のときだけ出し、変更は setProductField を edit 経由で・読み取り専用は readOnly。式の末尾（/>）まで照合する。
+const productFieldsWired = src =>
+  /const PRODUCT_FIELD_ROWS = Object\.freeze\(Object\.values\(DetailProductField\)\.map\(field => \(\{ field, label: DETAIL_PRODUCT_TEXT\[field\] \}\)\)\);/.test(src)
+  && /const showProduct = canHaveDetailViews\(form\);/.test(src)
+  && /\{showProduct && \(\s*<div>\s*<span>\{DETAIL_PRODUCT_TEXT\.group\}<\/span>/.test(src)
+  && /\{PRODUCT_FIELD_ROWS\.map\(\(\{ field, label \}\) => \(/.test(src)
+  && /<input className="dthlp-input" value=\{form\[DETAIL_PRODUCT_FIELD\]\?\.\[field\] \?\? ''\} readOnly=\{readOnly\}\s*onChange=\{e => edit\(f => setProductField\(f, field, e\.target\.value\), \{ track: false \}\)\} \/>/.test(src);
+
+test('【配線】DetailHelperPanel.jsx(S1): 製品情報の 4 欄が canHaveDetailViews で出し分けられ、setProductField を edit 経由で呼び、読み取り専用', () => {
+  assert.ok(productFieldsWired(stripComments(readSrc('ui/DetailHelperPanel.jsx'))));
+});
+
+test('【検出力】製品情報の欄の配線を壊すと判定が落ちる（出し分け・readOnly・edit を介さない・setter・コメントへ退避）', () => {
+  const src = stripComments(readSrc('ui/DetailHelperPanel.jsx'));
+  assert.ok(!productFieldsWired(src.replace('{showProduct && (', '{true && (')));
+  assert.ok(!productFieldsWired(src.replace('const showProduct = canHaveDetailViews(form);', 'const showProduct = true;')));
+  const noReadOnly = src.replace("[field] ?? ''} readOnly={readOnly}", "[field] ?? ''}");
+  assert.notEqual(noReadOnly, src);
+  assert.ok(!productFieldsWired(noReadOnly));
+  assert.ok(!productFieldsWired(src.replace('edit(f => setProductField(f, field, e.target.value), { track: false })', 'setProductField(form, field, e.target.value)')));
+  assert.ok(!productFieldsWired(src.replace('setProductField(f, field, e.target.value)', 'setClosed(f, field, e.target.value)')));
+  const commented = src.replace('onChange={e => edit(f => setProductField(f, field, e.target.value), { track: false })} />', '/* onChange={e => edit(f => setProductField(f, field, e.target.value), { track: false })} */ />');
+  assert.notEqual(commented, src);
+  assert.ok(!productFieldsWired(stripComments(commented)));
+});
+
 test('【検出力】コメントだけに書いた配線は判定を満たさない', () => {
   const commentOnly = [
     "// runBusy('カタログ適用', () => applyCatalogEditPlan(KIND, plan, {}));",

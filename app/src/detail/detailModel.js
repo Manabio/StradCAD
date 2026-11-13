@@ -13,6 +13,7 @@
 //   normalize は offsetMm のキーを足さない（持たない図のバイト・比較を変えない）。
 //   views（任意）= { front?, back?, left?, right?, ceiling? }（値＝別の詳細図キー）。平面の姿図（FIGURE・PLAN・PLACED_FIGURE_SUBJECTS）だけが持てる。
 //   ここでは形だけ検証する（実在・分類の一致はカタログ層）。normalize は views のキーを足さない。
+//   product（任意）= { name?, maker?, modelNumber?, colorName? }（値＝文字列）。views と同じく平面の姿図だけが持てる。normalize は product のキーを足さない。
 // closed の規約: 閉じ辺は描画側が補う。始点へ戻る手は書かない（mm で歩いた終点が始点に一致する closed は CLOSED_RETURNS_TO_START）。
 // 既知の限界: CLOSED_RETURNS_TO_START は LenSpec.mm（プレビュー値）で判定する。param・material・stretch の closed は
 // fit で解決した値では閉じ辺が 0 になる（またはならない）ことがあり、登録時には検出しない。
@@ -23,6 +24,7 @@ import {
   PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumKind, DetailAxis,
   DetailDatumRole, DetailParam, DetailMaterialField, DetailDash, DetailEdgeMark, DETAIL_VIEW_COMBOS,
   DetailPlacementView, PLACED_FIGURE_SUBJECTS, DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD,
+  DETAIL_PRODUCT_FIELD, DetailProductField,
   DETAIL_FIGURE_VERSION, LINE_WEIGHT_MM, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_FIT_EPS_MM,
   FittingPartRole, FITTING_PART_TARGETS, FITTING_PART_KEY_SEPARATOR,
 } from '../core/constants.js';
@@ -67,6 +69,7 @@ export const DetailValidationError = Object.freeze({
   STRETCH_WITHOUT_END:     'stretchWithoutEnd',    // stretch があるのに end の Anchor が無い
   STRETCH_OUT_OF_SPAN:     'stretchOutOfSpan',     // stretch の手が origin〜end の頂点の間に無い
   BAD_VIEWS:               'badViews',             // views の形・キー・値が不正、または views を持てない分類（読める図なので SUPPORT_BLOCKING には入れない）
+  BAD_PRODUCT:             'badProduct',           // product の形・キー・値が不正、または product を持てない分類（読める図なので SUPPORT_BLOCKING には入れない）
   PARTS_EMPTY:             'partsEmpty',           // 建具一式の parts が 0 個（読める図）
   PART_DUPLICATE:          'partDuplicate',        // 建具一式の部品の id・role の重複（読める図）
   PART_UNKNOWN_ROLE:       'partUnknownRole',      // 建具一式の部品の role が語彙に無い（未知の語彙＝読めない図）
@@ -197,6 +200,7 @@ function validateFittingSet(fig, input, push) {
     push(E.SHAPE, '建具一式の最上位に strokes・datums・anchors は持てない（部品が持つ）', 'strokes');
   }
   if (fig[DETAIL_VIEWS_FIELD] != null) push(E.BAD_VIEWS, '建具一式は views を持てない', DETAIL_VIEWS_FIELD);
+  if (fig[DETAIL_PRODUCT_FIELD] !== undefined) push(E.BAD_PRODUCT, '建具一式は product を持てない', DETAIL_PRODUCT_FIELD);
   if (!Array.isArray(fig[DETAIL_PARTS_FIELD])) { push(E.SHAPE, 'parts が配列でない', DETAIL_PARTS_FIELD); return; }
   if (fig[DETAIL_PARTS_FIELD].length === 0) { push(E.PARTS_EMPTY, '部品が 0 個', DETAIL_PARTS_FIELD); return; }
   const ids = new Set();
@@ -269,6 +273,20 @@ export function validateDetailFigure(input) {
         if (!isEnum(DetailPlacementView, name)) push(E.BAD_VIEWS, `未知の views のキー: ${name}`, `${DETAIL_VIEWS_FIELD}.${name}`);
         else if (!isNonEmptyString(value)) push(E.BAD_VIEWS, `views の値が非空文字列でない: ${String(value)}`, `${DETAIL_VIEWS_FIELD}.${name}`);
         else if (value === fig.key) push(E.BAD_VIEWS, `views が自分自身を指している: ${name}`, `${DETAIL_VIEWS_FIELD}.${name}`);
+      }
+    }
+  }
+
+  // ---- product（製品情報。views と同じ「頭の図だけ」。明示 undefined は無しと同じ。null は非オブジェクトの誤り）----
+  const product = fig[DETAIL_PRODUCT_FIELD];
+  if (product !== undefined) {
+    if (!canHaveDetailViews(fig)) push(E.BAD_PRODUCT, `product を持てない分類 (${String(fig.category)}, ${String(fig.view)}, ${String(fig.subject)})`, DETAIL_PRODUCT_FIELD);
+    if (!isObj(product)) push(E.BAD_PRODUCT, 'product がオブジェクトでない', DETAIL_PRODUCT_FIELD);
+    else {
+      if (Object.keys(product).length === 0) push(E.BAD_PRODUCT, 'product が空（無しは項目ごと持たない）', DETAIL_PRODUCT_FIELD);
+      for (const [name, value] of Object.entries(product)) {
+        if (!isEnum(DetailProductField, name)) push(E.BAD_PRODUCT, `未知の product のキー: ${name}`, `${DETAIL_PRODUCT_FIELD}.${name}`);
+        else if (typeof value !== 'string' || value.trim() === '') push(E.BAD_PRODUCT, `product の値が空白を除いて空でない文字列でない: ${String(value)}`, `${DETAIL_PRODUCT_FIELD}.${name}`);
       }
     }
   }

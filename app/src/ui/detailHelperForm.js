@@ -21,7 +21,7 @@ import {
   DetailMaterialField, DetailDash, DetailProvenanceSource, DETAIL_VIEW_COMBOS, DETAIL_FIGURE_VERSION,
   DETAIL_FIGURE_KEY_PREFIX, DETAIL_DEFAULT_WEIGHT_ROLE, DETAIL_DRAFT_HISTORY_MAX,
   DETAIL_SLOT_TARGETS, DetailSlot, DetailEdgeMark, ROOM_DETAIL_SLOTS, KNEE_DROP_DETAIL_SLOTS, DETAIL_FIT_DEFAULT_STEP_HEIGHT_MM, DETAIL_FIT_DEFAULT_BASEBOARD_HEIGHT_MM, DxfWarning, DxfReject, DXF_INSERT_DEPTH_MAX,
-  DXF_PROVENANCE_FIELDS, DXF_PREVIEW_STYLE, DetailPlacementView, DETAIL_VIEWS_FIELD,
+  DXF_PROVENANCE_FIELDS, DXF_PREVIEW_STYLE, DetailPlacementView, DETAIL_VIEWS_FIELD, DETAIL_PRODUCT_FIELD, DetailProductField,
   FITTING_PART_TARGETS, FittingPartRole, SLIDE_OUTSET_SUBTYPE, FRAME_OVERHANG_MM, FRAME_JAMB_WIDTH_MM,
 } from '../core/constants.js';
 import { readDxf, buildDxfScene } from '../detail/dxf/dxfImport.js';
@@ -559,11 +559,13 @@ function entryMoveOf(fm) {
 
 /** カタログのエントリ → フォーム。数値は String() で文字列にする。エントリが持つ未知の項目は extra に保つ。 */
 export function formFromEntry(entry) {
-  const { key, label, category, view, subject, strokes, datums, anchors, [DETAIL_VIEWS_FIELD]: views, ...extra } = entry;
+  const { key, label, category, view, subject, strokes, datums, anchors, [DETAIL_VIEWS_FIELD]: views, [DETAIL_PRODUCT_FIELD]: product, ...extra } = entry;
   return {
     key, label: label ?? '', category, view, subject,
     // 図の束は null／無しなら持たない（フォームに views キーを足さない＝印なしの図はフォームも不変）
     ...(views == null ? {} : { [DETAIL_VIEWS_FIELD]: views }),
+    // 製品情報は無し（undefined）のときだけ持たない（null は壊れた値として残し、検証が知らせる）
+    ...(product === undefined ? {} : { [DETAIL_PRODUCT_FIELD]: product }),
     strokes: (strokes ?? []).map(s => ({ ...s, line: s.line ?? defaultLine(), closed: s.closed ?? false, moves: (s.moves ?? []).map(formMoveOf) })),
     datums: (datums ?? []).map(d => {
       const { offsetMm, ...rest } = d;
@@ -587,6 +589,23 @@ function viewsEntryPart(form) {
   return { [DETAIL_VIEWS_FIELD]: out };
 }
 
+/**
+ * 製品情報の保存形。文字列の値は前後の空白を除き、空の項目は落とす。全部空なら項目ごと持たない（持てない分類の {} は BAD_PRODUCT のため）。
+ * DetailProductField の順に並べ、未知のキーは後ろに残す。壊れた値（非オブジェクト・文字列でない値）はそのまま残し、検証が知らせる。
+ */
+function productEntryPart(form) {
+  const product = form[DETAIL_PRODUCT_FIELD];
+  if (product === undefined) return {};
+  if (product === null || typeof product !== 'object' || Array.isArray(product)) return { [DETAIL_PRODUCT_FIELD]: product };
+  const known = Object.values(DetailProductField).filter(f => Object.hasOwn(product, f));
+  const out = {};
+  for (const k of [...known, ...Object.keys(product).filter(k => !known.includes(k))]) {
+    const v = typeof product[k] === 'string' ? product[k].trim() : product[k];
+    if (v !== '') out[k] = v;
+  }
+  return Object.keys(out).length === 0 ? {} : { [DETAIL_PRODUCT_FIELD]: out };
+}
+
 /** フォーム → カタログのエントリ（文字列の数値は parseNumberText で数値へ。読めない欄は NaN になり検証が理由を返す）。 */
 export function entryFromForm(form) {
   // DXF・PDF 由来の出所は、編集中の生の入力を保存形（trim 済み）へ揃える。
@@ -597,6 +616,7 @@ export function entryFromForm(form) {
     ...extra,
     key: form.key, label: form.label, category: form.category, view: form.view, subject: form.subject,
     ...viewsEntryPart(form),
+    ...productEntryPart(form),
     strokes: form.strokes.map(s => ({ ...s, moves: s.moves.map(entryMoveOf) })),
     datums: form.datums.map(d => {
       const { offset, ...rest } = d;
@@ -899,6 +919,10 @@ export function setClassification(form, field, value) {
   if (next[DETAIL_VIEWS_FIELD] !== undefined && !canHaveDetailViews(next)) {
     next = Object.fromEntries(Object.entries(next).filter(([k]) => k !== DETAIL_VIEWS_FIELD));
   }
+  // 製品情報も同じ（持てない分類の product は BAD_PRODUCT になる）
+  if (next[DETAIL_PRODUCT_FIELD] !== undefined && !canHaveDetailViews(next)) {
+    next = Object.fromEntries(Object.entries(next).filter(([k]) => k !== DETAIL_PRODUCT_FIELD));
+  }
   // 建具の姿図・姿図の配置へ出入りするときは、既定の role のままの基準を移行先の既定へ寄せる（ユーザーが選んだ role は触らない）。
   if (isElevationFigureForm(form) === isElevationFigureForm(next) && isPlacementFigure(form) === isPlacementFigure(next)) return next;
   return {
@@ -948,6 +972,19 @@ export function setPlacementView(form, view, keyOrEmpty) {
   else views[view] = keyOrEmpty;
   if (Object.keys(views).length === 0) return prev === undefined ? form : rest;
   return { ...form, [DETAIL_VIEWS_FIELD]: views }; // 既にあるキーは位置を保つ（isDraftDirty は JSON 比較）
+}
+
+/**
+ * 製品情報の 1 項目を設定する（入力中の生の文字列のまま持つ。空白除去・空落としは entryFromForm）。
+ * 配置図でない form・未知の field・文字列でない value は同一参照を返す（edit は同一参照なら履歴に積まない）。
+ */
+export function setProductField(form, field, value) {
+  if (!canHaveDetailViews(form) || !Object.values(DetailProductField).includes(field)) return form;
+  if (typeof value !== 'string') return form;
+  const prev = form[DETAIL_PRODUCT_FIELD];
+  const base = prev !== null && typeof prev === 'object' && !Array.isArray(prev) ? prev : {};
+  if (base[field] === value) return form;
+  return { ...form, [DETAIL_PRODUCT_FIELD]: { ...base, [field]: value } };
 }
 
 // ================================================================

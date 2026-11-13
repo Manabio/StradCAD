@@ -21,19 +21,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { planIncomingReconcile, applyReconcilePlan, rewriteDocSymbolDetailFigures } from './incomingReconcile.js';
 import { buildResolveRows, defaultResolveDecision } from './resolveQueue.js';
-import { formatDetailViewLabel, formatCategoryLabel, formatDetailViews, DETAIL_PLACEMENT_VIEW_LABELS } from './catalogMaintenance.js';
-import { diffEntries } from './catalogMatch.js';
+import {
+  formatDetailViewLabel, formatCategoryLabel, formatDetailViews, DETAIL_PLACEMENT_VIEW_LABELS, formatDetailProduct, productDisplayName, formatReadonlyValue,
+} from './catalogMaintenance.js';
+import { diffEntries, matchByContent, valuesEqual } from './catalogMatch.js';
+import { diffPairs, diffTooltip } from './catalogDiffView.js';
 import {
   SNAPSHOT_REF_WALKERS, setDocumentAliases, clearDocumentAliases, applyDocumentCodeNormalization,
 } from './codeNormalization.js';
 import { buildDocumentJson, parseDocumentEnvelope } from '../storage/documentFile.js';
-import { isSupportedDetailFigure } from '../detail/detailModel.js';
+import { isSupportedDetailFigure, validateDetailFigure, DetailValidationError } from '../detail/detailModel.js';
 import {
   figureOf, strokeOf, move, vmove, fixedLen, materialLen,
 } from '../detail/detailTestFixtures.js';
 import {
   PenDir, DetailSlot, DetailMaterialField, DetailCategory, DetailView, DetailSubject,
-  FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DetailPlacementView,
+  FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DetailPlacementView, FittingPartRole,
 } from '../core/constants.js';
 
 const DF = CatalogKind.DETAIL_FIGURE;
@@ -92,13 +95,13 @@ test('【失敗系】登録表: keyOf／parseKey は空・欠落の key を例�
 
 test('登録表: 照合・比較・重複禁止の項目', () => {
   const def = kindDef(DF);
-  assert.deepEqual(def.knownFields, ['key', 'version', 'label', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', 'views', 'parts']);
+  assert.deepEqual(def.knownFields, ['key', 'version', 'label', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', 'views', 'parts', 'product']);
   assert.deepEqual(def.requiredFields, ['key', 'label', 'category', 'view', 'strokes']);
-  assert.deepEqual(def.compareFields, ['version', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', 'views', 'parts']);
+  assert.deepEqual(def.compareFields, ['version', 'category', 'view', 'subject', 'strokes', 'datums', 'anchors', 'provenance', 'note', 'views', 'parts', 'product']);
   assert.deepEqual(def.silentDiffFields, ['label']);
-  assert.deepEqual(def.matchFields, ['strokes', 'category', 'view', 'subject', 'label', 'parts']);
+  assert.deepEqual(def.matchFields, ['strokes', 'category', 'view', 'subject', 'label', 'parts', 'product'], 'product は末尾（parts の後ろ）');
   assert.equal(def.minMatchFields, 2);
-  assert.deepEqual(def.dedupeFields, ['parts', 'strokes', 'label', 'category', 'view', 'subject']);
+  assert.deepEqual(def.dedupeFields, ['parts', 'strokes', 'label', 'category', 'view', 'subject', 'product']);
   assert.deepEqual(def.keyBoundFields, ['key']);
   assert.deepEqual(def.overrideLockedFields, []);
 });
@@ -816,6 +819,144 @@ test('重複禁止③: 線・呼称・分類・向き・主題がすべて同じ
   assert.equal(composeCatalog(DF, []).size, 2, '呼称が違えば別物');
 });
 
+// ---- S1: 製品情報（product）。色違い（線・label が同じで product だけ違う図）は別の図として登録できる ----
+
+const placedFig = (key, over = {}) => detailFigure(key, '洋風便器', null, {
+  category: DetailCategory.FIGURE, view: DetailView.PLAN, subject: DetailSubject.SANITARY, ...over,
+});
+const WHITE = { name: '洋風便器', colorName: 'ホワイト' };
+const IVORY = { name: '洋風便器', colorName: 'アイボリー' };
+
+test('S1 照合の不変: product を持たない図どうしは、旧 matchFields（product 無し）と同じ hits・exact で当たる（level は 1 項目増える分だけずれる）', () => {
+  const OLD_FIELDS = ['strokes', 'category', 'view', 'subject', 'label', 'parts'];
+  const oldMatch = (target, entries) => {
+    for (let len = OLD_FIELDS.length; len >= 2; len--) {
+      const hits = entries.filter(e => OLD_FIELDS.slice(0, len).every(f => valuesEqual(target[f], e[f])));
+      if (hits.length > 0) return { exact: len === OLD_FIELDS.length, keys: hits.map(e => e.key) };
+    }
+    return { exact: false, keys: [] };
+  };
+  const fitPart = (id, role) => ({ id, role, figure: { category: DetailCategory.PART, view: DetailView.PLAN, subject: DetailSubject.JAMB, strokes: otherStrokes() } });
+  const fitting = (key, parts) => ({
+    key, version: 1, label: '一式', category: DetailCategory.FITTING, view: DetailView.PLAN, subject: DetailSubject.OPENING,
+    strokes: [], datums: [], anchors: [], provenance: null, note: null, parts,
+  });
+  const PARTS = [fitPart('p1', FittingPartRole.JAMB), fitPart('p2', FittingPartRole.FIGURE)];
+  const entries = [
+    detailFigure('df-1', '呼称A'),
+    detailFigure('df-2', '呼称B', null, { strokes: otherStrokes() }),
+    detailFigure('df-3', '呼称C', null, { view: DetailView.SECTION }),
+    fitting('df-fit', PARTS),
+  ];
+  const targets = [
+    detailFigure('df-t1', '呼称A'),                                        // 完全一致
+    detailFigure('df-t2', '別の呼称'),                                      // label だけ違う（部分一致）
+    detailFigure('df-t3', '呼称B', null, { strokes: otherStrokes() }),     // 別の図に完全一致
+    detailFigure('df-t4', '呼称A', null, { strokes: [strokeOf('z', [move(PenDir.LEFT, fixedLen(99)), move(PenDir.UP, fixedLen(98))])] }), // 線が違う
+    detailFigure('df-t5', '呼称C', null, { view: DetailView.SECTION }),
+    // 線だけ同じで分類・呼称が違う（最後の段は strokes＋category の 2 項目。product が先頭に入ると strokes だけで当たってしまう）
+    detailFigure('df-t6', '無関係', null, { category: DetailCategory.FIGURE, view: DetailView.PLAN, subject: DetailSubject.SANITARY }),
+  ];
+  // 建具一式（parts を持つ図）: 同じ parts でキー違い（完全一致）・部品を 1 つ落としたもの（parts の段を外して当たる）
+  targets.push(fitting('df-fit-same', PARTS), fitting('df-fit-less', PARTS.slice(0, 1)));
+  for (const t of targets) {
+    const now = matchByContent(DF, t, entries);
+    const old = oldMatch(t, entries);
+    assert.equal(now.exact, old.exact, t.key);
+    assert.deepEqual(now.hits.map(e => e.key), old.keys, t.key);
+  }
+  assert.equal(matchByContent(DF, targets[0], entries).exact, true);
+  assert.equal(matchByContent(DF, targets[1], entries).hits.length > 0, true);
+  assert.equal(matchByContent(DF, targets[3], entries).hits.length, 0, '線が違えば当たらない（閾値は不変）');
+  assert.equal(matchByContent(DF, targets[5], entries).hits.length, 0, '線だけ同じでは当たらない（最後の段は strokes＋category のまま）');
+  assert.equal(matchByContent(DF, targets[6], entries).exact, true, '同じ parts は完全一致');
+  assert.equal(matchByContent(DF, targets[7], entries).exact, false, '部品が違う一式は完全一致でない');
+  assert.deepEqual(matchByContent(DF, targets[7], entries).hits.map(e => e.key), ['df-fit']);
+});
+
+test('S1 重複禁止: 線・label・分類が同じで product だけ違う（色違い）2 図は、束の検証でも三層合成後でも両方登録できる', () => {
+  const a = placedFig('df-white', { product: WHITE });
+  const b = placedFig('df-ivory', { product: IVORY });
+  assert.doesNotThrow(() => validateBundle(withEntries(emptyBundle(), DF, [a, b])));
+  setOverlay(DF, { doc: [a], user: [b] });
+  assert.equal(composeCatalog(DF, []).size, 2);
+  // product を持つ図と持たない図も別物
+  setOverlay(DF, { user: [a, placedFig('df-none')] });
+  assert.equal(composeCatalog(DF, []).size, 2);
+});
+
+test('【失敗系】S1 重複禁止: product まで同じ 2 図（キー違い）は、束の検証でも三層合成後でも重複として弾かれる', () => {
+  const a = placedFig('df-a', { product: WHITE });
+  const b = placedFig('df-b', { product: { ...WHITE } });
+  assert.throws(() => validateBundle(withEntries(emptyBundle(), DF, [a, b])), /重複/);
+  setOverlay(DF, { doc: [a], user: [b] });
+  assert.throws(() => composeCatalog(DF, []), /重複禁止.*df-/);
+});
+
+test('S1 起動時照合: 色違いの同梱はライブラリの図の alias にならず（色違いを畳まない）、propose 行になって同梱は残る', async () => {
+  const a = placedFig('df-A', { product: WHITE });
+  const b = placedFig('df-B', { product: IVORY });
+  const { plan, result } = await reconcile([a], [b]);
+  // 完全一致でない（product が違う）。matchFields の末尾の product を外した段で当たる＝部分一致＝propose（alias は完全一致のときだけ）
+  assert.deepEqual(plan.aliases, []);
+  assert.equal(plan.proposals.length, 1);
+  assert.equal(plan.proposals[0].from, 'df-B');
+  assert.deepEqual(plan.adds, []);
+  assert.deepEqual(result.aliasPairs, []);
+  assert.equal(composeCatalog(DF, []).size, 2, '色違いは両方残る');
+  // product まで同じなら従来どおり alias
+  const c = placedFig('df-C', { product: { ...WHITE } });
+  const same = await reconcile([a], [c]);
+  assert.deepEqual(same.plan.aliases, [{ from: 'df-C', to: 'df-A' }]);
+});
+
+test('S1 照合: product のキー順・前後の空白の違いは同じ図（値の比較は trim・オブジェクトはキーの有無で比べる）。alias になり、2 図の束は重複エラー', async () => {
+  const a = placedFig('df-A', { product: { maker: 'B', name: 'A' } });
+  const b = placedFig('df-B', { product: { name: ' A ', maker: 'B' } });
+  assert.deepEqual(diffEntries(DF, a, b), []);
+  const { plan } = await reconcile([a], [b]);
+  assert.deepEqual(plan.aliases, [{ from: 'df-B', to: 'df-A' }]);
+  assert.throws(() => validateBundle(withEntries(emptyBundle(), DF, [a, b])), /重複/);
+});
+
+test('S1 既知の限界（受容）: 同梱の product:{}（検証で BAD_PRODUCT＝読めるが登録できない図）は、product 無しの同じ図の alias にならず propose になる', async () => {
+  const a = placedFig('df-A');
+  const b = placedFig('df-B', { product: {} });
+  assert.equal(validateDetailFigure(b).errors.some(e => e.code === DetailValidationError.BAD_PRODUCT), true);
+  assert.equal(isSupportedDetailFigure(b), true, '読める図');
+  const { plan } = await reconcile([a], [b]);
+  assert.deepEqual(plan.aliases, []);
+  assert.equal(plan.proposals.length, 1);
+  assert.equal(plan.proposals[0].from, 'df-B');
+});
+
+test('S1 同梱の往復: product はエンコード→デコードでも文書ファイルを通っても保たれ、未知項目として落ちない', () => {
+  const a = placedFig('df-a', { product: { name: '洋風便器', maker: 'メーカーA', modelNumber: 'AB-123', colorName: 'ホワイト' } });
+  const plain = placedFig('df-p');
+  const bundle = withEntries(emptyBundle(), DF, [a, plain]);
+  const sub = splitBundleByKind(bundle).get(DF);
+  const decoded = bundleEntries(decodeCatalogBundle(encodeCatalogBundle(sub)), DF);
+  assert.equal(JSON.stringify(decoded[0].product), JSON.stringify(a.product));
+  assert.equal(Object.hasOwn(decoded[1], 'product'), false, 'product の無い図にキーが増えない');
+  const parsed = bundleEntries(roundTripThroughDocument(bundle), DF);
+  assert.equal(JSON.stringify(parsed[0].product), JSON.stringify(a.product));
+  assert.equal(Object.hasOwn(parsed[1], 'product'), false);
+  assert.equal(isSupportedDetailFigure(parsed[0]), true);
+});
+
+test('S1 差分表示: product の違いは diffEntries・diffPairs・diffTooltip に出る（silent にしない）。ラベルは「製品情報」', () => {
+  const a = placedFig('df-a', { product: WHITE });
+  const b = placedFig('df-a', { product: IVORY });
+  assert.deepEqual(diffEntries(DF, a, b), ['product']);
+  const pairs = diffPairs(DF, a, b);
+  assert.deepEqual(pairs.map(p => p.field), ['product']);
+  assert.equal(pairs[0].label, '製品情報');
+  assert.equal(JSON.stringify(pairs[0].from), JSON.stringify(WHITE));
+  assert.equal(diffTooltip(DF, ['product'], a, b).startsWith('製品情報 '), true);
+  assert.deepEqual(diffEntries(DF, a, placedFig('df-a', { product: { ...WHITE } })), []);
+  assert.deepEqual(diffEntries(DF, placedFig('df-a'), placedFig('df-a')), []);
+});
+
 test('指示UI④（S6a）: detailFigure の行の許可操作は他の種別と同じ（場面ごとの従来どおり。保留だけに絞らない）', () => {
   const broken = detailFigure('df-bad', '壊れ', null, { strokes: [strokeOf('a', [move('Z', fixedLen(10))])] });
   const rows = buildResolveRows({
@@ -871,6 +1012,29 @@ test('formatDetailViews（P2-3）: DetailPlacementView の順に「ラベル: �
   assert.equal(formatDetailViews({}), '（なし）');
   assert.equal(formatDetailViews(['a']), 'a');
   assert.deepEqual(Object.keys(DETAIL_PLACEMENT_VIEW_LABELS), Object.values(DetailPlacementView), '全 5 値を網羅');
+});
+
+test('formatDetailProduct（S1）: DetailProductField の順に「ラベル: 値」。未知キーは後ろに生で・無し／空はフォールバック', () => {
+  assert.equal(formatDetailProduct({ colorName: 'ホワイト', name: '洋風便器', modelNumber: 'AB-123', maker: 'メーカーA' }),
+    '名称: 洋風便器・メーカー: メーカーA・型番: AB-123・色: ホワイト');
+  assert.equal(formatDetailProduct({ maker: 'メーカーA' }), 'メーカー: メーカーA');
+  assert.equal(formatDetailProduct({ name: 'x', size: 'L' }), '名称: x・size: L');
+  assert.equal(formatDetailProduct(undefined), '（未設定）');
+  assert.equal(formatDetailProduct({}), '（なし）');
+  assert.equal(formatDetailProduct(['a']), 'a');
+  assert.equal(formatDetailProduct(null), formatReadonlyValue(null));
+});
+
+test('productDisplayName（S1）: product.name があればそれ・空白だけ／無し／壊れた product は label。図が無ければ空文字', () => {
+  assert.equal(productDisplayName({ label: '便器', product: { name: '洋風便器' } }), '洋風便器');
+  assert.equal(productDisplayName({ label: '便器', product: { name: ' 洋風便器 ' } }), '洋風便器', '前後の空白は除く');
+  assert.equal(productDisplayName({ label: '便器', product: { name: '' } }), '便器');
+  assert.equal(productDisplayName({ label: '便器', product: { name: '  ' } }), '便器');
+  assert.equal(productDisplayName({ label: '便器', product: { maker: 'メーカーA' } }), '便器');
+  assert.equal(productDisplayName({ label: '便器' }), '便器');
+  assert.equal(productDisplayName({ label: '便器', product: null }), '便器');
+  assert.equal(productDisplayName({ label: '便器', product: { name: 5 } }), '便器');
+  assert.equal(productDisplayName(undefined), '');
 });
 
 test('formatCategoryLabel(DETAIL_FIGURE): 全 6 分類（DetailCategory の網羅）の表示名', () => {

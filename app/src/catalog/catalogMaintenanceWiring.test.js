@@ -1827,7 +1827,7 @@ test('【不変条件・部分詳細図S2】CatalogMaintenancePanel.jsx: READONL
   const m = /const READONLY_KIND_FIELDS = Object\.freeze\(\{([\s\S]*?)\n\}\);/.exec(code);
   assert.ok(m, 'CatalogMaintenancePanel.jsx に READONLY_KIND_FIELDS が見つからない');
   assert.ok(
-    /\[CatalogKind\.DETAIL_FIGURE\]: Object\.freeze\(\['label', 'category', 'view', 'subject', 'provenance', DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD\]\)/.test(m[1]),
+    /\[CatalogKind\.DETAIL_FIGURE\]: Object\.freeze\(\['label', 'category', 'view', 'subject', 'provenance', DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD, DETAIL_PRODUCT_FIELD\]\)/.test(m[1]),
     'READONLY_KIND_FIELDS に [CatalogKind.DETAIL_FIGURE] の閲覧項目が無い（部分詳細図タブの詳細欄が空になる）',
   );
 });
@@ -1842,7 +1842,12 @@ test('【不変条件・部分詳細図P2-3】CatalogMaintenancePanel.jsx: 図�
     /fieldDefs\.filter\(field => !OPTIONAL_DETAIL_FIELDS\.includes\(field\) \|\| selectedRow\.entry\[field\] != null\)\.map\(field => \(/.test(code),
     '閲覧タブが views・parts の無い図にも行を出す（または filter が外れている）',
   );
-  assert.ok(/OPTIONAL_DETAIL_FIELDS = Object\.freeze\(\[DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD\]\)/.test(code), '任意項目の一覧が views・parts でない');
+  assert.ok(/OPTIONAL_DETAIL_FIELDS = Object\.freeze\(\[DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD, DETAIL_PRODUCT_FIELD\]\)/.test(code), '任意項目の一覧が views・parts・product でない');
+  assert.ok(
+    /kind === CatalogKind\.DETAIL_FIGURE && field === DETAIL_PRODUCT_FIELD\) \{\s*return formatDetailProduct\(value\);\s*\}/.test(code),
+    'formatReadonlyFieldValue が product を formatDetailProduct で整形していない',
+  );
+  assert.ok(!/kind === CatalogKind\.DETAIL_FIGURE && field === DETAIL_PRODUCT_FIELD\) \{\s*return formatDetailProduct\(value\);\s*\}/.test(code.replace('return formatDetailProduct(value);', 'return formatReadonlyValue(value);')));
   assert.ok(
     /kind === CatalogKind\.DETAIL_FIGURE && field === DETAIL_PARTS_FIELD\) \{\s*return formatDetailParts\(value\);\s*\}/.test(code),
     'formatReadonlyFieldValue が parts を formatDetailParts で整形していない',

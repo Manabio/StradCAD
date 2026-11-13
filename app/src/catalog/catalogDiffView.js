@@ -13,8 +13,8 @@
 
 import { kindDef } from './catalogKinds.js';
 import { diffEntries } from './catalogMatch.js';
-import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD } from '../core/constants.js';
-import { DETAIL_VIEWS_GROUP_LABEL } from '../error.js';
+import { FIXTURE_SYMBOL_DETAIL_FIGURES_FIELD, DETAIL_VIEWS_FIELD, DETAIL_PARTS_FIELD, DETAIL_PRODUCT_FIELD } from '../core/constants.js';
+import { DETAIL_VIEWS_GROUP_LABEL, DETAIL_PRODUCT_TEXT } from '../error.js';
 
 /**
  * 差分表示色。renderer/SiteLinesLayer.jsx の隣地境界線と同じ値(#f97316)だが、
@@ -55,6 +55,7 @@ const FIELD_LABELS = Object.freeze({
     key: 'キー', version: '版', label: '呼称', category: '分類', view: '向き', subject: '主題',
     strokes: '線', datums: '基準', anchors: '固定点', provenance: '由来', note: '備考',
     [DETAIL_VIEWS_FIELD]: DETAIL_VIEWS_GROUP_LABEL, [DETAIL_PARTS_FIELD]: '部品',
+    [DETAIL_PRODUCT_FIELD]: DETAIL_PRODUCT_TEXT.group,
   }),
 });
 

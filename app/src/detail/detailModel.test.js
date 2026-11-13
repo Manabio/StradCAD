@@ -326,6 +326,59 @@ test('views が壊れていても図自体は読める（R4）。normalize は v
   assert.deepEqual(validateDetailFigure(back), { ok: true, errors: [] });
 });
 
+// ---- product（製品情報。S1）----
+test('product: 4 項目全部・一部は有効（前後に空白があっても trim して空でなければ有効）。product 無し・明示 undefined も従来どおり', () => {
+  assert.deepEqual(validateDetailFigure(placedFigure({ product: undefined })), { ok: true, errors: [] });
+  assert.deepEqual(validateDetailFigure(placedFigure({ product: { name: '洋風便器' } })), { ok: true, errors: [] });
+  assert.deepEqual(validateDetailFigure(placedFigure({ product: { name: ' 洋風便器 ' } })), { ok: true, errors: [] });
+  const all = { name: '洋風便器', maker: 'メーカーA', modelNumber: 'AB-123', colorName: 'ホワイト' };
+  assert.deepEqual(validateDetailFigure(placedFigure({ product: all })), { ok: true, errors: [] });
+  for (const subject of [DetailSubject.FURNITURE, DetailSubject.HVAC]) {
+    assert.equal(validateDetailFigure(placedFigure({ subject, product: all })).ok, true);
+  }
+});
+
+test('product 失敗系: 非オブジェクト（配列・null・文字列・数値）・空 {}・未知キー・空／空白だけ／文字列でない値は BAD_PRODUCT（読める図）', () => {
+  for (const bad of [[], ['x'], null, '洋風便器', 5, {}, { name: '' }, { name: '  ' }, { name: 'A', maker: '' }, { size: 'x' }, { name: 5 }, { maker: null }, { modelNumber: ['x'] }, { colorName: {} }]) {
+    assertHasCode(placedFigure({ product: bad }), E.BAD_PRODUCT);
+    assert.equal(isSupportedDetailFigure(placedFigure({ product: bad })), true, `BAD_PRODUCT は読める図: ${JSON.stringify(bad)}`);
+  }
+});
+
+test('product 失敗系: 頭でない分類（立面の姿図・部品・建具の姿図・枠）が product を持てば BAD_PRODUCT。ほかの誤りは出ない', () => {
+  const p = { product: { name: 'x' } };
+  assertHasCode(placedFigure({ ...p, view: DetailView.ELEVATION }), E.BAD_PRODUCT);
+  assertHasCode(placedFigure({ ...p, subject: DetailSubject.OPENING }), E.BAD_PRODUCT);
+  assertHasCode({ ...rectFigure(), ...p }, E.BAD_PRODUCT);
+  assertHasCode({ ...rectFigure(), category: DetailCategory.PART, view: DetailView.SECTION, subject: DetailSubject.WALL, ...p }, E.BAD_PRODUCT);
+  assert.deepEqual(codes(placedFigure({ ...p, view: DetailView.ELEVATION })), [E.BAD_PRODUCT]);
+  assert.equal(isSupportedDetailFigure({ ...rectFigure(), ...p }), true);
+  // 持てない分類の {} も誤り（views と同じ）。明示 undefined は無しと同じで有効
+  assertHasCode(placedFigure({ product: {}, view: DetailView.ELEVATION }), E.BAD_PRODUCT);
+  assert.deepEqual(validateDetailFigure(placedFigure({ product: undefined, view: DetailView.ELEVATION })), { ok: true, errors: [] });
+});
+
+test('product: 建具一式（parts を持つ図）が product を持てば BAD_PRODUCT（読める図）。明示 undefined は誤りでない', () => {
+  assertHasCode(fittingSet({ product: { name: 'x' } }), E.BAD_PRODUCT);
+  assertHasCode(fittingSet({ product: null }), E.BAD_PRODUCT);
+  assert.equal(isSupportedDetailFigure(fittingSet({ product: { name: 'x' } })), true);
+  assert.deepEqual(validateDetailFigure(fittingSet({ product: undefined })), { ok: true, errors: [] });
+});
+
+test('product: normalize は product のキーを足さない（無い図の JSON 文字列が不変）。ある図は値を保ち JSON 往復で残る', () => {
+  const plain = placedFigure();
+  assert.equal(Object.hasOwn(normalizeDetailFigure(plain), 'product'), false);
+  assert.equal(Object.hasOwn(normalizeDetailFigure(fittingSet()), 'product'), false);
+  assert.equal(Object.hasOwn(normalizeDetailFigure(rectFigure()), 'product'), false);
+  const once = JSON.stringify(normalizeDetailFigure(plain));
+  assert.equal(JSON.stringify(normalizeDetailFigure(JSON.parse(once))), once);
+  const f = placedFigure({ product: { name: '洋風便器', colorName: 'ホワイト' } });
+  assert.deepEqual(normalizeDetailFigure(f).product, f.product);
+  const back = JSON.parse(JSON.stringify(f));
+  assert.deepEqual(back.product, { name: '洋風便器', colorName: 'ホワイト' });
+  assert.deepEqual(validateDetailFigure(back), { ok: true, errors: [] });
+});
+
 // ---- 建具一式（FITTING。C1）----
 // 部品の figure は key・version・label・provenance・note を持たない本体（分類・strokes・datums・anchors）だけ。
 function partBody(over = {}) {

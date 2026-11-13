@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PenDir, DetailLenMode, DetailCategory, DetailView, DetailSubject, DetailDatumRole, DetailDatumKind, DetailAxis,
-  DetailParam, DetailMaterialField, DetailDash, DetailPlacementView, DETAIL_VIEW_COMBOS, DETAIL_DRAFT_HISTORY_MAX, SvgFigurePrimitiveType,
+  DetailParam, DetailMaterialField, DetailDash, DetailPlacementView, DetailProductField, DETAIL_VIEW_COMBOS, DETAIL_DRAFT_HISTORY_MAX, SvgFigurePrimitiveType,
 } from '../core/constants.js';
 import { DetailValidationError } from '../detail/detailModel.js';
 import { DEFAULT_FRAME_FACE_MM, DEFAULT_FRAME_PROJECTION_MM, findCatalogEntry } from '../openings/openingCatalog.js';
@@ -15,7 +15,7 @@ import {
   setMoveLen, setMoveMode, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, libraryRows, defaultFitDims, tryFit,
   isElevationFigureForm, defaultRoleFor, fitDimFieldsFor, defaultFitDimsFor,
-  DETAIL_PLACEMENT_VIEW_LABELS, DETAIL_HELPER_TEXT, placementViewOptions, setPlacementView,
+  DETAIL_PLACEMENT_VIEW_LABELS, DETAIL_HELPER_TEXT, placementViewOptions, setPlacementView, setProductField,
   previewPrimitivesOf, parseNumberText, planSave, saveContextFor, saveDecision, afterSaveDoc, penStep, describeError,
   wallThicknessNotice, displayLen, freshDocOf, docFromEntry, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, DETAIL_HELPER_MESSAGES, DETAIL_ROLE_LABELS, DETAIL_MODE_LABELS, DETAIL_PARAM_LABELS,
   DETAIL_MATERIAL_FIELD_LABELS, DETAIL_DATUM_KIND_LABELS, DETAIL_AXIS_LABELS, PEN_BUTTONS, PEN_DIR_LABELS,
@@ -775,6 +775,94 @@ test('setClassification: 図の束を持てない分類へ変えると views を
   assert.equal(Object.hasOwn(setClassification(f, 'view', DetailView.ELEVATION), 'views'), false);
   // 落とさなければ BAD_VIEWS になる（検出力）
   assert.equal(validation({ ...toOpening, views: { front: 'f_front' } }).errors.some(e => e.code === DetailValidationError.BAD_VIEWS), true);
+});
+
+// ---- S1: 製品情報（product） ----
+const typedProduct = (form, ...pairs) => pairs.reduce((f, [field, value]) => setProductField(f, field, value), form);
+
+test('setProductField: 4 項目を入力中の生の文字列のまま持つ。他の項目は不変・上書き可', () => {
+  const f = placedDraft();
+  const a = typedProduct(f, [DetailProductField.MAKER, ' メーカーA '], [DetailProductField.NAME, '洋風便器']);
+  assert.deepEqual(a.product, { maker: ' メーカーA ', name: '洋風便器' });
+  assert.equal(a.label, f.label);
+  assert.equal(setProductField(a, DetailProductField.NAME, '和風便器').product.name, '和風便器');
+  assert.equal(isDraftDirty(a, f), true);
+});
+
+test('【失敗系】setProductField: 配置図でない form・未知の field・文字列でない値・同じ値は同一参照を返す（履歴に積まない）', () => {
+  const plain = newDraft({ idFactory });
+  assert.equal(setProductField(plain, DetailProductField.NAME, 'x'), plain);
+  const elev = setClassification(placedDraft(), 'view', DetailView.ELEVATION);
+  assert.equal(setProductField(elev, DetailProductField.NAME, 'x'), elev);
+  const f = placedDraft();
+  assert.equal(setProductField(f, 'size', 'x'), f);
+  assert.equal(setProductField(f, DetailProductField.NAME, null), f);
+  assert.equal(setProductField(f, DetailProductField.NAME, 5), f);
+  const a = typedProduct(f, [DetailProductField.NAME, 'x']);
+  assert.equal(setProductField(a, DetailProductField.NAME, 'x'), a);
+});
+
+test('product の往復: フォーム state → entryFromForm → formFromEntry → entryFromForm が同値（全部・一部・無し）', () => {
+  const f = placedDraft();
+  const all = typedProduct(f, [DetailProductField.COLOR_NAME, 'ホワイト'], [DetailProductField.MODEL_NUMBER, 'AB-123'],
+    [DetailProductField.MAKER, 'メーカーA'], [DetailProductField.NAME, '洋風便器']);
+  const eAll = entryFromForm(all);
+  assert.deepEqual(Object.keys(eAll.product), ['name', 'maker', 'modelNumber', 'colorName'], '順序は DetailProductField の順');
+  assert.deepEqual(formFromEntry(eAll).product, eAll.product);
+  assert.equal(JSON.stringify(entryFromForm(formFromEntry(eAll))), JSON.stringify(eAll));
+  assert.equal(validation(all).ok, true);
+  const part = typedProduct(f, [DetailProductField.MODEL_NUMBER, 'AB-123']);
+  const ePart = entryFromForm(part);
+  assert.deepEqual(ePart.product, { modelNumber: 'AB-123' });
+  assert.equal(JSON.stringify(entryFromForm(formFromEntry(ePart))), JSON.stringify(ePart));
+  const e0 = entryFromForm(f);
+  assert.equal(Object.hasOwn(e0, 'product'), false);
+  assert.equal(Object.hasOwn(formFromEntry(e0), 'product'), false);
+  assert.equal(JSON.stringify(entryFromForm(formFromEntry(e0))), JSON.stringify(e0));
+});
+
+test('product の保存形: 前後の空白を除き、空の項目を落とし、全部空なら項目ごと持たない（空白だけも空）', () => {
+  const f = placedDraft();
+  const e = entryFromForm(typedProduct(f, [DetailProductField.NAME, '  洋風便器\t'], [DetailProductField.MAKER, '   '], [DetailProductField.COLOR_NAME, '']));
+  assert.deepEqual(e.product, { name: '洋風便器' });
+  const blank = entryFromForm(typedProduct(f, [DetailProductField.NAME, ' '], [DetailProductField.MAKER, '']));
+  assert.equal(Object.hasOwn(blank, 'product'), false);
+  assert.equal(Object.hasOwn(entryFromForm({ ...f, product: {} }), 'product'), false);
+  assert.equal(validation(typedProduct(f, [DetailProductField.NAME, ' '])).ok, true);
+});
+
+test('product: 編集途中のフォーム state（空文字を持つ）でも検証は保存形に対して行うので通り、保存できる。保存形に空は無い', () => {
+  const f = placedDraft();
+  for (const pairs of [[[DetailProductField.NAME, '']], [[DetailProductField.NAME, 'A'], [DetailProductField.MAKER, '']], [[DetailProductField.NAME, 'A'], [DetailProductField.NAME, '']]]) {
+    const form = typedProduct(f, ...pairs);
+    assert.equal(Object.hasOwn(form, 'product'), true, 'フォームには空文字が残る（編集中の正常な状態）');
+    assert.equal(validation(form).ok, true, JSON.stringify(form.product));
+    assert.equal(saveBlockers(form, validation(form)).length, 0);
+    assert.equal(Object.values(entryFromForm(form).product ?? {}).some(v => v === ''), false);
+  }
+  assert.equal(Object.hasOwn(entryFromForm(typedProduct(f, [DetailProductField.NAME, ''])), 'product'), false);
+});
+
+test('【失敗系】product: 壊れた値（null・配列・文字列でない値・未知キー）は保存形でも残り、検証が BAD_PRODUCT で知らせる', () => {
+  const f = placedDraft();
+  const bad = DetailValidationError.BAD_PRODUCT;
+  for (const product of [null, ['x'], 'x', { name: 5 }, { size: 'x' }]) {
+    assert.equal(validation({ ...f, product }).errors.some(e => e.code === bad), true, JSON.stringify(product));
+  }
+  assert.equal(entryFromForm({ ...f, product: null }).product, null);
+  assert.equal(formFromEntry({ ...entryFromForm(f), product: null }).product, null, 'null は無しにせず壊れた値として残す');
+});
+
+test('setClassification: 持てない分類へ変えると product を落とす（BAD_PRODUCT を避ける）。配置図どうしでは保つ', () => {
+  const f = typedProduct(placedDraft(), [DetailProductField.NAME, '洋風便器']);
+  assert.deepEqual(setClassification(f, 'subject', DetailSubject.HVAC).product, { name: '洋風便器' });
+  const toElev = setClassification(f, 'view', DetailView.ELEVATION);
+  assert.equal(Object.hasOwn(toElev, 'product'), false);
+  assert.equal(validation(toElev).errors.some(e => e.code === DetailValidationError.BAD_PRODUCT), false);
+  const toOpening = setClassification(toElev, 'subject', DetailSubject.OPENING);
+  assert.equal(Object.hasOwn(toOpening, 'product'), false);
+  // 落とさなければ BAD_PRODUCT になる（検出力）
+  assert.equal(validation({ ...toElev, product: { name: '洋風便器' } }).errors.some(e => e.code === DetailValidationError.BAD_PRODUCT), true);
 });
 
 test('fitDimFieldsFor: 姿図の配置（平面・立面側とも）は寸法欄を出さない。他の分類は従来どおり', () => {

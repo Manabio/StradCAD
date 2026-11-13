@@ -376,6 +376,10 @@ export const ROOM_DETAIL_REF_TEXT = Object.freeze({ section: '部分詳細', non
 // 姿図の「図の束」（views）の文言。ヘルパー（ui/detailHelperForm.js）・保守パネルの閲覧・差分表示（catalog/catalogDiffView.js）が共有する。
 // キーは DetailPlacementView の値（core/constants.js。ここは葉なので literal で持ち、対応はテストで固定する）。
 export const DETAIL_VIEWS_GROUP_LABEL = '図の束';
+// 姿図の製品情報（product）の文言。ヘルパー・保守パネルの閲覧・差分表示が共有する。キーは DetailProductField の値（葉なので literal で持つ）。
+export const DETAIL_PRODUCT_TEXT = Object.freeze({
+  group: '製品情報', name: '名称', maker: 'メーカー', modelNumber: '型番', colorName: '色',
+});
 // 仕上げモードのタブ「衛生・家具・空調」（姿図の配置。finish/placedFigure/PlacedFigureTab.jsx）の文言。
 export const PLACED_FIGURE_TAB_TEXT = Object.freeze({
   place: '配置', tapPoint: '配置点をタップ', cancel: '取消', rotate: '90° 回転', mirror: '鏡像', remove: '削除',
