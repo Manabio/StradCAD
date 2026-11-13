@@ -17,13 +17,13 @@ import assert from 'node:assert/strict';
 import { CenterLineType, Plane, PlanGraph, Discipline } from '@core';
 import { PlacedFigure } from '../core/placedFigure.js';
 import {
-  PenDir, DetailView, DetailPlacementView, DetailDash, DETAIL_PRIM_SOURCE,
+  PenDir, DetailView, DetailPlacementView, DetailDash, DETAIL_PRIM_SOURCE, LINE_WEIGHT_MM,
 } from '../core/constants.js';
 import { generateRoomWallsFromOutline } from '../finish/wallGeneration.js';
 import { fixedLen, move } from '../finish/roomDetailTestFixtures.js';
 import { square, wallFaceDatums } from '../finish/placedFigure/placedFigureTestFixtures.js';
 import { buildRoomFaces } from './elevationFaces.js';
-import { ElevationDash } from './elevationStyle.js';
+import { ElevationDash, ElevationLineRole, weightForRole } from './elevationStyle.js';
 import { appendPlacedFigures } from './elevationPlacedFigures.js';
 
 const { FRONT, BACK, LEFT, RIGHT } = DetailPlacementView;
@@ -196,6 +196,43 @@ test('破線の図は線分ごとの line＋dash（DASHED）・実線は polylin
   assert.equal(prims.length, 4);
   assert.ok(prims.every(p => p.type === 'line' && p.dash === ElevationDash.DASHED && p.source === DETAIL_PRIM_SOURCE));
   assert.ok(run(graph, a, 'A').every(p => p.type === 'polyline' && p.dash === undefined));
+});
+
+// 配置の線の太さは図の指定によらず PLACED_FIGURE_WEIGHT_ROLE（展開図の語彙では細線の見え掛かり＝DETAIL の太さ）。極太・太線を切断線へ寄せない。
+const withLine = (fig, line) => ({ ...fig, strokes: fig.strokes.map(s => ({ ...s, line })) });
+const lineFigureOf = (line, views = VIEWS) => catalogOf(square('main', { views }), ...FIGS.map(f => withLine(f, line)));
+const THIN = weightForRole(ElevationLineRole.DETAIL);
+
+test('細線: 図の線の太さが全ロール（極太・太線を含む）でも、正面・背面・左右・鏡像・左右の鏡像代用の線はすべて細線の太さ（kind なし）', () => {
+  assert.equal(THIN, 'thin');
+  const roles = Object.keys(LINE_WEIGHT_MM);
+  let drawn = 0; // 線が出た組合せの数（全部の面が空になって恒真にならないよう、最後に下限を確かめる）
+  for (const weightRole of roles) {
+    const fo = lineFigureOf({ weightRole, dashRole: DetailDash.SOLID });
+    const sub = lineFigureOf({ weightRole, dashRole: DetailDash.SOLID }, { [FRONT]: 'eF', [RIGHT]: 'eR' });
+    for (const mirror of [false, true]) {
+      const { graph, a } = twoRooms();
+      withPlaced(graph, { mirror });
+      for (const letter of ['A', 'B', 'C', 'D']) {
+        for (const [name, f] of [['本体', fo], ['左右代用', sub]]) {
+          const prims = run(graph, a, letter, { figureOf: f });
+          if (prims.length === 0) continue;
+          drawn += 1;
+          assert.ok(prims.every(p => p.weight === THIN && p.kind === undefined), `${weightRole}・鏡像 ${mirror}・面 ${letter}・${name}`);
+        }
+      }
+    }
+  }
+  // ロール×鏡像 2×（本体・左右代用）2 の各組で、少なくとも 1 面には線が出ている
+  assert.ok(roles.length > 0 && drawn >= roles.length * 2 * 2, `線が出た組合せ ${drawn}`);
+});
+
+test('細線: 破線の指定は残る（極太でも line＋DASHED・太さは細線）', () => {
+  const { graph, a } = twoRooms();
+  withPlaced(graph, {});
+  const prims = run(graph, a, 'D', { figureOf: lineFigureOf({ weightRole: 'ultraThick', dashRole: DetailDash.DASHED }) });
+  assert.equal(prims.length, 4);
+  assert.ok(prims.every(p => p.type === 'line' && p.dash === ElevationDash.DASHED && p.weight === THIN));
 });
 
 test('【失敗系】図の参照切れ・分類違い・fit 不能・部屋なし・配置なしは何も足さず例外にしない', () => {

@@ -7,7 +7,7 @@
 // 依存は constants・placedFigureTargets・detail/detailPlacement（fitLocal・placeStrokes）だけ（store.js・snap.js・.jsx・react を引かない）。
 // ================================================================
 
-import { DetailPlacementView, DETAIL_VIEWS_FIELD } from '../../core/constants.js';
+import { DetailPlacementView, DETAIL_VIEWS_FIELD, PLACED_FIGURE_WEIGHT_ROLE } from '../../core/constants.js';
 import { fitLocal, placeStrokes } from '../../detail/detailPlacement.js';
 import { placedFigureTargets, isPlaceableViewFigure } from './placedFigureTargets.js';
 
@@ -90,7 +90,11 @@ export function sRangeOf(strokes) {
   return min <= max ? { min, max } : null;
 }
 
-/** fit 済みの図を (s, t)→[ms·s, t] の座標列へ写す（ms＝反転なら −1。原点は図の配置原点のまま）。 */
+/**
+ * fit 済みの図を (s, t)→[ms·s, t] の座標列へ写す（ms＝反転なら −1。原点は図の配置原点のまま）。
+ * 展開・立面の配置専用（建具の姿図は通らない）。線の太さの指定は PLACED_FIGURE_WEIGHT_ROLE へ置き換える（破線などの dashRole は図のまま）。
+ */
 export function placeViewStrokes(fitted, mirrorS) {
-  return placeStrokes(fitted, { ox: 0, oy: 0, sx: mirrorS ? -1 : 1, sy: 0, tx: 0, ty: 1 });
+  return placeStrokes(fitted, { ox: 0, oy: 0, sx: mirrorS ? -1 : 1, sy: 0, tx: 0, ty: 1 })
+    .map(st => ({ ...st, line: { ...st.line, weightRole: PLACED_FIGURE_WEIGHT_ROLE } }));
 }

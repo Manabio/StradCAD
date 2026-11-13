@@ -264,6 +264,9 @@ export const LINE_WEIGHT_MM = Object.freeze({
 // 部分詳細図の line.weightRole の既定。LINE_WEIGHT_MM のキー。
 export const DETAIL_DEFAULT_WEIGHT_ROLE = 'thin';
 
+/** 配置した姿図（PlacedFigure）は図の線の太さの指定（weightRole）によらず、この太さで描く（平面・天伏・展開・立面で一律。破線などの線種は図の指定のまま）。 */
+export const PLACED_FIGURE_WEIGHT_ROLE = DETAIL_DEFAULT_WEIGHT_ROLE;
+
 // SVG 図（建具モード姿図・構造断面図）のプリミティブ型。生成元は structural/sectionFigure/svgFigurePrimitives.js、
 // 消費側は AutoScaledFigure.jsx の renderPrimitive（case の並びはそれに合わせる）。展開図（Konva）の語彙とは別。
 export const SvgFigurePrimitiveType = Object.freeze({

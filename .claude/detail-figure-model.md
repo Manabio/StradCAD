@@ -123,7 +123,7 @@
 - 三方枠以外へ種別を変えても `opening.detailRefs` は残す（`frameFaceWidth` と同じ規約。UI からは見えず、使用中として同梱され続ける。リード裁定）。
 - 同梱の図が propose・pick（部分一致）になり、その図を指す同梱の記号が先にライブラリへ写されると、承認後もライブラリ側の記号は旧キーを指したまま（読み替えは同梱の記号だけ＝「ライブラリ層は触らない」規約の帰結。その記号を使う別文書では not-found 行になる）。
 - 線種（dash／weightRole）は無視（平面は枠の太さ・展開は断面の太線）／斜め寸法線なし／寸法は 1 手単位（複数手にまたがる寸法は表せない）／mm 判定の closed は param・material・stretch で閉じ辺 0 になるケースを登録時に検出しない／同じ図を参照する別記号の失敗は 1 行にまとまる／使用中の印は開いたとき 1 回。
-- 姿図の差替えの限界（S6b）: 線種は weightRole（極太は切断線へ寄せる）と dash だけ読み（SWING の扱いは「姿図の内外（T2）」）、破線は線分ごとの line・実線は polyline（Konva は polyline の dash を描かず、閉じた polyline を塗るため閉じ辺は始点を足した開いた折れ線にする）。レバーハンドルの取付高さの寸法（編集用）は図を置換しても残る。FL を origin にした図は窓台の分だけ伸縮する（SILL と別の挙動）。建具モード init の通知は kind が fixtureSymbol の行に載る（主語は建具種別キーで、区分 fitting/window は付かない）。ヘルパーの試し込みは分類が姿図なら幅・高さ・窓台（既定は代表の建具種別 singleSwing の既定幅・高さと窓台 0）、既定の基準は t の origin＝SILL・end＝HEAD。
+- 姿図の差替えの限界（S6b）: 線種は weightRole（極太は切断線へ寄せる。**建具の姿図だけ**。配置した姿図は「姿図の配置」の細線）と dash だけ読み（SWING の扱いは「姿図の内外（T2）」）、破線は線分ごとの line・実線は polyline（Konva は polyline の dash を描かず、閉じた polyline を塗るため閉じ辺は始点を足した開いた折れ線にする）。レバーハンドルの取付高さの寸法（編集用）は図を置換しても残る。FL を origin にした図は窓台の分だけ伸縮する（SILL と別の挙動）。建具モード init の通知は kind が fixtureSymbol の行に載る（主語は建具種別キーで、区分 fitting/window は付かない）。ヘルパーの試し込みは分類が姿図なら幅・高さ・窓台（既定は代表の建具種別 singleSwing の既定幅・高さと窓台 0）、既定の基準は t の origin＝SILL・end＝HEAD。
 - 姿図の配置（S10）の限界・先送りは「姿図の配置（S10）」の節の末尾。
 - 分類 `electrical`（電気設備）を足したので、これ以前のビルドは電気の図を語彙外として読めない（別の端末の古いビルドで開くと対応外の図になる）。
 - 先送り: 8b-2b 袖壁の分割端（手動壁の実装後に再開。現行の壁生成は全部 isRoomWall なので `perpendicularWallsOnFace('near')` が拾う袖壁が生まれず、実機で現れる場面が無い。再開時の要点: 置き場は断面エンジンへの注入点（8b-1 の `kneeDropPartStepsOf` と同型の輪郭版）・記録の探索点は切断線の軸値・切断壁の天端 CUT／天端下細線／側縁の上部を輪郭に置き換える・帯の端（8b-2）とは描く場所が重ならない）・屋根の軒先けらば（S9）・図を部品に組み合わせる作図・整理課題＝`dxfToStrokes`／`dxfToComponents`（PDF も共用）と `describeDxfWarning`・`DxfWarning.LICENSE_UNKNOWN`／`NO_DIGEST`・`DXF_PROVENANCE_FIELDS`・`draftFromDxf` の名前の一般化・`useCatalogEditActions` の共有化・`rewriteDocSymbolDetailFigures` の改名（建具種別も読み替えるため。整理課題）。
@@ -200,6 +200,7 @@
 - 展開（P5）: 純 `finish/placedFigure/placedFigureViews.js`＋`elevation/elevationPlacedFigures.js appendPlacedFigures`。約束＝平面の姿図は正面を図の下（局所 +t）へ向けて描く。見る向き d に対し f＝−d→正面図・f＝d→背面図・見る人が図の右手側→右側面図・左手側→左側面図（鏡像は左右を入れ替え全 view で s 反転）。正面・背面が未設定なら描かず、左右は片方が無ければ他方の鏡像で代用（左右対称の前提。設定済みで参照切れ・fit 不能は代用しない）。線は建具の詳細図と同じ `detailStrokesToElevationPrimitives`。詳細は elevation-model.md。
 - 立面（P6）: `facade/facadeInputs.js exteriorPlacedFiguresOf`（配置点が屋内部屋に属さない＝屋外）＋`facade/facadePlacedFigures.js`。詳細は facade-model.md。
 - 通知（P4）: 参照切れ＝unresolved-code 行（'姿図の配置'）。分類違い・基準失敗・fit 失敗＝detail-fit-failed 行（`placedFigureFitCheck.js collectPlacedFigureFailures`。同じ図は何か所に置いても 1 行・views の ceiling は空調・電気だけ検査）。
+- 細線（S4。2026-11-13）: 配置した姿図は図の線の太さの指定（`weightRole`）によらず `PLACED_FIGURE_WEIGHT_ROLE`（＝細線）で平面・天伏・展開・立面とも一律に描く（設備の姿は建築の線より弱く見せる。ユーザー裁定）。掛け所は 2 つ＝平面・天伏は `placedFigureDrawPlan.js` の線の `weight`、展開・立面は両方が通る `placedFigureViews.js placeViewStrokes`（配置専用で、ここで weightRole を置換してから共用の `detailStrokesToElevationPrimitives` へ渡す＝極太→切断線の寄せが働かない）。破線などの `dashRole` は図のまま残す。建具の姿図は `placeViewStrokes` を通らないので従来どおり（共用の変換は変えない）。
 - 限界・先送り: 平面のタップ選択（一覧選択のみ。タップは部屋・階段・器具・屋根区画の選択と優先順位を争うので別課題）／展開・立面は遠近・遮蔽なし／左右対称前提／部分指定の子の部屋のセルにある配置は親の帯に出ない／床の段差は原点 1 点／面ごとに fit をやり直す／立面は GL より下も切らずに描く。
 
 ## 建具一式（FITTING。2026-11-10〜11・外付け引き戸のために導入）
@@ -215,6 +216,7 @@
 - **既知の限界・先送り**: 古いビルドは一式を「対応外の図」として従来描きへ戻る／部品をまたぐ手戻し・並べ替え・単一図→一式の変換なし／全体プレビュー内での編集なし／一式の上枠・下枠・姿図の展開・立面での目視は未（組込みは持たない）／走る面から見た展開の描き分け（F2）／`jambHinge` 等を持つ一式は片開き戸の方立だけが読み、窓の方立・上枠（`openingSection.js`）は読まない。
 
 ## 履歴
+- 2026-11-13 配置した姿図を全図面で細線に一律（`PLACED_FIGURE_WEIGHT_ROLE`。破線は残す・建具の姿図は不変）の S4（コミット前。ユーザー裁定）。
 - 2026-11-13 姿図の配置の命令を `placedFigureCommands.js` へ切り出し（`FinishModeState` は委譲。挙動不変）＋ `placedFigureSubjectOf` を追加した S3（コミット前）。
 - 2026-11-13 分類に電気設備（`electrical`）を足し、天伏（見上げ）に出す分類を空調＋電気にした S2（ユーザー裁定。コミット前。電気モード本体・モードの定義表は別）。
 - 2026-11-13 製品情報（`product`）を図の側に持たせる S1（名称・メーカー・型番・色名。ユーザー裁定。コミット前）。

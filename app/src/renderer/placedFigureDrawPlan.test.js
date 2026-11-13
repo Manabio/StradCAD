@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PenDir, DetailCategory, DetailView, DetailSubject, DetailDatumRole, DetailDatumKind, DetailAxis, DetailDash, DetailParam,
-  DetailPlacementView, DETAIL_VIEWS_FIELD, DETAIL_FIGURE_VERSION, DETAIL_DEFAULT_WEIGHT_ROLE,
+  DetailPlacementView, DETAIL_VIEWS_FIELD, DETAIL_FIGURE_VERSION, DETAIL_DEFAULT_WEIGHT_ROLE, LINE_WEIGHT_MM, PLACED_FIGURE_WEIGHT_ROLE,
 } from '../core/constants.js';
 import { PlacedFigure } from '../core/placedFigure.js';
 import { DetailFitError } from '../detail/detailPlacement.js';
@@ -219,12 +219,28 @@ test('(d) 解決できない配置があっても他の配置は描く（入力�
   assert.deepEqual(plan.lines.map(l => l.figureId), ['b']);
 });
 
-test('(e) 線の太さの役割は図の値、破線は DASHED だけ（SWING・SOLID は実線）', () => {
+test('(e) 線の太さは図の指定によらず PLACED_FIGURE_WEIGHT_ROLE（存在する全ロール総当り）。破線は DASHED だけ残る（SWING・SOLID は実線）', () => {
   const run = line => placedFigureDrawPlan([pf()], figs(lShape({ line }))).lines[0];
-  assert.deepEqual([run({ weightRole: 'thick', dashRole: DetailDash.DASHED }).weight, run({ weightRole: 'thick', dashRole: DetailDash.DASHED }).dashed], ['thick', true]);
-  assert.equal(run({ weightRole: 'ultraThick', dashRole: DetailDash.SOLID }).weight, 'ultraThick');
+  const roles = Object.keys(LINE_WEIGHT_MM);
+  assert.ok(roles.length >= 4 && roles.includes('thick') && roles.includes('ultraThick'));
+  for (const weightRole of roles) {
+    assert.equal(run({ weightRole, dashRole: DetailDash.SOLID }).weight, PLACED_FIGURE_WEIGHT_ROLE, weightRole);
+    assert.equal(run({ weightRole, dashRole: DetailDash.DASHED }).weight, PLACED_FIGURE_WEIGHT_ROLE, `${weightRole}・破線`);
+    assert.equal(run({ weightRole, dashRole: DetailDash.DASHED }).dashed, true, `${weightRole}・破線は残る`);
+  }
   assert.equal(run({ weightRole: 'medium', dashRole: DetailDash.SWING }).dashed, false);
   assert.equal(run({ weightRole: 'medium', dashRole: DetailDash.SOLID }).dashed, false);
+});
+
+test('(e) 見上げ（views.ceiling の図）でも太い線の指定は PLACED_FIGURE_WEIGHT_ROLE・破線は残る', () => {
+  const thick = { weightRole: 'ultraThick', dashRole: DetailDash.DASHED };
+  const hvac = lShape({ key: 'k-h', subject: DetailSubject.HVAC, extra: { [DETAIL_VIEWS_FIELD]: { [DetailPlacementView.CEILING]: 'k-hc' } } });
+  const hvacC = withOpenStroke(lShape({ key: 'k-hc', subject: DetailSubject.HVAC, line: thick }));
+  hvacC.strokes[1].line = thick;
+  const lines = placedFigureDrawPlan([new PlacedFigure({ id: 'c', figureKey: 'k-h', x: 300, y: 100 })], figs(hvac, hvacC), { direction: 'up' }).lines;
+  assert.equal(lines.length, 2);
+  assert.deepEqual(lines.map(l => l.weight), [PLACED_FIGURE_WEIGHT_ROLE, PLACED_FIGURE_WEIGHT_ROLE]);
+  assert.deepEqual(lines.map(l => l.dashed), [true, true]);
 });
 
 test('(e) line を省いた図の太さは既定の役割（DETAIL_DEFAULT_WEIGHT_ROLE）・実線', () => {

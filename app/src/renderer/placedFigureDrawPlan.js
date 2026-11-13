@@ -1,7 +1,7 @@
 // ================================================================
 // 姿図の配置（PlacedFigure）を平面（見下げ）・天伏（見上げ）に描くための図形の計画（部分詳細図 S10 P3）。純モジュール。
 //   入力: graph.placedFigures（PlacedFigure の配列）・figureOf（詳細図キー→エントリ。無ければ null）・direction
-//   出力: lines（世界 mm の平坦な頂点列＋線の太さの役割＋破線か）・marks（解決できない配置点の×）・boxes（描けた配置の外接。選択強調用）
+//   出力: lines（世界 mm の平坦な頂点列＋線の太さの役割〔図の指定によらず PLACED_FIGURE_WEIGHT_ROLE 一律〕＋破線か）・marks（解決できない配置点の×）・boxes（描けた配置の外接。選択強調用）
 // 回転 +90° は画面時計回り（y 下向き正）。鏡像は図の局所 s を反転してから回転する。
 // 見下げ: 平面の配置図（FIGURE・PLAN・衛生/家具/空調/電気）をすべて描く。
 // 見上げ: CEILING_PLACED_FIGURE_SUBJECTS の図だけ。views.ceiling の図が解ければそれを優先し、無い・参照切れ・分類違い・fit 不能は平面図自身へ落ちる。
@@ -10,7 +10,7 @@
 // ================================================================
 
 import {
-  LINE_WEIGHT_MM, DETAIL_DEFAULT_WEIGHT_ROLE, DetailDash, DetailPlacementView, DETAIL_VIEWS_FIELD, CEILING_PLACED_FIGURE_SUBJECTS,
+  PLACED_FIGURE_WEIGHT_ROLE, DetailDash, DetailPlacementView, DETAIL_VIEWS_FIELD, CEILING_PLACED_FIGURE_SUBJECTS,
 } from '../core/constants.js';
 import { placedFigureTargets, isPlaceableViewFigure } from '../finish/placedFigure/placedFigureTargets.js';
 import { RoomDetailError } from '../finish/roomDetailTargets.js';
@@ -85,12 +85,11 @@ export function placedFigureDrawPlan(placedFigures, figureOf, { direction = 'dow
     for (const st of placeStrokes(r.fitted, frameOf(pf))) {
       const pts = st.closed && st.points.length > 1 ? [...st.points, st.points[0]] : st.points;
       if (pts.length < 2) continue;
-      const role = st.line?.weightRole;
       lines.push({
         key: `${pf.id}:${st.id}`,
         figureId: pf.id,
         points: flatten(pts),
-        weight: Object.hasOwn(LINE_WEIGHT_MM, role) ? role : DETAIL_DEFAULT_WEIGHT_ROLE,
+        weight: PLACED_FIGURE_WEIGHT_ROLE,
         dashed: st.line?.dashRole === DetailDash.DASHED,
       });
       drawn += 1;

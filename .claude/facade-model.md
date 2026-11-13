@@ -52,7 +52,7 @@
 
 ## 姿図の配置（S10 P6。2026-11-05）
 - 対象＝配置点が屋外のもの（`facade/facadeInputs.js exteriorPlacedFiguresOf`。セルなし・部屋なし・`isEnclosureOutside`・`RoomKind.EXTERIOR` のいずれか＝`edgeClassify` の `regionOf` と同じ）。階レコードに `flMm`（＝plane.elevation）と `placedFigures` を持ち、例外の階は `skipped`（ERROR）に載せて壁は描く（建具と同型）。
-- `facade/facadePlacedFigures.js`: 見る向き d＝−normal。view の表・鏡像・左右の代用は展開と同一（elevation-model.md「姿図の配置」）。X＝u0−uMin、Y＝glZ−flMm−zMm+t。隠れは建具と同じ `isHidden` を 5 点（中心＋外接の四隅。z＝FL＋zMm−t）で試し、全部隠れたら描かない。線は line／polyline だけ。
+- `facade/facadePlacedFigures.js`: 見る向き d＝−normal。view の表・鏡像・左右の代用は展開と同一（elevation-model.md「姿図の配置」）。X＝u0−uMin、Y＝glZ−flMm−zMm+t。隠れは建具と同じ `isHidden` を 5 点（中心＋外接の四隅。z＝FL＋zMm−t）で試し、全部隠れたら描かない。線は line／polyline だけ。太さは展開と同じ `placeViewStrokes` で図の指定によらず細線（破線は残す。S4）。
 - 範囲: 配置図の外接を面の範囲（`faceExtent`→bounds・倍率 `facadeExtentsMm`）に含める（建物から離れた配置が枠外に切れないため。隠れて描かない配置は含めない・GL より下は含めない）。
 - 屋外部屋の展開の帯と立面には同じ配置が出うる（意図どおり）。
 

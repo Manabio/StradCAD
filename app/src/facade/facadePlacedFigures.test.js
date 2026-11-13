@@ -14,8 +14,9 @@ import assert from 'node:assert/strict';
 import { CenterLineType, Plane, PlanGraph, Discipline } from '@core';
 import { PlacedFigure } from '../core/placedFigure.js';
 import {
-  PenDir, DetailView, DetailPlacementView, DetailDash, DETAIL_PRIM_SOURCE, FacadeDirection,
+  PenDir, DetailView, DetailPlacementView, DetailDash, DETAIL_PRIM_SOURCE, FacadeDirection, LINE_WEIGHT_MM,
 } from '../core/constants.js';
+import { ElevationDash, ElevationLineRole, weightForRole } from '../elevation/elevationStyle.js';
 import { generateExteriorWalls } from '../finish/wallGeneration.js';
 import { fixedLen, move } from '../finish/roomDetailTestFixtures.js';
 import { square, wallFaceDatums } from '../finish/placedFigure/placedFigureTestFixtures.js';
@@ -199,6 +200,41 @@ test('隠れ: 5 点すべて壁に隠れたら描かない。一部でも見え�
   // 同じ位置でも壁（軒桁上端 2900）より上に置けば隠れない（z を見ている）
   const high = setup([{ y: -800, x: 1300, zMm: 5000 }]).inputs;
   assert.equal(run(high, SOUTH).length, 1);
+});
+
+// 配置の線の太さは図の指定によらず細線（立面の語彙では DETAIL の太さ）。極太・太線を切断線へ寄せない。破線は残る。
+const withLine = (fig, line) => ({ ...fig, strokes: fig.strokes.map(s => ({ ...s, line })) });
+const lineFigureOf = (line, views = VIEWS) => catalogOf(square('main', { views }), ...FIGS.map(f => withLine(f, line)));
+const THIN = weightForRole(ElevationLineRole.DETAIL);
+
+test('細線: 図の線の太さが全ロール（極太・太線を含む）でも、正面・左右・鏡像・左右の鏡像代用の線はすべて細線の太さ（kind なし）', () => {
+  assert.equal(THIN, 'thin');
+  for (const weightRole of Object.keys(LINE_WEIGHT_MM)) {
+    const full = lineFigureOf({ weightRole, dashRole: DetailDash.SOLID });
+    const sub = lineFigureOf({ weightRole, dashRole: DetailDash.SOLID }, { [FRONT]: 'eF', [RIGHT]: 'eR' });
+    for (const mirror of [false, true]) {
+      const { inputs } = setup([{ mirror }]);
+      for (const dir of [SOUTH, EAST, WEST]) {
+        for (const [name, f] of [['本体', full], ['左右代用', sub]]) {
+          const prims = run(inputs, dir, { figureOf: f });
+          assert.ok(prims.length > 0, `${weightRole}・鏡像 ${mirror}・${dir}・${name} は描く`);
+          assert.ok(prims.every(p => p.weight === THIN && p.kind === undefined), `${weightRole}・鏡像 ${mirror}・${dir}・${name}`);
+        }
+      }
+    }
+  }
+});
+
+test('細線: 破線の指定は残る（極太でも line＋DASHED・太さは細線）。本番の組立て buildFacadeModel を通しても同じ', () => {
+  const { inputs } = setup([{}]);
+  const dashed = lineFigureOf({ weightRole: 'ultraThick', dashRole: DetailDash.DASHED });
+  const prims = run(inputs, SOUTH, { figureOf: dashed });
+  assert.equal(prims.length, 6, '正面 eF（L 字）の 6 辺');
+  assert.ok(prims.every(p => p.type === 'line' && p.dash === ElevationDash.DASHED && p.weight === THIN));
+  const solid = buildFacadeModel(inputs, { figureOf: lineFigureOf({ weightRole: 'thick', dashRole: DetailDash.SOLID }) });
+  const detail = solid.flatMap(f => f.primitives).filter(p => p.source === DETAIL_PRIM_SOURCE);
+  assert.equal(detail.length, 3);
+  assert.ok(detail.every(p => p.weight === THIN));
 });
 
 test('【失敗系】図の参照切れ・分類違い・fit 不能・配置なし・不正な要素は何も足さず例外にしない', () => {

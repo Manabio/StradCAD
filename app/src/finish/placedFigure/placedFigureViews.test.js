@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  PenDir, DetailView, DetailPlacementView, DetailDatumRole, DetailDatumKind, DetailAxis, DetailDash,
+  PenDir, DetailView, DetailPlacementView, DetailDatumRole, DetailDatumKind, DetailAxis, DetailDash, PLACED_FIGURE_WEIGHT_ROLE,
 } from '../../core/constants.js';
 import { fixedLen, move } from '../roomDetailTestFixtures.js';
 import { PlacedFigure } from '../../core/placedFigure.js';
@@ -107,6 +107,16 @@ test('【失敗系】resolvePlacedView: 参照切れ・分類違い（平面の�
   assert.equal(resolvePlacedView(mainFig({ [LEFT]: 'gone', [RIGHT]: 'eR' }), LEFT, figureOf), null);
   assert.equal(resolvePlacedView(mainFig({ [LEFT]: 'plan', [RIGHT]: 'eR' }), LEFT, figureOf), null);
   assert.equal(resolvePlacedView(mainFig({ [FRONT]: 5 }), FRONT, figureOf), null);
+});
+
+test('placeViewStrokes: 線の太さの指定は PLACED_FIGURE_WEIGHT_ROLE へ置換し、破線などの dashRole は残す。入力（fit 済みの図）は変えない', () => {
+  const stroke = (weightRole, dashRole) => ({ id: weightRole, closed: false, line: { weightRole, dashRole }, points: [{ s: 0, t: 0 }, { s: 10, t: 5 }] });
+  const fitted = { strokes: [stroke('ultraThick', DetailDash.DASHED), stroke('thick', DetailDash.SOLID), stroke('medium', DetailDash.SWING)] };
+  const placed = placeViewStrokes(fitted, true);
+  assert.deepEqual(placed.map(st => st.line.weightRole), [PLACED_FIGURE_WEIGHT_ROLE, PLACED_FIGURE_WEIGHT_ROLE, PLACED_FIGURE_WEIGHT_ROLE]);
+  assert.deepEqual(placed.map(st => st.line.dashRole), [DetailDash.DASHED, DetailDash.SOLID, DetailDash.SWING]);
+  assert.deepEqual(fitted.strokes.map(st => st.line.weightRole), ['ultraThick', 'thick', 'medium'], '入力は不変');
+  assert.deepEqual(placed[0].points, [[0, 0], [-10, 5]], '座標の写像は従来どおり');
 });
 
 test('fitPlacedView／sRangeOf／placeViewStrokes: L 字（配置原点＝頂点 (200,100)）の s 範囲は −200..150。反転すると −150..200', () => {

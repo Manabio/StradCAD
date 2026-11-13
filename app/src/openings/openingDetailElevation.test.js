@@ -47,6 +47,21 @@ function expected(W, H, S = 0, dashX = 100) {
 }
 const normPrim = p => (p.type === 'polyline' ? { ...p, points: pts(p.points) } : { ...p, x1: p.x1 + 0, y1: p.y1 + 0, x2: p.x2 + 0, y2: p.y2 + 0 });
 
+// 配置した姿図の細線化（S4）は建具の姿図へ漏らさない: 太い線の図を建具の姿図として描くと従来どおり太線（thick→cut の太さ）。
+test('建具の姿図は図の線の太さの指定をそのまま使う（極太・太線は切断線の太さ thick・細線は thin。配置の細線化は漏れない）', () => {
+  const thickLine = id => ({ weightRole: id, dashRole: 'solid' });
+  const base = elevationFigure('df-t');
+  installElevationFigures([{ ...base, strokes: base.strokes.map(s => (s.id === 'lt' ? { ...s, line: thickLine('thick') } : s.id === 'br' ? { ...s, line: thickLine('ultraThick') } : s)) }]);
+  const o = withRef(door(), 'df-t');
+  const prims = detailPrims(buildOpeningElevation(o, { tag: null, entry: entryOf(o) }));
+  assert.deepEqual(prims.map(p => [p.type, p.weight, p.kind, p.dash]), [
+    ['polyline', 'thick', undefined, undefined],
+    ['polyline', 'thick', undefined, undefined],
+    ['line', 'thin', undefined, 'dashed'],
+    ['line', 'thin', undefined, 'dashed'],
+  ]);
+});
+
 // ---- 置換 ----
 
 test('置換: 姿図の詳細図があれば枠(rect)・機構(吊元V・FIX文字)・ハンドルを置き換え、source:detail の polyline／破線の line だけが図になる。dim・FL線・tag は残る', () => {
