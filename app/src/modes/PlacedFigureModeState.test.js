@@ -78,6 +78,46 @@ test('beginFigureMove: 所属する配置なら配置待ちを解いて移動待
   assert.deepEqual([state.placingFigureKey, state.movingFigureId], [null, 'a']);
 });
 
+test('beginFigureMove: 移動待ちにした配置は選択もする。別の配置を選択中なら選択が移り、移動のタップ後も選択はその配置のまま', () => {
+  const { graph, state } = seeded();
+  state.selectPlacedFigure('g');
+  state.beginFigureMove('a');
+  assert.equal(state.selectedPlacedFigureId, 'a');
+  assert.equal(state.movingFigureId, 'a');
+  state.tapAt(700, 700, TAP);
+  assert.equal(state.selectedPlacedFigureId, 'a');
+  assert.equal(state.movingFigureId, null);
+  assert.equal(graph.placedFigures.find(p => p.id === 'a').x, 700);
+  undoManager.undo();
+});
+
+test('選択と移動待ちを食い違わせない: 移動待ちの間に別の配置を選ぶ・選択を解除すると移動待ちが解ける。同じ配置の選び直し・所属しない id では解けない', () => {
+  const { graph, state } = seeded();
+  const d0 = depth();
+  state.beginFigureMove('a');
+  state.selectPlacedFigure('a');
+  assert.deepEqual([state.selectedPlacedFigureId, state.movingFigureId], ['a', 'a'], '同じ配置の選び直しでは解けない');
+  state.selectPlacedFigure('f');
+  assert.deepEqual([state.selectedPlacedFigureId, state.movingFigureId], ['a', 'a'], '所属しない id は無視');
+  state.selectPlacedFigure('g');
+  assert.deepEqual([state.selectedPlacedFigureId, state.movingFigureId], ['g', null], '別の配置を選ぶと解ける');
+  state.tapAt(900, 900, TAP);
+  const a = graph.placedFigures.find(p => p.id === 'a');
+  assert.deepEqual([a.x, a.y], [100, 50], '解けた後のタップでは動かない');
+  assert.equal(depth(), d0);
+  state.beginFigureMove('a');
+  state.selectPlacedFigure(null);
+  assert.deepEqual([state.selectedPlacedFigureId, state.movingFigureId], [null, null], '選択の解除でも解ける');
+});
+
+test('【失敗系】beginFigureMove: 所属しない id・無い id は選択も移動待ちも変えない', () => {
+  const { state } = seeded();
+  state.selectPlacedFigure('g');
+  state.beginFigureMove('f');
+  state.beginFigureMove('nope');
+  assert.deepEqual([state.selectedPlacedFigureId, state.movingFigureId], ['g', null]);
+});
+
 test('【失敗系】移動待ちに所属しない id が入っていても動かさず、解くだけで何も積まない', () => {
   const { graph, state } = seeded();
   runInAction(() => { state.movingFigureId = 'f'; });
@@ -197,6 +237,31 @@ test('remove: 選択・移動待ちも解く（無関係な選択は残す）。
   state.removePlacedFigure('a');
   assert.equal(state.selectedPlacedFigureId, 'g');
   undoManager.undo();
+});
+
+test('remove: 移動待ち a の間に別の配置 g を消しても、移動待ちと選択は a のまま', () => {
+  const { state } = seeded();
+  state.beginFigureMove('a');
+  state.removePlacedFigure('g');
+  assert.deepEqual([state.movingFigureId, state.selectedPlacedFigureId], ['a', 'a']);
+  undoManager.undo();
+});
+
+test('movingFigure: 実在する移動待ちだけが見える（undo で消えた移動待ちは null＝帯・カーソルを出さない）。次のタップで id も解ける', () => {
+  const { state } = make();
+  const d0 = depth();
+  state.beginFigurePlacement('san');
+  state.tapAt(300, 100, TAP);
+  const id = state.selectedPlacedFigureId;
+  assert.equal(state.movingFigure, null);
+  state.beginFigureMove(id);
+  assert.equal(state.movingFigure?.id ?? null, id);
+  undoManager.undo(); // 置いた配置が消える
+  assert.equal(state.movingFigureId, id, 'id は残る');
+  assert.equal(state.movingFigure?.id ?? null, null, '実在しないので見えない');
+  state.tapAt(500, 500, TAP);
+  assert.equal(state.movingFigureId, null);
+  assert.equal(depth(), d0);
 });
 
 test('placedFiguresInMode は所属（分類不明を含む）を graph の並びのまま返す。selectPlacedFigure(null) で解除', () => {

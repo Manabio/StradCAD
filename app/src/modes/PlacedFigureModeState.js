@@ -29,6 +29,7 @@ export class PlacedFigureModeState {
       movingFigureId: observable,
       selectedPlacedFigureId: observable,
       selectedPlacedFigure: computed,
+      movingFigure: computed,
       beginFigurePlacement: action,
       cancelFigurePlacement: action,
       beginFigureMove: action,
@@ -61,6 +62,11 @@ export class PlacedFigureModeState {
     return this._owned(this.selectedPlacedFigureId) ?? null;
   }
 
+  /** 移動待ちの配置。実在し所属するときだけ（undo で消えた移動待ちは null に見える＝帯・カーソルはこちらで判定する）。 */
+  get movingFigure() {
+    return this._owned(this.movingFigureId) ?? null;
+  }
+
   /** 配置待ちを始める。空でない文字列で、図の分類が def.subjects に含まれるときだけ（図が引けない・他モードの分類は無視）。移動待ちは解く。 */
   beginFigurePlacement(key) {
     if (typeof key !== 'string' || key === '') return;
@@ -72,11 +78,12 @@ export class PlacedFigureModeState {
 
   cancelFigurePlacement() { this.placingFigureKey = null; }
 
-  /** 移動待ちを始める。この mode に所属する実在の配置だけ。配置待ちは解く。 */
+  /** 移動待ちを始める。この mode に所属する実在の配置だけ。配置待ちは解く。動かす配置が分かるよう選択も立てる。 */
   beginFigureMove(id) {
     if (this._owned(id) === undefined) return;
     this.placingFigureKey = null;
     this.movingFigureId = id;
+    this.selectedPlacedFigureId = id;
   }
 
   cancelFigureMove() { this.movingFigureId = null; }
@@ -105,11 +112,13 @@ export class PlacedFigureModeState {
     });
   }
 
-  /** 配置を選択する。null で解除。所属しない id・無い id は無視。 */
+  /** 配置を選択する。null で解除。所属しない id・無い id は無視。移動待ちの配置と別の配置を選ぶ・解除すると移動待ちも解く。 */
   selectPlacedFigure(id) {
-    if (id === null) { this.selectedPlacedFigureId = null; return; }
+    if (id === null) { this.selectedPlacedFigureId = null; this.movingFigureId = null; return; }
     if (this._owned(id) === undefined) return;
     this.selectedPlacedFigureId = id;
+    // 移動待ちの配置と選択を食い違わせない（選択枠・行の強調が「動かす配置」を示す）。別の配置を選んだら移動待ちを解く
+    if (this.movingFigureId !== id) this.movingFigureId = null;
   }
 
   /** 配置の項目を直す。1回で undo 1エントリ。 */

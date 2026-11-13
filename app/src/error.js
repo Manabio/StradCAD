@@ -386,7 +386,9 @@ export const PLACED_FIGURE_TAB_TEXT = Object.freeze({
   note: '備考', x: 'X', y: 'Y', height: '高さ', registerHint: '部分詳細図ヘルパーで登録',
 });
 // 図面モード（姿図配置モード）の汎用パネル（finish/placedFigure/PlacedFigureModePanel.jsx）が足す文言。ほかは PLACED_FIGURE_TAB_TEXT・DETAIL_PRODUCT_TEXT を使う。
-export const PLACED_FIGURE_MODE_PANEL_TEXT = Object.freeze({ room: '部屋', noRoom: '（部屋なし）', direction: '向き' });
+export const PLACED_FIGURE_MODE_PANEL_TEXT = Object.freeze({
+  room: '部屋', noRoom: '（部屋なし）', direction: '向き', move: '移動', tapMoveTarget: '移動先をタップ',
+});
 export const DETAIL_PLACEMENT_VIEW_LABEL_TEXT = Object.freeze({
   front: '正面図', back: '背面図', left: '左側面図', right: '右側面図', ceiling: '見上げ図',
 });

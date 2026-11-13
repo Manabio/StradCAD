@@ -2852,7 +2852,7 @@ const App = observer(() => {
                : appMode === 'elevation' ? 'grab'
                : appMode === 'facade' ? 'grab'
                // 図面モード: 配置待ち・移動待ちの間は 'crosshair'（置く点を指す）。それ以外は 'default'（パン中は上の isPanning が勝つ）
-               : isPlacedFigureMode(appMode) ? ((mode?.placingFigureKey != null || mode?.movingFigureId != null) ? 'crosshair' : 'default')
+               : isPlacedFigureMode(appMode) ? ((mode?.placingFigureKey != null || mode?.movingFigure != null) ? 'crosshair' : 'default')
                : appMode === 'opening' ? ((nearOpening || nearWall) ? 'pointer' : 'default')
                : isMoving         ? 'grab'
                : isDrawing        ? 'crosshair'

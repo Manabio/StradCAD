@@ -64,7 +64,7 @@ test('【配線】App.jsx: modeBoundaries に図面モードを登録しない�
 
 test('【配線】App.jsx: カーソルは図面モードの配置待ち・移動待ちの間 crosshair、それ以外 default', () => {
   assert.match(appCode,
-    /^\s*: isPlacedFigureMode\(appMode\) \? \(\(mode\?\.placingFigureKey != null \|\| mode\?\.movingFigureId != null\) \? 'crosshair' : 'default'\)\s*$/m);
+    /^\s*: isPlacedFigureMode\(appMode\) \? \(\(mode\?\.placingFigureKey != null \|\| mode\?\.movingFigure != null\) \? 'crosshair' : 'default'\)\s*$/m);
   // 図面モードの行はパン中（isPanning）より後・建具より前
   const iPan = appCode.indexOf(": isPanning        ? 'grabbing'");
   const iPlaced = appCode.indexOf(': isPlacedFigureMode(appMode) ?');

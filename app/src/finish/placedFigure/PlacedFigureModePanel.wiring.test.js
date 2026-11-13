@@ -41,7 +41,9 @@ test('【配線】パネル: 候補は純モジュール placeableFigureCandidat
 
 test('【配線】パネル: 配置待ちの表示（タップ案内・取消）は仕上げタブと同じ文言・配置待ちの間だけ', () => {
   has(panel, '{mode.placingFigureKey && (');
-  has(panel, '<div style={placingBarStyle}>');
+  // 帯の開きは配置待ちと移動待ちの 2 本（同じスタイル。移動待ちは次のテスト）。配置待ちの帯は条件の直後
+  assert.equal(panel.filter(l => l === '<div style={placingBarStyle}>').length, 2);
+  assert.equal(panel[panel.indexOf('{mode.placingFigureKey && (') + 1], '<div style={placingBarStyle}>');
   has(panel, '<span style={{ flex: 1 }}>{PLACED_FIGURE_TAB_TEXT.tapPoint}</span>');
   has(panel, '<button onClick={() => mode.cancelFigurePlacement()} style={linkButtonStyle}>{PLACED_FIGURE_TAB_TEXT.cancel}</button>');
 });
@@ -60,10 +62,11 @@ test('【配線】パネル: 一覧の行は純モジュール placedFigureRows�
   has(panel, "import { placedFigureRoomNameLookup } from './placedFigureRooms.js';");
   const i = panel.indexOf('<FigureRow');
   assert.ok(i >= 0 && panel.filter(l => l.startsWith('<FigureRow')).length === 1, 'FigureRow は 1 か所');
-  assert.deepEqual(panel.slice(i, i + 9), [
+  assert.deepEqual(panel.slice(i, i + 8), [
     '<FigureRow', 'key={row.id}', 'graph={graph}', 'mode={mode}', 'pf={placed.get(row.id)}', 'entry={null}', 'onPad={setPad}',
-    'title={row.title}', 'extra={(',
+    'title={row.title}',
   ]);
+  assert.ok(panel.indexOf('positionAction={(') > i && panel.indexOf('extra={(') > panel.indexOf('positionAction={('), 'positionAction は title の後・extra の前');
   const j = panel.indexOf('extra={(');
   has(panel, '{row.productLines.map(l => <div key={l.label} style={lineStyle}>{l.label} {l.value}</div>)}');
   has(panel, '<div style={lineStyle}>{PLACED_FIGURE_MODE_PANEL_TEXT.room} {row.roomName ?? PLACED_FIGURE_MODE_PANEL_TEXT.noRoom}</div>');
@@ -77,14 +80,41 @@ test('【配線】パネル: 一覧の行は純モジュール placedFigureRows�
   }
 });
 
+test('【配線】パネル: ［移動］は FigureRow の positionAction の中のボタンで、押すと行へ伝播させず mode.beginFigureMove(行の id)。ボタン名は文言から', () => {
+  const a = panel.indexOf('positionAction={(');
+  const e = panel.indexOf('extra={(');
+  assert.ok(a >= 0 && e > a, 'positionAction がある');
+  const k = panel.indexOf('onClick={e => { e.stopPropagation(); mode.beginFigureMove(row.id); }}');
+  assert.ok(k > a && k < e, '押下の処理は positionAction の中');
+  assert.equal(panel.filter(l => l.includes('beginFigureMove(')).length, 1);
+  const m = panel.indexOf('{PLACED_FIGURE_MODE_PANEL_TEXT.move}');
+  assert.ok(m > k && m < e, 'ボタン名は文言 move');
+  assert.equal(panel[a + 1], '<button');
+});
+
+test('【配線】パネル: 移動待ちの帯（移動先をタップ・取消）は mode.movingFigure（実在する移動待ち。undo で消えたら出さない）のときだけ・配置待ちの帯と同じスタイル。取消は cancelFigureMove', () => {
+  const i = panel.indexOf('{mode.movingFigure && (');
+  assert.ok(i >= 0 && panel.filter(l => l.includes('mode.movingFigure')).length === 1, '条件つきの 1 か所');
+  assert.ok(!panel.some(l => l.includes('movingFigureId')), 'パネルは id ではなく実在する移動待ちで判定する');
+  assert.deepEqual(panel.slice(i + 1, i + 6), [
+    '<div style={placingBarStyle}>',
+    '<span style={{ flex: 1 }}>{PLACED_FIGURE_MODE_PANEL_TEXT.tapMoveTarget}</span>',
+    '<button onClick={() => mode.cancelFigureMove()} style={linkButtonStyle}>{PLACED_FIGURE_TAB_TEXT.cancel}</button>',
+    '</div>',
+    ')}',
+  ]);
+  assert.ok(i > panel.indexOf('{mode.placingFigureKey && ('), '配置待ちの帯の後');
+  assert.ok(i < panel.indexOf('{rows.map(row => ('), '一覧の前');
+});
+
 test('【配線】パネル: 見出しは定義表の表示名（mode.def.label）・選択の信号は mode.selectedPlacedFigureId（横長 ModePanel・縦長 BottomSheet）', () => {
   has(panel, '? <ModePanel title={mode.def.label} raiseSignal={mode.selectedPlacedFigureId}>{inner}</ModePanel>');
   has(panel, ': <BottomSheet title={mode.def.label} raiseSignal={mode.selectedPlacedFigureId}>{inner}</BottomSheet>;');
   has(panel, 'return isLandscape');
 });
 
-test('【配線】パネル: 離れたら配置待ちを解く・NumPad の確定は mode.updatePlacedFigure（有限値のときだけ）', () => {
-  has(panel, 'useEffect(() => () => mode.cancelFigurePlacement(), [mode]);');
+test('【配線】パネル: 離れたら配置待ち・移動待ちを解く・NumPad の確定は mode.updatePlacedFigure（有限値のときだけ）', () => {
+  has(panel, 'useEffect(() => () => { mode.cancelFigurePlacement(); mode.cancelFigureMove(); }, [mode]);');
   has(panel, 'if (Number.isFinite(v)) mode.updatePlacedFigure(pad.id, { [pad.field]: v });');
   has(panel, 'onConfirm={confirmPad}');
 });
@@ -110,14 +140,15 @@ test('【不変条件】パネルは色・余白の値を書き写さない（�
 
 // ---- 仕上げタブ（不変）----
 
-test('【配線】仕上げタブ: FigureRow は title・extra なしで描く（仕上げタブの見た目は不変）', () => {
+test('【配線】仕上げタブ: FigureRow は title・extra・positionAction なしで描く（仕上げタブの見た目は不変）', () => {
   has(tab, '<FigureRow key={pf.id} graph={graph} mode={mode} pf={pf} entry={catalog.get(pf.figureKey) ?? null} onPad={setPad} />');
   assert.equal(tab.filter(l => l.includes('<FigureRow')).length, 1);
-  assert.ok(!tab.some(l => /\b(title|extra)=/.test(l)), '仕上げタブの呼び出しに title・extra を渡さない');
+  assert.ok(!tab.some(l => /\b(title|extra|positionAction)=/.test(l)), '仕上げタブの呼び出しに title・extra・positionAction を渡さない');
+  assert.ok(!tab.some(l => l.includes('beginFigureMove')), '仕上げタブに［移動］は無い');
 });
 
 test('【配線】FigureRow: title は見出しの差し替え（無ければ従来の見出し）・extra は見出しの下に描き、渡したときだけ既定の回転角・鏡像の表示を出さない', () => {
-  has(tab, 'export const FigureRow = observer(({ graph, mode, pf, entry, onPad, title, extra }) => {');
+  has(tab, 'export const FigureRow = observer(({ graph, mode, pf, entry, onPad, title, extra, positionAction }) => {');
   has(tab, '<span style={{ fontWeight: 700, flex: 1 }}>{title ?? (entry?.label || pf.figureKey)}</span>');
   has(tab, '{extra}');
   has(tab, "{extra == null && <span style={{ color: '#64748b' }}>{pf.rotationDeg}°{pf.mirror ? ` ${PLACED_FIGURE_TAB_TEXT.mirror}` : ''}</span>}");
@@ -127,7 +158,19 @@ test('【配線】FigureRow: title は見出しの差し替え（無ければ従
   assert.ok(tab.indexOf('{PLACED_FIGURE_TAB_TEXT.remove}') < iExtra);
 });
 
+test('【配線】FigureRow: positionAction は位置の行（X・Y・高さ・既定の向き表示）の末尾に、その行の中で描く', () => {
+  has(tab, '{positionAction}');
+  const p = tab.indexOf('{positionAction}');
+  const z = tab.indexOf("{valueButton('zMm', PLACED_FIGURE_TAB_TEXT.height)}");
+  const dir = tab.findIndex(l => l.startsWith('{extra == null && '));
+  assert.ok(z >= 0 && dir > z && p > dir, '高さ・既定の向き表示の後');
+  assert.equal(tab[p + 1], '</div>', '位置の行の閉じの直前');
+  assert.equal(tab[p + 2], '<input');
+});
+
 test('PLACED_FIGURE_MODE_PANEL_TEXT: 承認済みの文言そのまま・凍結', () => {
-  assert.deepEqual(PLACED_FIGURE_MODE_PANEL_TEXT, { room: '部屋', noRoom: '（部屋なし）', direction: '向き' });
+  assert.deepEqual(PLACED_FIGURE_MODE_PANEL_TEXT, {
+    room: '部屋', noRoom: '（部屋なし）', direction: '向き', move: '移動', tapMoveTarget: '移動先をタップ',
+  });
   assert.ok(Object.isFrozen(PLACED_FIGURE_MODE_PANEL_TEXT));
 });

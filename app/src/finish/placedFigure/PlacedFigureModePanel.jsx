@@ -18,8 +18,8 @@ export const PlacedFigureModePanel = observer(({ graph, mode, isLandscape }) => 
   const [pickKey, setPickKey] = useState('');
   const [pad, setPad] = useState(null); // NumPad を出している欄 { id, field, label, text } | null
 
-  // パネルを離れたら配置待ちを解く
-  useEffect(() => () => mode.cancelFigurePlacement(), [mode]);
+  // パネルを離れたら配置待ち・移動待ちを解く
+  useEffect(() => () => { mode.cancelFigurePlacement(); mode.cancelFigureMove(); }, [mode]);
 
   const candidates = placeableFigureCandidates(detailFigureCatalog(), mode.def.subjects);
   const effectiveKey = candidates.some(c => c.key === pickKey) ? pickKey : (candidates[0]?.key ?? '');
@@ -52,6 +52,12 @@ export const PlacedFigureModePanel = observer(({ graph, mode, isLandscape }) => 
           <button onClick={() => mode.cancelFigurePlacement()} style={linkButtonStyle}>{PLACED_FIGURE_TAB_TEXT.cancel}</button>
         </div>
       )}
+      {mode.movingFigure && (
+        <div style={placingBarStyle}>
+          <span style={{ flex: 1 }}>{PLACED_FIGURE_MODE_PANEL_TEXT.tapMoveTarget}</span>
+          <button onClick={() => mode.cancelFigureMove()} style={linkButtonStyle}>{PLACED_FIGURE_TAB_TEXT.cancel}</button>
+        </div>
+      )}
       <div style={{ overflow: 'auto', flex: 1 }}>
         {rows.map(row => (
           <FigureRow
@@ -62,6 +68,14 @@ export const PlacedFigureModePanel = observer(({ graph, mode, isLandscape }) => 
             entry={null}
             onPad={setPad}
             title={row.title}
+            positionAction={(
+              <button
+                onClick={e => { e.stopPropagation(); mode.beginFigureMove(row.id); }}
+                style={linkButtonStyle}
+              >
+                {PLACED_FIGURE_MODE_PANEL_TEXT.move}
+              </button>
+            )}
             extra={(
               <>
                 {row.productLines.map(l => <div key={l.label} style={lineStyle}>{l.label} {l.value}</div>)}

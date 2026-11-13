@@ -24,8 +24,9 @@ export const hintStyle = { color: '#94a3b8' };
 // 配置は［配置］で配置待ちにして平面をタップ（FinishModeState.startDrag が置く）。置いた後の位置は X・Y を NumPad で直す。
 // finish/equipment/EquipmentTab.jsx と同じ型（一覧＋選択で平面の配置を選ぶ）。文言は error.js の PLACED_FIGURE_TAB_TEXT。
 // FigureRow は図面モードの汎用パネル（PlacedFigureModePanel.jsx）も使う。title（見出しの差し替え）・extra（見出しの下の追加表示。
-// 渡すと既定の「回転角・鏡像」の表示は出さない＝extra 側が向きを持つ）。どちらも渡さなければ仕上げタブの描画のまま。
-export const FigureRow = observer(({ graph, mode, pf, entry, onPad, title, extra }) => {
+// 渡すと既定の「回転角・鏡像」の表示は出さない＝extra 側が向きを持つ）。positionAction は位置の行（X・Y・高さ）の末尾に描く追加操作。
+// 3 つとも渡さなければ仕上げタブの描画のまま。
+export const FigureRow = observer(({ graph, mode, pf, entry, onPad, title, extra, positionAction }) => {
   const selected = pf.id === mode.selectedPlacedFigureId;
   const ref = useScrollIntoViewWhenActive(selected);
   const stop = e => e.stopPropagation();
@@ -64,6 +65,7 @@ export const FigureRow = observer(({ graph, mode, pf, entry, onPad, title, extra
         {valueButton('y', PLACED_FIGURE_TAB_TEXT.y)}
         {valueButton('zMm', PLACED_FIGURE_TAB_TEXT.height)}
         {extra == null && <span style={{ color: '#64748b' }}>{pf.rotationDeg}°{pf.mirror ? ` ${PLACED_FIGURE_TAB_TEXT.mirror}` : ''}</span>}
+        {positionAction}
       </div>
       <input
         type="text"
