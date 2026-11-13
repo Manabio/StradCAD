@@ -45,7 +45,7 @@ app/src/
 | 構造モードの設計意図 | `.claude/structural-model.md` |
 | 建具モードの設計意図 | `.claude/opening-model.md` |
 | 図面合成（複数階×複数カテゴリ）の設計意図 | `.claude/figure.md` |
-| モード切替アーキテクチャ | `.claude/mode-system.md` |
+| モード切替アーキテクチャ。図面モード（姿図配置モード。定義表の1行から立つ。給排水）の節を含む | `.claude/mode-system.md` |
 | 階・Plane設計。入力の関門（uiBusy）の節を含む | `.claude/floor-design.md` |
 | 平面の断面解決（立体＋水平切断）。切断高の階属性。見上げ（天伏）の節を含む | `.claude/plan-section.md` |
 | 天伏モード（見上げの天井伏図）の設計意図。独立 State・天井の実体は今後 | `.claude/ceiling-model.md` |

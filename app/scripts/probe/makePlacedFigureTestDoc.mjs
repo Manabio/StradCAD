@@ -5,10 +5,12 @@
 //     df-pf-hvac（平面の姿図 hvac。矩形 600×400・views.ceiling で df-pf-hvac-ceiling を引く）／
 //     df-pf-hvac-ceiling（平面の姿図 hvac。矩形＋縦横の中線＝線数 3。見上げ用）／
 //     df-pf-sanitary-front（立面の姿図 sanitary。400×800 矩形＋中線＝線数 2。衛生の views.front）／
-//     df-pf-sanitary-right（同 300×800 矩形＋線 2 本＝線数 3。衛生の views.right。左側面は無く右の鏡像で代用される）。
+//     df-pf-sanitary-right（同 300×800 矩形＋線 2 本＝線数 3。衛生の views.right〔表示名は左側面図〕。views.left〔表示名は右側面図〕の図は無く、right の鏡像で代用される）。
+//   キーと表示名: キーは器具自身の左右（right＝器具の右手側から見た図）、表示名は製図の呼び方（正面図に向かって左から見た図が左側面図）で、left／right の表示名は入れ替わる
+//   （right＝左側面図・left＝右側面図。error.js DETAIL_PLACEMENT_VIEW_LABEL_TEXT）。以下「right の図」はキー right（表示名は左側面図）の図のこと。
 //   展開（S10 P5）: 読み戻し後、1 階の便所の帯の 4 面について appendPlacedFigures の出力（線数・x の範囲）を assert して出力する。
 //   立面（S10 P6）: 屋外の空調（室外機。建物の南外壁の外 500 mm・回転 0＝正面が南向き）を 1 台足し、df-pf-hvac の views に front（線数 2）・
-//     right（線数 3）を同梱する（df-pf-hvac-front／df-pf-hvac-right。左側面は無く右の鏡像で代用）。読み戻し後、東・南・西・北の 4 面について
+//     right（線数 3。表示名は左側面図）を同梱する（df-pf-hvac-front／df-pf-hvac-right。left〔表示名は右側面図〕の図は無く right の鏡像で代用）。読み戻し後、東・南・西・北の 4 面について
 //     buildFacadePlacedFigures の出力（線数・図の X の範囲・手計算の u0）を assert して出力する。
 // 往復を先に確かめる: 書いた直後に読み戻し、1 階 placedFigures 3 件・見下げは 3 件とも線あり・見上げは空調 2 件だけで ceiling 図の線数、を assert する。
 // 使い方: cd app && MSYS_NO_PATHCONV=1 node --import ./scripts/testSetup.mjs scripts/probe/makePlacedFigureTestDoc.mjs [--src D:/tatsuya/Download/moku4.stq] [--out D:/tatsuya/Download/placed-figure-test.stq]
@@ -77,7 +79,7 @@ const sanitary = base(KEY_SANITARY, '衛生器具 L字（配置確認用）', De
   { datumId: 'dt0', strokeId: 'a', vertexIndex: 2 },
 ], { [DETAIL_VIEWS_FIELD]: { [DetailPlacementView.FRONT]: KEY_SANITARY_FRONT, [DetailPlacementView.RIGHT]: KEY_SANITARY_RIGHT } });
 // (1b) 衛生の正面図（立面の姿図 sanitary）: 幅 400×高 800 の矩形＋縦の中線＝線数 2。配置原点＝矩形の左下の頂点 3（s 0..400・t −800..0）。
-// (1c) 衛生の右側面図: 幅 300×高 800 の矩形＋縦線 2 本＝線数 3。配置原点は同じく左下。左側面の図は無い（右の鏡像で代用される）。
+// (1c) 衛生の right の図（表示名は左側面図）: 幅 300×高 800 の矩形＋縦線 2 本＝線数 3。配置原点は同じく左下。left の図（表示名は右側面図）は無い（right の鏡像で代用される）。
 const elevBase = (key, label, strokes, anchors, subject = DetailSubject.SANITARY) => ({ ...base(key, label, subject, strokes, anchors), view: DetailView.ELEVATION });
 const bottomLeft = strokeId => [
   { datumId: 'ds0', strokeId, vertexIndex: 3 },
@@ -90,7 +92,7 @@ const vLineAnchors = (id, sMm, h = 800) => [
 ];
 const sanitaryFront = elevBase(KEY_SANITARY_FRONT, '衛生 正面 矩形＋中線（配置確認用）', [rectOf(400, 800), vLine('b')],
   [...bottomLeft('a'), ...vLineAnchors('b', 200)]);
-const sanitaryRight = elevBase(KEY_SANITARY_RIGHT, '衛生 右側面 矩形＋線2本（配置確認用）', [rectOf(300, 800), vLine('b'), vLine('c')],
+const sanitaryRight = elevBase(KEY_SANITARY_RIGHT, '衛生 左側面 矩形＋線2本（配置確認用。キー right）', [rectOf(300, 800), vLine('b'), vLine('c')],
   [...bottomLeft('a'), ...vLineAnchors('b', 100), ...vLineAnchors('c', 200)]);
 // (2) 空調（平面）: 矩形 600×400（頂点 0 から右 600・下 400・左 600 で閉）。配置原点＝頂点 1（右上の角）。views.ceiling で見上げ図を引く。
 const rectMoves = [move(PenDir.RIGHT, fixedLen(600)), move(PenDir.DOWN, fixedLen(400)), move(PenDir.LEFT, fixedLen(600))];
@@ -103,10 +105,10 @@ const hvac = base(KEY_HVAC, '空調 矩形（配置確認用）', DetailSubject.
   { [DETAIL_VIEWS_FIELD]: {
     [DetailPlacementView.CEILING]: KEY_HVAC_CEILING, [DetailPlacementView.FRONT]: KEY_HVAC_FRONT, [DetailPlacementView.RIGHT]: KEY_HVAC_RIGHT,
   } });
-// (2b) 空調の正面図（立面）: 幅 600×高 500 の矩形＋縦の中線＝線数 2。(2c) 右側面図: 幅 400×高 500 の矩形＋縦線 2 本＝線数 3。配置原点は左下。
+// (2b) 空調の正面図（立面）: 幅 600×高 500 の矩形＋縦の中線＝線数 2。(2c) right の図（表示名は左側面図）: 幅 400×高 500 の矩形＋縦線 2 本＝線数 3。配置原点は左下。
 const hvacFront = elevBase(KEY_HVAC_FRONT, '空調 正面 矩形＋中線（配置確認用）', [rectOf(600, 500), vLine('b', 500)],
   [...bottomLeft('a'), ...vLineAnchors('b', 300, 500)], DetailSubject.HVAC);
-const hvacRight = elevBase(KEY_HVAC_RIGHT, '空調 右側面 矩形＋線2本（配置確認用）', [rectOf(400, 500), vLine('b', 500), vLine('c', 500)],
+const hvacRight = elevBase(KEY_HVAC_RIGHT, '空調 左側面 矩形＋線2本（配置確認用。キー right）', [rectOf(400, 500), vLine('b', 500), vLine('c', 500)],
   [...bottomLeft('a'), ...vLineAnchors('b', 130, 500), ...vLineAnchors('c', 270, 500)], DetailSubject.HVAC);
 // (3) 空調（見上げ）: 同じ矩形に縦・横の中線（線数 3）。中線の始点は Anchor.offsetMm で矩形の辺の中点に載せる。
 const hvacCeiling = base(KEY_HVAC_CEILING, '空調 見上げ 矩形＋中線（配置確認用）', DetailSubject.HVAC, [
@@ -190,7 +192,7 @@ setOverlay(CatalogKind.DETAIL_FIGURE, { doc: figs, user: detailBuiltins });
 const down = placedFigureDrawPlan(G.placedFigures, detailFigureEntry, { direction: 'down' });
 const up = placedFigureDrawPlan(G.placedFigures, detailFigureEntry, { direction: 'up' });
 // 展開（S10 P5）: 1 階の便所の帯の各面について appendPlacedFigures の出力を取る。衛生は回転 90（正面＝西向き）。
-//   手計算（R3）: 北壁 d=(0,−1)→左側面（図が無い→右の鏡像 3 本）・東壁 d=(1,0)→正面 2 本・南壁 d=(0,1)→右側面 3 本・西壁 d=(−1,0)→背面（図が無い→0 本）
+//   手計算（R3）: 北壁 d=(0,−1)→left の図（表示名は右側面図。図が無い→right の鏡像 3 本）・東壁 d=(1,0)→正面 2 本・南壁 d=(0,1)→right の図（表示名は左側面図）3 本・西壁 d=(−1,0)→背面（図が無い→0 本）
 const toiletRoom = G.rooms.find(r => r.name === '便所');
 const faceRows = buildRoomFaces(toiletRoom, G).map(face => {
   const prims = [];
@@ -203,7 +205,7 @@ for (const r of faceRows) console.log(`便所の面 ${r.letter} d=${JSON.stringi
 const rowOf = letter => faceRows.find(r => r.letter === letter);
 check(faceRows.length === 4, `便所の面が 4 面（${faceRows.length}）`);
 check(rowOf('A')?.n === 3 && rowOf('B')?.n === 2 && rowOf('C')?.n === 3 && rowOf('D')?.n === 0,
-  '便所: 北＝右側面の鏡像 3 本・東＝正面 2 本・南＝右側面 3 本・西＝0 本（R3 の手計算どおり）');
+  '便所: 北＝right の図の鏡像（left の代用）3 本・東＝正面 2 本・南＝right の図（左側面図）3 本・西＝0 本（R3 の手計算どおり）');
 check(faceRows.every(r => r.n === 0 || r.xMin < r.run && r.xMax > 0), '出た図は面の [0, run] に掛かる');
 check(faceRows.every(r => r.types.every(t => t === 'line' || t === 'polyline')), '足されるプリミティブの型は line／polyline だけ');
 const countBy = plan => Object.fromEntries(['pf-sanitary-1', 'pf-hvac-1', 'pf-hvac-out'].map(id => [id, plan.lines.filter(l => l.figureId === id).length]));
@@ -218,7 +220,7 @@ check(countBy(up)['pf-sanitary-1'] === 0 && countBy(up)['pf-hvac-1'] === 3 && co
 check(up.boxes.length === 2 && up.boxes.every(b => b.figureId.startsWith('pf-hvac')), '見上げの外接は空調の 2 件だけ');
 
 // 立面（S10 P6）: 屋外の空調（回転 0・正面＝南向き）。読み戻した文書から屋外判定→4 面の出力。
-//   手計算（R2・R3）: 南 n(0,1) d(0,−1)＝−f→正面（線数 2）・東 n(1,0) d(−1,0)→左側面（無し→右の鏡像 3 本）・西 n(−1,0) d(1,0)→右側面 3 本・北 d(0,1)＝f→背面（無し→0 本）
+//   手計算（R2・R3）: 南 n(0,1) d(0,−1)＝−f→正面（線数 2）・東 n(1,0) d(−1,0)→left の図（表示名は右側面図。無し→right の鏡像 3 本）・西 n(−1,0) d(1,0)→right の図（表示名は左側面図）3 本・北 d(0,1)＝f→背面（無し→0 本）
 //   u0＝ny·x − nx·y: 南 x・東 −y・西 y・北 −x。
 const floorsRead = P.planes.map(p => ({ plane: p, graph: P.graphMap.get(p.id) ?? null }));
 const facadeInputs = buildFacadeInputs(floorsRead, P, { roofRegionsOf: facadeRoofRegionsResolver(P) });
@@ -240,15 +242,15 @@ for (const r of facadeRows) {
   console.log(`立面 ${r.direction} n=${JSON.stringify(r.n)} u0=${r.u0} uMin=${r.uMin} 線数=${r.count} X=${r.count ? `${r.xMin}..${r.xMax}` : '-'} Y=${r.count ? `${r.yMin}..${r.yMax}` : '-'} 型=${r.types.join(',')}`);
 }
 const facadeRow = d => facadeRows.find(r => r.direction === d);
-// 型: 正面＝矩形 polyline 1 本＋中線 line 1 本・右側面＝矩形 polyline 1 本＋線 2 本 → 線数は polyline と line を合わせて 2／3
+// 型: 正面＝矩形 polyline 1 本＋中線 line 1 本・right の図（左側面図）＝矩形 polyline 1 本＋線 2 本 → 線数は polyline と line を合わせて 2／3
 check(facadeRow('south').count === 2 && facadeRow('east').count === 3 && facadeRow('west').count === 3 && facadeRow('north').count === 0,
-  '立面: 南＝正面 2 本・東＝右側面の鏡像 3 本・西＝右側面 3 本・北＝0 本');
+  '立面: 南＝正面 2 本・東＝right の図の鏡像（left の代用）3 本・西＝right の図（左側面図）3 本・北＝0 本');
 check(facadeRows.every(r => r.types.every(t => t === 'line' || t === 'polyline')), '立面: 足されるプリミティブの型は line／polyline だけ');
-// 図の X の手計算: 南は正面 s 0..600（配置原点＝左下）→ X＝u0−uMin＋0..600。東は右の鏡像で s −400..0。西は s 0..400。
+// 図の X の手計算: 南は正面 s 0..600（配置原点＝左下）→ X＝u0−uMin＋0..600。東は right の図の鏡像で s −400..0。西は s 0..400。
 check(Math.abs(facadeRow('south').xMin - (facadeRow('south').u0 - facadeRow('south').uMin)) < 1e-6
   && Math.abs(facadeRow('south').xMax - (facadeRow('south').u0 - facadeRow('south').uMin + 600)) < 1e-6, '立面 南: X の範囲が u0−uMin＋(0..600)');
 check(Math.abs(facadeRow('east').xMax - (facadeRow('east').u0 - facadeRow('east').uMin)) < 1e-6
-  && Math.abs(facadeRow('east').xMin - (facadeRow('east').u0 - facadeRow('east').uMin - 400)) < 1e-6, '立面 東: X の範囲が u0−uMin＋(−400..0)（右の鏡像）');
+  && Math.abs(facadeRow('east').xMin - (facadeRow('east').u0 - facadeRow('east').uMin - 400)) < 1e-6, '立面 東: X の範囲が u0−uMin＋(−400..0)（right の図の鏡像）');
 check(Math.abs(facadeRow('west').xMin - (facadeRow('west').u0 - facadeRow('west').uMin)) < 1e-6
   && Math.abs(facadeRow('west').xMax - (facadeRow('west').u0 - facadeRow('west').uMin + 400)) < 1e-6, '立面 西: X の範囲が u0−uMin＋(0..400)');
 
