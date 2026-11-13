@@ -2,6 +2,7 @@
 // 文字（どの言語の文字も）を入れず、図柄・記号だけで万国共通に伝わる形にする。
 // 線は currentColor で描くので、ボタンの色（active/非active）にそのまま追従する。
 // 24×24 のビューボックス・線幅 1.6・丸端で統一。
+import { isPlacedFigureMode } from '../core/placedFigureModes.js';
 
 const BASE = {
   width: 20, height: 20, viewBox: '0 0 24 24',
@@ -78,7 +79,16 @@ const FacadeIcon = () => (
   </svg>
 );
 
+/** 図面モード（姿図配置モード）共通: 平面（外形の四角）に置いた器具（円）。個別のアイコンは持たない。 */
+const PlacedFigureIcon = () => (
+  <svg {...BASE}>
+    <rect x="3" y="3" width="18" height="18" />
+    <circle cx="12" cy="12" r="4" />
+  </svg>
+);
+
 // mode 値→アイコン部品。export は部品（ModeIcon）だけにする（react-refresh/only-export-components）。
+// 図面モードはこの表に載せず、ModeIcon が isPlacedFigureMode で共通のアイコンへ落とす（モードごとに表へ足さない）。
 const MODE_ICONS = Object.freeze({
   floorplan: FloorplanIcon,
   finish:    FinishIcon,
@@ -89,8 +99,8 @@ const MODE_ICONS = Object.freeze({
   facade:    FacadeIcon,
 });
 
-/** モードバーのアイコン。未知の mode は描かない（null）。 */
+/** モードバーのアイコン。図面モードは共通のアイコン。未知の mode は描かない（null）。 */
 export function ModeIcon({ mode }) {
-  const Icon = MODE_ICONS[mode];
+  const Icon = MODE_ICONS[mode] ?? (isPlacedFigureMode(mode) ? PlacedFigureIcon : null);
   return Icon ? <Icon /> : null;
 }

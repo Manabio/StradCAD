@@ -14,6 +14,7 @@ import {
   pointerTargetScope, legEndpointForMode,
 } from './snapGeometry.js';
 import { CL_KINDS, APP_MODES, hitTestKinds, spansEntireAxis } from './core/centerLineKindPolicy.js';
+import { PLACED_FIGURE_MODE_IDS } from './core/placedFigureModes.js';
 import { makeFirstFloorGraph as makeGraph } from './graphTestFixtures.js';
 
 // CENTER寸法4行（TOP/BOTTOM/LEFT/RIGHT）を追加する。store.js の初期化と同じ構成
@@ -240,6 +241,7 @@ const HIT_TEST_KINDS_LITERAL = {
   site:      [],
   elevation: [],
   facade:    [],
+  ...Object.fromEntries(PLACED_FIGURE_MODE_IDS.map(id => [id, []])), // 図面モードは操作対象なし（ヒットしない）
 };
 
 // リテラル表が実装（hitTestKinds）から乖離していないことの一回きりの確認（このテストだけは

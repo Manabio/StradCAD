@@ -6,7 +6,7 @@ import { PenDir, DetailSubject, PLACED_FIGURE_MISSING_MARK_PX } from '../core/co
 import { PlacedFigure } from '../core/placedFigure.js';
 import { fixedLen, move } from '../finish/roomDetailTestFixtures.js';
 import { square } from '../finish/placedFigure/placedFigureTestFixtures.js';
-import { placedFigureHitAt } from './placedFigureHit.js';
+import { placedFigureHitAt, placedFigureTapOptions } from './placedFigureHit.js';
 
 const rectOf = (key, w, h, opts) => {
   const base = square(key, opts);
@@ -99,4 +99,16 @@ test('【失敗系】配列でない・座標が有限数でない → null。�
   assert.equal(hit(placed, 300, 300, { mmPerPx: NaN }), 'x');
   assert.equal(hit([], 110, 60), null);
   assert.equal(placedFigureHitAt(placed, figureOf, { x: 110, y: 60 }), 'a');
+});
+
+test('placedFigureTapOptions: tolMm＝thresholdPx÷scaleX・mmPerPx＝1÷scaleX（割り算）', () => {
+  assert.deepEqual(placedFigureTapOptions(0.5, 8), { tolMm: 16, mmPerPx: 2 });
+  assert.deepEqual(placedFigureTapOptions(4, 8), { tolMm: 2, mmPerPx: 0.25 });
+  assert.deepEqual(placedFigureTapOptions(2, 0), { tolMm: 0, mmPerPx: 0.5 }, 'thresholdPx 0 は許容なし（mmPerPx は有効）');
+});
+
+test('placedFigureTapOptions 失敗系: scaleX が有限の正でない・thresholdPx が有限の 0 以上でないときは両方 0', () => {
+  const zero = { tolMm: 0, mmPerPx: 0 };
+  for (const s of [0, -1, NaN, Infinity, undefined, null, '2']) assert.deepEqual(placedFigureTapOptions(s, 8), zero, `scaleX=${String(s)}`);
+  for (const t of [-1, NaN, Infinity, undefined, null, '8']) assert.deepEqual(placedFigureTapOptions(2, t), zero, `thresholdPx=${String(t)}`);
 });

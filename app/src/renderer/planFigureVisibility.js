@@ -1,3 +1,5 @@
+import { isPlacedFigureMode, placedFigureModeOf } from '../core/placedFigureModes.js';
+
 // 平面図一式（壁・建具・柱＋柱の仕上げ包み）を描くモードかの**単一の供給源**。
 //
 // なぜ必要か: 壁は柱の位置で欠き取られる——`renderer/wallDrawPlan.js` が
@@ -20,6 +22,17 @@ export function shouldShowPlanFigure(appMode) {
 // ——見上げは空調・電気だけという絞りは placedFigureDrawPlan 側で行う。
 export function shouldShowPlacedFigures(appMode) {
   return shouldShowPlanFigure(appMode);
+}
+
+// 姿図の配置を描くときの分類の絞り（PlacedFiguresLayer の subjects）。図面モードはその行の分類だけ、他のモードは null（絞らない）。
+// 分類不明の配置は絞っても出る（placedFigureBelongsTo の規則）。
+export function placedFigureSubjectsFor(appMode) {
+  return placedFigureModeOf(appMode)?.subjects ?? null;
+}
+
+// 姿図の配置の選択枠を描くモードか（選択を持つのは仕上げモードと図面モード）。
+export function showsPlacedFigureSelection(appMode) {
+  return appMode === 'finish' || isPlacedFigureMode(appMode);
 }
 
 // 階段の図（StairLayer の自階の階段・下階の階段〔upper〕・2a壁の描画クリップ）を描くモードか。
@@ -55,8 +68,9 @@ export function shouldShowStairStepNumbers(appMode) {
 // 敷地モードは通り芯自体を扱わないため従来から描かない。構造モード（伏図）は主構造によらず描かない
 // ——伏図では交点に柱記号（×／□）が乗り、青丸がその上に重なって柱が選べない・見分けられない
 // （ユーザー裁定2026-09-17「主要構造によらず構造モードでは青丸を廃止」）。
+// 図面モード（姿図配置モード）も描かない——通り芯などを操作できないモードで、交点の青丸だけ出ても何も起きない（スナップ・長押しなし）。
 export function shouldShowIntersectionMarkers(appMode) {
-  return appMode !== 'site' && appMode !== 'structure';
+  return appMode !== 'site' && appMode !== 'structure' && !isPlacedFigureMode(appMode);
 }
 
 // 柱の由来×（renderer/originColorKey.js columnOriginMarkKey・renderer/StructuralLayer.jsx

@@ -11,12 +11,12 @@ const read = name => stripComments(fs.readFileSync(path.resolve(import.meta.dirn
 const layer = read('PlacedFiguresLayer.jsx');
 const count = (text, re) => (text.match(re) || []).length;
 
-test('【配線】PlacedFiguresLayer は graphComputed のキーに direction と overlayGeneration() を入れ、figureOf は detailFigureEntry（1行まるごと）', () => {
+test('【配線】PlacedFiguresLayer は graphComputed のキーに direction・subjects・overlayGeneration() を入れ、figureOf は detailFigureEntry（1行まるごと）', () => {
   assert.match(layer,
-    /^\s*const plan = graphComputed\(graph, `placedFigures:\$\{direction\}:\$\{overlayGeneration\(\)\}`, \(\) => placedFigureDrawPlan\(graph\.placedFigures, detailFigureEntry, \{ direction \}\)\);\s*$/m);
+    /^\s*const plan = graphComputed\(graph, `placedFigures:\$\{direction\}:\$\{String\(subjects\)\}:\$\{overlayGeneration\(\)\}`, \(\) => placedFigureDrawPlan\(graph\.placedFigures, detailFigureEntry, \{ direction, subjects \}\)\);\s*$/m);
   assert.equal(count(layer, /graphComputed\(/g), 1);
   assert.equal(count(layer, /placedFigureDrawPlan\(/g), 1);
-  assert.match(layer, /^export const PlacedFiguresLayer = observer\(\(\{ graph, viewport, direction = 'down', selectedId = null \}\) => \{\s*$/m);
+  assert.match(layer, /^export const PlacedFiguresLayer = observer\(\(\{ graph, viewport, direction = 'down', selectedId = null, subjects = null \}\) => \{\s*$/m);
   assert.match(layer, /^\s*if \(!graph\) return null;\s*$/m);
 });
 

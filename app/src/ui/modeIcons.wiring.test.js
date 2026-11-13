@@ -20,7 +20,10 @@ test('【配線】modeIcons.jsx: MODE_ICONS は ModeBar.jsx の MODES の mode �
 test('【配線】modeIcons.jsx: アイコンに文字を入れない（<text> なし・SVG の中身は図形要素だけ）', () => {
   assert.doesNotMatch(iconSrc, /<text[\s>]/);
   const bodies = [...iconSrc.matchAll(/<svg[^>]*>([\s\S]*?)<\/svg>/g)].map(m => m[1]);
-  assert.equal(bodies.length, iconKeys.length, 'アイコン1つにつき <svg> が1つ');
+  // アイコン部品（const XxxIcon = () => (）1つにつき <svg> が1つ。表（MODE_ICONS）に載るものと、表に載らない図面モード共通の1つ
+  const components = [...iconSrc.matchAll(/^const [A-Z][A-Za-z]+Icon = \(\) => \(\s*$/gm)];
+  assert.equal(bodies.length, components.length, 'アイコン1つにつき <svg> が1つ');
+  assert.equal(components.length, iconKeys.length + 1, '表のアイコン＋図面モード共通の1つ');
   for (const body of bodies) {
     const tags = [...body.matchAll(/<([a-zA-Z]+)[\s/>]/g)].map(m => m[1]);
     assert.ok(tags.length > 0);

@@ -26,6 +26,7 @@ import { usePointerInteraction } from './interaction/usePointerInteraction.js';
 import { runColumnMenuAction } from './interaction/columnLongPress.js';
 import { resolveColumnEditTarget } from './structural/columnEditTarget.js';
 import { ColumnMenuItemId } from './core/constants.js';
+import { PLACED_FIGURE_MODE_IDS, isPlacedFigureMode, placedFigureModeOf, placedFigureModeLabelOf } from './core/placedFigureModes.js';
 import { RoomNameInput }   from './finish/RoomNameInput.jsx';
 import { FinishSidebar }   from './finish/FinishSidebar.jsx';
 import { FinishHalfModal } from './finish/FinishHalfModal.jsx';
@@ -154,8 +155,10 @@ function buildColumnAxisRefs(graph, type) {
 
 // モード切替失敗時のトースト文言用（ui/ModeBar.jsx MODESのlabelと同じ日本語。ModeBarは
 // 'opening'ボタンを持たないため、モード切替のappMode全種別をここで別に持つ）。
+// 図面モード（姿図配置モード）の分は定義表から導く（表示名を重ねて書かない）。
 const MODE_LOAD_LABELS = Object.freeze({
   floorplan: '平面', finish: '仕上げ', ceiling: '天伏', structure: '構造', opening: '建具', elevation: '展開', facade: '立面', site: '敷地',
+  ...Object.fromEntries(PLACED_FIGURE_MODE_IDS.map(id => [id, placedFigureModeLabelOf(id)])),
 });
 
 const App = observer(() => {
@@ -829,11 +832,15 @@ const App = observer(() => {
                   await s.init(); // 全採用階の peek・外壁立面の一括構築（決して reject しない）
                   return s;
                 })
-              : import('./modes/SiteModeState.js').then(async m => {
-                  const s = new m.SiteModeState(project.site, project);
-                  await s.init(); // 配置の痕跡があれば配置図を開いた状態で突入（決して reject しない）
-                  return s;
-                });
+              : isPlacedFigureMode(appMode)
+                // 図面モード（姿図配置モード）: 定義表の 1 行から立つ汎用 State。init なし・graph を変える突入処理なし。
+                // 既定（下の敷地）より前に置く——抜けると図面モードに敷地の State が黙って載る
+                ? import('./modes/PlacedFigureModeState.js').then(m => new m.PlacedFigureModeState(graph, placedFigureModeOf(appMode)))
+                : import('./modes/SiteModeState.js').then(async m => {
+                    const s = new m.SiteModeState(project.site, project);
+                    await s.init(); // 配置の痕跡があれば配置図を開いた状態で突入（決して reject しない）
+                    return s;
+                  });
 
     loader.then(s => {
       if (cancelled) { s.dispose(); return; }
@@ -2843,6 +2850,8 @@ const App = observer(() => {
                : appMode === 'site'   ? (mode?.siteDrawState ? 'crosshair' : 'default')
                : appMode === 'elevation' ? 'grab'
                : appMode === 'facade' ? 'grab'
+               // 図面モード: 配置待ち・移動待ちの間は 'crosshair'（置く点を指す）。それ以外は 'default'（パン中は上の isPanning が勝つ）
+               : isPlacedFigureMode(appMode) ? ((mode?.placingFigureKey != null || mode?.movingFigureId != null) ? 'crosshair' : 'default')
                : appMode === 'opening' ? ((nearOpening || nearWall) ? 'pointer' : 'default')
                : isMoving         ? 'grab'
                : isDrawing        ? 'crosshair'

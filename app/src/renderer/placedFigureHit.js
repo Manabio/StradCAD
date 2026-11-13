@@ -13,6 +13,17 @@ const nonNegativeOrZero = v => (typeof v === 'number' && Number.isFinite(v) && v
 const isFiniteNumber = v => typeof v === 'number' && Number.isFinite(v);
 
 /**
+ * タップの許容（placedFigureHitAt の tolMm・mmPerPx）。scaleX は画面 px/mm、thresholdPx は当たり幅（画面 px）。
+ * 呼び出し側が viewport.scaleX と CL_THRESHOLD_PX を渡す（snap.js を引かないため引数で受ける）。
+ * scaleX が有限の正でない、または thresholdPx が有限の 0 以上でないときは両方 0（許容なし）。
+ * @returns {{tolMm:number, mmPerPx:number}}
+ */
+export function placedFigureTapOptions(scaleX, thresholdPx) {
+  if (!isFiniteNumber(scaleX) || scaleX <= 0 || !isFiniteNumber(thresholdPx) || thresholdPx < 0) return { tolMm: 0, mmPerPx: 0 };
+  return { tolMm: thresholdPx / scaleX, mmPerPx: 1 / scaleX };
+}
+
+/**
  * @param {ReadonlyArray<object>} placedFigures graph.placedFigures
  * @param {(key:string) => (object|null)} figureOf 詳細図キー → エントリ
  * @param {{x:number, y:number, tolMm?:number, mmPerPx?:number, subjects?:(ReadonlyArray<string>|null)}} opts

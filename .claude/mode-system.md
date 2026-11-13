@@ -56,8 +56,11 @@ Reactフックはコンポーネント外の`import()`非同期ロードと組�
 - **天伏に出すかは表に持たない**: `CEILING_PLACED_FIGURE_SUBJECTS ∩ subjects` で導ける。表に持つと見上げの語彙の供給源が2つになり、分類を足したときに片方だけ直し忘れる。
 - **行どうしで分類（subjects）の重なりを禁じる**: 同じ分類を2つのモードが扱うと「その配置はどのモードで編集するか」が決まらず、配置の選択・更新・削除の窓口が二重になる。検証が起動時に投げる。
 - **継承（モードが別モードの行を基にする）は使わない**: 差分で書くと基の行の変更が黙って波及する。重なり禁止の1行1モードのほうが表を読むだけで足りる。
-- 表の1行が決めるのはモード一覧・可視表・表示名・天伏の出し分けまで。App.jsx のモード遷移・モードバー・パネルは表から導かず、別に配線する。
+- **id と表示名の形は起動時に検証する**: `mode` は英字だけ・先頭小文字（`/^[a-z][A-Za-z]*$/`。appMode はコードの識別子・undo の文脈・`MODE_LOAD_LABELS` の鍵に使うため）、`label` は空白を除いて空でない文字列。重複・衝突の検査より前に見る。
+- **画面への配線も表から導く**（モードごとに手書きしない）: App.jsx の State 動的ロード（`isPlacedFigureMode` の分岐。**既定は敷地なので分岐は既定より前に置く**——抜けると敷地の State が黙って載る）・`MODE_LOAD_LABELS`・カーソル、`ModeBar.jsx` のボタン、`modeIcons.jsx` の共通アイコン（表に載せず `isPlacedFigureMode` で落とす）、`planFigureVisibility.js` の `placedFigureSubjectsFor`（描画の絞り）・`showsPlacedFigureSelection`。製品コードで `'plumbing'` と書くのは定義表の1行だけ（`placedFigureModeWiring.test.js` のラチェット）。**パネル（モードごとの UI）だけは表から導かない**。
+- **`modeBoundaries` に登録しない**: 突入・脱出で graph を変える処理が無く（突入時の壁の鮮度判定も平面と同じく持たない）、undo の文脈 `{mode, planeId}` による素の切替でそのまま戻れる。階切替は `switchFloorKeepingMode`（境界なし＝素の `switchFloor`）。
+- **ポインタ規則**（`usePointerInteraction.js`。各ハンドラの入口近くで図面モードを先に分け、平面の既定〔線の描画・移動・ガター長押し・スナップ・建具ドラッグ・長押しメニュー〕へ落とさない。State は `startDraw`・`startMove` を持たない）: **ドラッグ＝パン**（押下点から `TAP_MOVE_PX` 超で `startPanAt`。ガター内は即パン）、**動かず離したらタップ＝`tapAt`**（押下点。許容は `placedFigureTapOptions(viewport.scaleX, CL_THRESHOLD_PX)`）、**長押しは何もしない**、ホイールはズームだけ（スナップを作らない）。通り芯などは表示だけで、交点の青丸も出さない。
 - **所属は `placedFigureBelongsTo`（`finish/placedFigure/placedFigureTargets.js`）の1か所**: 描画の絞り・ヒット判定・State がこの関数だけで決め、判定を二重に持たない。分類が分かる配置は `subjects` に含まれるモードだけ。**分類不明（図が引けない・配置図でない）は全図面モードに出す**——壊れた参照をどのモードからでも見つけて消せるようにするため（×で描かれ、ヒットでも選べる）。新しく置く図キーの可否だけは別規則で、分類が `subjects` に含まれる図だけ（分類不明は置けない＝壊れた配置を増やさない）。
 - **ヒットの優先**（`renderer/placedFigureHit.js`）: 描けているもの（描画計画の外接と×）だけが当たる。重なれば外接面積の小さい方（×は自分の正方形）、同面積なら配置の並びで後ろ（後から置いた方）。小さい器具が大きい器具の下に埋もれないための順。
-- **State の受け持ち**（`modes/PlacedFigureModeState.js`）: 選択・配置待ち・移動待ちだけ。graph の変更は `finish/placedFigure/placedFigureCommands.js` の命令へ委譲し（仕上げモードと同じ命令・同じ undo エントリ）、タップの優先は 配置待ち ＞ 移動待ち ＞ ヒット。所属しない配置への操作は何もしない（undo も積まない）。**まだ誰からも import されない**（modeBoundaries 登録・App 生成・画面への配線は今後）。
+- **State の受け持ち**（`modes/PlacedFigureModeState.js`）: 選択・配置待ち・移動待ちだけ。graph の変更は `finish/placedFigure/placedFigureCommands.js` の命令へ委譲し（仕上げモードと同じ命令・同じ undo エントリ）、タップの優先は 配置待ち ＞ 移動待ち ＞ ヒット。所属しない配置への操作は何もしない（undo も積まない）。関門の中断（`interruptCurrentAction` の `cancelDrag`）・ESC で配置待ち・移動待ちを解く。パネル・［配置］［移動］の UI・キー割当ては未配線。
 

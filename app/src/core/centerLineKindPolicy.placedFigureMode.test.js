@@ -1,6 +1,6 @@
 // 図面モード（姿図配置モード）が centerLineKindPolicy.js の公開関数を本当に通ることの検証。
-// 本番の定義表（constants.js の PLACED_FIGURE_MODES）は空なので、このファイルだけ、読み込む瞬間のソースを
-// 試験用の 2 行へ差し替える（node:module の registerHooks の同期 load フック。前例 scripts/probe/structPerfHooks.mjs）。
+// 本番の定義表（constants.js の PLACED_FIGURE_MODES）には試験用の id でない本番の行があるので、このファイルだけ、読み込む瞬間のソースを
+// 試験用の 2 行へまるごと差し替える（node:module の registerHooks の同期 load フック。前例 scripts/probe/structPerfHooks.mjs）。
 // node --test はファイルごとに別プロセスなので、差し替えは他のテストへ漏れない。
 // フックは testSetup.mjs の registerHooks({ resolve }) と別に積む（load だけを持つので共存する）。
 // src の import はフック登録後の動的 import にする（静的 import は先に評価され、差し替えが間に合わない）。
@@ -8,7 +8,8 @@ import { registerHooks } from 'node:module';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const TARGET = 'export const PLACED_FIGURE_MODES = Object.freeze([]);';
+// 本番の表（いまは plumbing の 1 行）をまるごと試験用の 2 行へ置き換える（行数・中身に依らず当たる形）。
+const TARGET = /export const PLACED_FIGURE_MODES = Object\.freeze\(\[[\s\S]*?\n\]\);/;
 const ROWS = `export const PLACED_FIGURE_MODES = Object.freeze([
   { mode: 'plumbingTest', label: '給排水（試験）', subjects: [DetailSubject.SANITARY] },
   { mode: 'hvacTest', label: '空調（試験）', subjects: [DetailSubject.HVAC, DetailSubject.ELECTRICAL] },
@@ -19,9 +20,9 @@ registerHooks({
     const r = nextLoad(url, context);
     if (!url.endsWith('/src/core/constants.js') || r.source == null) return r;
     const src = r.source.toString();
-    if (!src.includes(TARGET)) return r;
+    if (!TARGET.test(src)) return r;
     hookHits++;
-    return { ...r, source: src.replace(TARGET, ROWS) };
+    return { ...r, source: src.replace(TARGET, () => ROWS) };
   },
 });
 

@@ -418,6 +418,8 @@ export const ERR_PLACED_FIGURE_MODE_CONFLICT = (id) => `図面モードの id �
 export const ERR_PLACED_FIGURE_MODE_NO_SUBJECTS = (id) => `図面モード ${id} の対象の分類が空です`;
 export const ERR_PLACED_FIGURE_MODE_BAD_SUBJECT = (id, subject) => `図面モード ${id} の対象に配置できない分類があります: ${subject}`;
 export const ERR_PLACED_FIGURE_MODE_OVERLAP = (id, id2, subject) => `図面モード ${id} と ${id2} の対象の分類が重なっています: ${subject}`;
+export const ERR_PLACED_FIGURE_MODE_BAD_ID = (id) => `図面モードの id が不正です: ${id}`;
+export const ERR_PLACED_FIGURE_MODE_BAD_LABEL = (id) => `図面モード ${id} の表示名が空です`;
 // 部分詳細図ヘルパー（全画面パネル）の動的 import が失敗したときのトースト。
 export const ERR_DETAIL_HELPER_LOAD_FAILED = '部分詳細ヘルパーの読み込みに失敗しました';
 // ---- DXF 読込み（部分詳細図 S7a。detail/dxf/ と ui/detailHelperForm.js）----

@@ -87,11 +87,13 @@ test('VISIBLE_KINDS_BY_MODE: floorplan/finish/opening=[struct,center,aux]、ceil
     site:      [],
     elevation: [],
     facade:    [],
+    ...Object.fromEntries(PLACED_FIGURE_MODE_IDS.map(id => [id, []])), // 図面モードは操作対象なし
   });
 });
 
-test('DISPLAY_ONLY_KINDS_BY_MODE: 天伏は通り芯・中心線・補助線を描くだけ（可視表・ヒット・導出には入らない）', () => {
-  assert.deepEqual(Object.fromEntries(Object.entries(DISPLAY_ONLY_KINDS_BY_MODE).map(([k, v]) => [k, [...v]])), { ceiling: ['struct', 'center', 'aux'] });
+test('DISPLAY_ONLY_KINDS_BY_MODE: 天伏と図面モードは通り芯・中心線・補助線を描くだけ（可視表・ヒット・導出には入らない）', () => {
+  assert.deepEqual(Object.fromEntries(Object.entries(DISPLAY_ONLY_KINDS_BY_MODE).map(([k, v]) => [k, [...v]])),
+    { ceiling: ['struct', 'center', 'aux'], ...Object.fromEntries(PLACED_FIGURE_MODE_IDS.map(id => [id, ['struct', 'center', 'aux']])) });
   // 描くだけの種別は可視表と重ならない（重なると「描くだけ」の意味が消える）
   for (const [mode, kinds] of Object.entries(DISPLAY_ONLY_KINDS_BY_MODE)) {
     for (const k of kinds) assert.ok(!VISIBLE_KINDS_BY_MODE[mode].includes(k), `${mode}: ${k} が可視表にも描くだけ表にもある`);
@@ -148,10 +150,10 @@ test('図面モードの接続: 既存 8 モードの行は試験用の行を足
   assert.deepEqual([...displayOnly.ceiling], ['struct', 'center', 'aux']);
 });
 
-test('図面モードの接続: 本番は定義表が空なので APP_MODES・可視表・描くだけ表のキーは既存 8 モードだけ', () => {
-  assert.deepEqual([...APP_MODES], [...CORE_APP_MODES]);
-  assert.deepEqual(Object.keys(VISIBLE_KINDS_BY_MODE), [...CORE_APP_MODES]);
-  assert.deepEqual(Object.keys(DISPLAY_ONLY_KINDS_BY_MODE), ['ceiling']);
+test('図面モードの接続: 本番の APP_MODES・可視表・描くだけ表のキーは 既存 8 モード＋定義表の図面モードだけ', () => {
+  assert.deepEqual([...APP_MODES], [...CORE_APP_MODES, ...PLACED_FIGURE_MODE_IDS]);
+  assert.deepEqual(Object.keys(VISIBLE_KINDS_BY_MODE), [...CORE_APP_MODES, ...PLACED_FIGURE_MODE_IDS]);
+  assert.deepEqual(Object.keys(DISPLAY_ONLY_KINDS_BY_MODE), ['ceiling', ...PLACED_FIGURE_MODE_IDS]);
 });
 
 test('HIT_EXCLUDED_KINDS_BY_MODE: structure=[struct]のみ、他モードは除外エントリを持たない', () => {
@@ -391,6 +393,7 @@ test('【不変条件】天井芯の追加前後で kindsVisibleWith・sameDirec
     {
       floorplan: ['struct', 'center', 'aux'], finish: ['struct', 'center', 'aux'], ceiling: ['ceiling'],
       opening: ['struct', 'center', 'aux'], structure: ['beam'], site: [], elevation: [], facade: [],
+      ...Object.fromEntries(PLACED_FIGURE_MODE_IDS.map(id => [id, []])), // 図面モードはヒット対象なし
     },
   );
 });
@@ -1040,6 +1043,7 @@ const VISIBLE_KINDS_LITERAL = {
   site:      [],
   elevation: [],
   facade:    [],
+  ...Object.fromEntries(PLACED_FIGURE_MODE_IDS.map(id => [id, []])), // 図面モードは操作対象なし（行を足しても成り立つ不変条件）
 };
 
 // リテラル表が実装（VISIBLE_KINDS_BY_MODE）から乖離していないことの一回きりの確認（このテストだけは

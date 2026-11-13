@@ -14,11 +14,13 @@ import { graphComputed } from './graphDerived.js';
  * 図形の判断（回転・鏡像・見上げの絞り・views.ceiling の優先・解決失敗の印）は純モジュール renderer/placedFigureDrawPlan.js。
  * 図の解決は詳細図カタログ（detailFigureEntry）。カタログの世代（overlayGeneration）を鍵に入れて、差し替えに追従する。
  * 全 LOD で描く。線は strokeScaleEnabled=false・px 値、解決できない配置は配置点の×（半幅は画面 px 一定）。
- * selectedId に一致する配置があればその外接に選択枠を描く（P4 の口。今は SceneLayers から渡さない）。
+ * selectedId に一致する配置があればその外接に選択枠を描く（仕上げモード・図面モードが SceneLayers から渡す）。
+ * subjects: 図面モードが扱う分類（null＝絞らない。分類不明の配置は絞っても出る＝placedFigureDrawPlan の規則）。
+ * 計画のキャッシュ鍵に subjects を含める（含めないと、絞りの違うモードが前のモードの計画を使い回す）。
  */
-export const PlacedFiguresLayer = observer(({ graph, viewport, direction = 'down', selectedId = null }) => {
+export const PlacedFiguresLayer = observer(({ graph, viewport, direction = 'down', selectedId = null, subjects = null }) => {
   if (!graph) return null;
-  const plan = graphComputed(graph, `placedFigures:${direction}:${overlayGeneration()}`, () => placedFigureDrawPlan(graph.placedFigures, detailFigureEntry, { direction }));
+  const plan = graphComputed(graph, `placedFigures:${direction}:${String(subjects)}:${overlayGeneration()}`, () => placedFigureDrawPlan(graph.placedFigures, detailFigureEntry, { direction, subjects }));
   if (plan.lines.length === 0 && plan.marks.length === 0) return null;
   const half = PLACED_FIGURE_MISSING_MARK_PX / viewport.scaleX;
   const selected = selectedId === null ? null : plan.boxes.find(b => b.figureId === selectedId) ?? null;

@@ -14,6 +14,7 @@ import { TRADITIONAL_WOOD_STRUCTURE } from './structureRules.js';
 import { FIGURE_TYPE, SLOT_TYPE, resolveSharedPlaneView } from './structuralClassification.js';
 import { buildStructuralFigureSlots } from './structuralFigureSlots.js';
 import { resolveColumnEditTarget, isColumnSlotOccupied } from './columnEditTarget.js';
+import { PLACED_FIGURE_MODE_IDS } from '../core/placedFigureModes.js';
 
 const V = CenterLineType.VERTICAL, H = CenterLineType.HORIZONTAL;
 const BIG = 'STEEL-H400x400'; // 400 角（半幅 200）
@@ -108,7 +109,8 @@ test('【編集先・失敗側】参照のみのレイヤで供給階が主題�
 test('【編集先・失敗側】他の appMode・構造で composition なしは null', () => {
   const { project, f1, f2 } = makeProject('S造');
   const comp = composeStructural(project, f2, { p1: f1.graph, p2: f2.graph });
-  for (const appMode of ['finish', 'ceiling', 'opening', 'site', 'elevation', 'facade', 'noSuchMode']) {
+  // 図面モード（姿図配置モード）の id も全部 null（柱の長クリックは平面・構造だけ。表に行が増えても一般に成り立つ）
+  for (const appMode of ['finish', 'ceiling', 'opening', 'site', 'elevation', 'facade', 'noSuchMode', ...PLACED_FIGURE_MODE_IDS]) {
     assertNoTarget(resolveColumnEditTarget({ appMode, activeGraph: f2.graph, composition: comp, project }), `${appMode}: `);
   }
   assertNoTarget(resolveColumnEditTarget({ appMode: 'structure', activeGraph: f2.graph, composition: null, project }));

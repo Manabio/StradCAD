@@ -43,6 +43,8 @@ import { SITE_HIT_NODE_NAME } from '../site/siteLineStyle.js';
 import { canExtendCenterLine, canShortenCenterLine } from '../transform/centerLineExtend.js';
 import { interiorWallSpans } from '../finish/edgeClassify.js';
 import { isEligibleWallSpan } from '../finish/kneeDropWall.js';
+import { isPlacedFigureMode } from '../core/placedFigureModes.js';
+import { placedFigureTapOptions } from '../renderer/placedFigureHit.js';
 
 // 天伏モードのドラッグ選択で move を補間するサンプル間隔（スクリーン px。速いドラッグでセルを飛ばさない）。
 const CEILING_DRAG_SAMPLE_PX = 4;
@@ -96,6 +98,7 @@ export function usePointerInteraction({
   const siteDrawDownRef   = useRef(null); // 敷地モード: ドラッグ開始スクリーン座標
   const elevationDragRef  = useRef(null); // 展開モード: { x, y, axis:'h'|'v'|null, roomId }
   const facadeDragRef     = useRef(null); // 立面モード: { y, started }（縦スクロールだけ）
+  const placedFigureDownRef = useRef(null); // 図面モード: pointerDown 座標 { x, y }（タップかパンかを pointerUp で見分ける）
   const openingDownRef    = useRef(null); // 建具ドラッグ開始判定用: { clientX, clientY, opening }
   const openingDragRef    = useRef(null); // 建具ドラッグ中: { opening, wall, range, candidates, grabDelta, before }
   const openingDragEndedRef = useRef(false); // 直前の pointerUp が建具ドラッグの確定だったか（記号丸の click を無視するため）
@@ -234,6 +237,8 @@ export function usePointerInteraction({
     }
     const factor = e.evt.deltaY < 0 ? 1.1 : 1 / 1.1;
     viewport.zoomAt(e.evt.clientX, e.evt.clientY, factor);
+    // 図面モードは線を操作しない（交点スナップ・近傍候補を作らない）。ズームだけ
+    if (isPlacedFigureMode(appMode)) return;
     updateSnap(e.evt.clientX, e.evt.clientY);
   };
 
@@ -359,6 +364,18 @@ export function usePointerInteraction({
         // ドラッグかタップかを pointerUp で判定するために記録（線分を入力するサブモードだけ）
         if (sm === 'sansha' || sm === 'rect') siteDrawDownRef.current = { x: clientX, y: clientY };
         drag.current = { lastX: clientX, lastY: clientY };
+      }
+      return;
+    }
+
+    // ---- 図面モード（姿図配置モード。ガター内はパン。描画エリアは押下を記録するだけ＝8px 超動けばパン・動かず離せばタップ。長押しは何もしない）----
+    // 平面の既定（線の描画・移動・ガター長押し・スナップ・建具ドラッグ・長押しメニュー）へ落とさない（State は startDraw・startMove を持たない）。
+    if (isPlacedFigureMode(appMode)) {
+      if (isInGutter(clientX, clientY, size.width, size.height)) {
+        drag.current = { lastX: clientX, lastY: clientY };
+        setIsPanning(true);
+      } else {
+        placedFigureDownRef.current = { x: clientX, y: clientY };
       }
       return;
     }
@@ -635,6 +652,15 @@ export function usePointerInteraction({
       return;
     }
 
+    // ---- 図面モード（パン中は追従。押下点から 8px 超動いたらパン開始。スナップ・近傍候補は作らない）----
+    if (isPlacedFigureMode(appMode)) {
+      if (drag.current) { panTo(clientX, clientY); return; }
+      const down = placedFigureDownRef.current;
+      if (!down) return;
+      if (!isTapDistance(Math.hypot(clientX - down.x, clientY - down.y))) startPanAt(clientX, clientY);
+      return;
+    }
+
     // ---- 建具ドラッグ中（平面）----
     if (openingDragRef.current) {
       updatePlanOpeningDrag(clientX, clientY);
@@ -891,6 +917,22 @@ export function usePointerInteraction({
       return;
     }
 
+    // ---- 図面モード（離したときの見分け: パン終了／タップ＝押下点で tapAt。パンの後・8px 超動いて離したときは何もしない）----
+    if (isPlacedFigureMode(appMode)) {
+      const down = placedFigureDownRef.current;
+      if (down) {
+        const tapDist = Math.hypot((e?.evt?.clientX ?? NaN) - down.x, (e?.evt?.clientY ?? NaN) - down.y);
+        if (releaseGesture({ fired: false, panned: !!drag.current }) === 'tap' && isTapDistance(tapDist)) {
+          const world = viewport.screenToWorld(down.x, down.y);
+          modeRef.current?.tapAt(world.x, world.y, placedFigureTapOptions(viewport.scaleX, CL_THRESHOLD_PX));
+        }
+      }
+      placedFigureDownRef.current = null;
+      drag.current = null;
+      setIsPanning(false);
+      return;
+    }
+
     // ---- 建具ドラッグ確定（平面）----
     if (openingDragRef.current) {
       finishOpeningDrag();
@@ -1034,6 +1076,12 @@ export function usePointerInteraction({
       setIsPanning(false);
       return;
     }
+    if (isPlacedFigureMode(appMode)) {
+      placedFigureDownRef.current = null;
+      drag.current = null;
+      setIsPanning(false);
+      return;
+    }
     // 建具ドラッグ中にキャンバス外に出たらキャンセル（開始前へ戻す）
     if (openingDragRef.current) cancelOpeningDrag();
     openingDownRef.current = null;
@@ -1140,6 +1188,7 @@ export function usePointerInteraction({
     siteDrawDownRef.current = null;
     elevationDragRef.current = null;
     facadeDragRef.current = null;
+    placedFigureDownRef.current = null;
     touchTapRef.current = null;
     // 建具ドラッグ中の ESC は開始前へ戻す（CL移動の cancelMove と同じ扱い）
     if (openingDragRef.current) cancelOpeningDrag();

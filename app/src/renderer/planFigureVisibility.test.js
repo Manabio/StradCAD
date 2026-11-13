@@ -5,7 +5,10 @@ import path from 'node:path';
 import {
   shouldShowPlanFigure, shouldShowStairFigure, shouldShowStairStepNumbers, shouldShowIntersectionMarkers, shouldShowColumnOriginMarks,
   shouldShowEquipmentSymbols, shouldShowPlacedFigures, planSectionDirection, shouldShowSiteBoundaryOverlay,
+  placedFigureSubjectsFor, showsPlacedFigureSelection,
 } from './planFigureVisibility.js';
+import { DetailSubject } from '../core/constants.js';
+import { PLACED_FIGURE_MODE_IDS, placedFigureModeOf } from '../core/placedFigureModes.js';
 
 // 行コメントを落としてから照合する（コメント中の言及を「コード上の参照」と誤検知しないため。
 // StructuralLayer.invariants.test.js の codeLines と同じ簡易化方針。QA指摘Minor-6・2026-09-27）。
@@ -94,4 +97,39 @@ test('shouldShowSiteBoundaryOverlay: 敷地の境界線の重ねは 平面・仕
 test('shouldShowEquipmentSymbols: 昇降機器具の図中記号は室名が出るモード（floorplan・finish）でのみ描く', () => {
   for (const mode of ['floorplan', 'finish']) assert.equal(shouldShowEquipmentSymbols(mode), true, mode);
   for (const mode of ['opening', 'site', 'structure', 'elevation']) assert.equal(shouldShowEquipmentSymbols(mode), false, mode);
+});
+
+test('図面モード（姿図配置モード）: 平面図一式（壁・建具・柱・階段）と姿図の配置は描く・見下げ。段数字・由来×・昇降機記号・敷地境界・通り芯交点の青丸は出さない', () => {
+  assert.ok(PLACED_FIGURE_MODE_IDS.length >= 1);
+  for (const mode of PLACED_FIGURE_MODE_IDS) {
+    assert.equal(shouldShowPlanFigure(mode), true, `${mode}: 平面図一式`);
+    assert.equal(shouldShowPlacedFigures(mode), true, `${mode}: 姿図の配置`);
+    assert.equal(shouldShowStairFigure(mode), true, `${mode}: 階段`);
+    assert.equal(planSectionDirection(mode), 'down', `${mode}: 見下げ`);
+    assert.equal(shouldShowStairStepNumbers(mode), false, `${mode}: 段数字`);
+    assert.equal(shouldShowColumnOriginMarks(mode), false, `${mode}: 由来×`);
+    assert.equal(shouldShowEquipmentSymbols(mode), false, `${mode}: 昇降機記号`);
+    assert.equal(shouldShowSiteBoundaryOverlay(mode), false, `${mode}: 敷地境界`);
+    assert.equal(shouldShowIntersectionMarkers(mode), false, `${mode}: 線を操作しないので青丸は出さない`);
+  }
+});
+
+test('placedFigureSubjectsFor・showsPlacedFigureSelection: 図面モードはその行の分類と選択枠、他のモード（未知・欠落も）は絞らず、選択枠は仕上げだけ', () => {
+  for (const mode of PLACED_FIGURE_MODE_IDS) {
+    const subjects = placedFigureSubjectsFor(mode);
+    assert.ok(Array.isArray(subjects) && subjects.length >= 1, `${mode}: 分類の絞り`);
+    assert.deepEqual([...subjects], [...placedFigureModeOf(mode).subjects], mode);
+    assert.equal(showsPlacedFigureSelection(mode), true, mode);
+  }
+  assert.deepEqual([...placedFigureSubjectsFor('plumbing')], [DetailSubject.SANITARY], '給排水は衛生だけ');
+  for (const mode of ['floorplan', 'finish', 'ceiling', 'opening', 'structure', 'site', 'elevation', 'facade', 'unknown', '', undefined, null]) {
+    assert.equal(placedFigureSubjectsFor(mode), null, `${String(mode)}: 絞らない`);
+    assert.equal(showsPlacedFigureSelection(mode), mode === 'finish', `${String(mode)}: 選択枠`);
+  }
+});
+
+test('既存モードの述語の値は図面モードを足しても変わらない（青丸は敷地・構造以外で描く）', () => {
+  for (const mode of ['floorplan', 'opening', 'finish', 'ceiling', 'elevation', 'facade']) {
+    assert.equal(shouldShowIntersectionMarkers(mode), true, mode);
+  }
 });

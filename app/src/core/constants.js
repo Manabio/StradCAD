@@ -754,9 +754,11 @@ export const CORE_APP_MODES = Object.freeze(['floorplan', 'finish', 'ceiling', '
  * 行の形: { mode: string（appMode の値）, label: string（モードバー・パネルの表示名）,
  *           subjects: DetailSubject[]（このモードが扱う姿図の配置の分類。PLACED_FIGURE_SUBJECTS の部分集合）}
  * 行どうしで subjects は重ならない。天伏（見上げ）に出すかは持たない
- * （CEILING_PLACED_FIGURE_SUBJECTS と subjects の共通部分で導く）。本番の表は当面空（行は後の手順で足す）。
+ * （CEILING_PLACED_FIGURE_SUBJECTS と subjects の共通部分で導く）。mode は英字のみ・先頭は小文字、label は空でない文字列。
  */
-export const PLACED_FIGURE_MODES = Object.freeze([]);
+export const PLACED_FIGURE_MODES = Object.freeze([
+  Object.freeze({ mode: 'plumbing', label: '給排水', subjects: Object.freeze([DetailSubject.SANITARY]) }),
+]);
 /** 有効な (category, view, subject) の組合せ表。検証（detail/detailModel.js）と割当て先の絞り込みが引く。 */
 export const DETAIL_VIEW_COMBOS = Object.freeze([
   ...[DetailView.PLAN, DetailView.SECTION].flatMap(view =>

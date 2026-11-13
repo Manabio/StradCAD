@@ -1,5 +1,6 @@
 import { TOP_BAR } from '../layout.js';
 import { ModeIcon } from './modeIcons.jsx';
+import { PLACED_FIGURE_MODE_IDS, placedFigureModeLabelOf } from '../core/placedFigureModes.js';
 
 // モード切替バー — 横長は上部中央、縦長は下部中央に常時表示。
 // 旧 HamburgerMenu のモード項目（平面/仕上げ/構造/敷地）を画面上に昇格したもの。
@@ -18,6 +19,8 @@ const MODES = [
   { mode: 'site',      label: '敷地' },
   { mode: 'elevation', label: '展開' },
   { mode: 'facade',    label: '立面' },
+  // 図面モード（姿図配置モード）は定義表から導く（モードごとにここへ足さない。core/placedFigureModes.js）
+  ...PLACED_FIGURE_MODE_IDS.map(id => ({ mode: id, label: placedFigureModeLabelOf(id) })),
 ];
 
 export function ModeBar({ appMode, onSelect, isLandscape }) {

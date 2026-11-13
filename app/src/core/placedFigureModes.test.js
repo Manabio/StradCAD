@@ -1,5 +1,5 @@
 // 図面モード（姿図配置モード）の定義表からの組み立て（placedFigureModes.js）の単体テスト。
-// 本番の定義表は空なので、導出の検証は試験用の行で registry を組んで行う。
+// 導出の検証は試験用の行で registry を組んで行う（本番の表の 1 行は最後のテストで確かめる）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DetailSubject, PLACED_FIGURE_MODES, CORE_APP_MODES } from './constants.js';
@@ -10,6 +10,7 @@ import {
 import {
   ERR_PLACED_FIGURE_MODE_DUPLICATE, ERR_PLACED_FIGURE_MODE_CONFLICT, ERR_PLACED_FIGURE_MODE_NO_SUBJECTS,
   ERR_PLACED_FIGURE_MODE_BAD_SUBJECT, ERR_PLACED_FIGURE_MODE_OVERLAP,
+  ERR_PLACED_FIGURE_MODE_BAD_ID, ERR_PLACED_FIGURE_MODE_BAD_LABEL,
 } from '../error.js';
 
 const PLUMBING = { mode: 'plumbingTest', label: '給排水（試験）', subjects: [DetailSubject.SANITARY] };
@@ -89,12 +90,47 @@ test('失敗系(e): 行どうしで分類が重なると ERR_PLACED_FIGURE_MODE_
     { message: ERR_PLACED_FIGURE_MODE_OVERLAP('plumbingTest', 'otherTest', DetailSubject.SANITARY) });
 });
 
-test('本番の書き出し: 定義表が空なので空の表の導出と一致する', () => {
-  assert.equal(PLACED_FIGURE_MODES.length, 0);
-  assert.equal(PLACED_FIGURE_MODE_IDS.length, 0);
+test('失敗系(f): id が英字だけ・先頭小文字でない・文字列でない・行が null／非オブジェクトは ERR_PLACED_FIGURE_MODE_BAD_ID', () => {
+  for (const bad of ['', 'Plumbing', 'plumbing2', 'plumb-ing', 'plumb ing', '1plumbing', 'あ', undefined, null, 5, ['a']]) {
+    assert.throws(() => buildPlacedFigureModeRegistry([{ ...PLUMBING, mode: bad }], CORE_APP_MODES),
+      { message: ERR_PLACED_FIGURE_MODE_BAD_ID(bad) }, String(bad));
+  }
+  for (const badRow of [null, undefined, 'plumbingTest', 7]) {
+    assert.throws(() => buildPlacedFigureModeRegistry([badRow], CORE_APP_MODES),
+      { message: ERR_PLACED_FIGURE_MODE_BAD_ID(badRow) }, String(badRow));
+  }
+  // 形の検査は重複・衝突より前（形が不正な id は DUPLICATE／CONFLICT でなく BAD_ID で落ちる）
+  assert.throws(() => buildPlacedFigureModeRegistry([PLUMBING, { ...HVAC, mode: 'plumbing-test' }], CORE_APP_MODES),
+    { message: ERR_PLACED_FIGURE_MODE_BAD_ID('plumbing-test') });
+  // 英字だけ（大文字を含む）なら通る
+  assert.doesNotThrow(() => buildPlacedFigureModeRegistry([{ ...PLUMBING, mode: 'camelCaseMode' }], CORE_APP_MODES));
+});
+
+test('失敗系(g): label が空・空白だけ・文字列でないは ERR_PLACED_FIGURE_MODE_BAD_LABEL', () => {
+  for (const bad of ['', '   ', '\t\n', undefined, null, 3]) {
+    assert.throws(() => buildPlacedFigureModeRegistry([{ ...PLUMBING, label: bad }], CORE_APP_MODES),
+      { message: ERR_PLACED_FIGURE_MODE_BAD_LABEL('plumbingTest') }, String(bad));
+  }
+  assert.doesNotThrow(() => buildPlacedFigureModeRegistry([{ ...PLUMBING, label: ' 空調 ' }], CORE_APP_MODES));
+});
+
+test('本番の書き出し: 定義表の行から導かれ（衛生を扱う行＝給排水）、既存モードは図面モードでない', () => {
+  assert.ok(PLACED_FIGURE_MODES.length >= 1);
+  const sanitaryRow = PLACED_FIGURE_MODES.find(r => r.subjects.includes(DetailSubject.SANITARY));
+  assert.equal(sanitaryRow?.mode, 'plumbing');
+  assert.deepEqual([...PLACED_FIGURE_MODE_IDS], PLACED_FIGURE_MODES.map(r => r.mode));
   assert.equal(PLACED_FIGURE_MODE_IDS, PLACED_FIGURE_MODE_REGISTRY.modeIds);
-  assert.equal(isPlacedFigureMode('floorplan'), false);
-  assert.equal(placedFigureModeOf('floorplan'), null);
-  assert.equal(placedFigureModeLabelOf('floorplan'), null);
-  assert.equal(placedFigureModeCeilingSubjectsOf('floorplan').length, 0);
+  for (const row of PLACED_FIGURE_MODES) {
+    assert.equal(isPlacedFigureMode(row.mode), true, row.mode);
+    assert.equal(placedFigureModeLabelOf(row.mode), row.label, row.mode);
+    assert.deepEqual([...placedFigureModeOf(row.mode).subjects], row.subjects, row.mode);
+  }
+  assert.deepEqual([...placedFigureModeOf(sanitaryRow.mode).subjects], [DetailSubject.SANITARY]);
+  assert.equal(placedFigureModeCeilingSubjectsOf(sanitaryRow.mode).length, 0, '衛生は見上げに出さない');
+  for (const core of CORE_APP_MODES) {
+    assert.equal(isPlacedFigureMode(core), false, core);
+    assert.equal(placedFigureModeOf(core), null, core);
+    assert.equal(placedFigureModeLabelOf(core), null, core);
+    assert.equal(placedFigureModeCeilingSubjectsOf(core).length, 0, core);
+  }
 });

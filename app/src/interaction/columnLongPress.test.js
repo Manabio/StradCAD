@@ -7,6 +7,7 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { Project, CenterLineType, Discipline, StructuralMaterialType, OpeningCategory, centerLineKind, columnSlotKey, DimensionKind, DimensionSide, HDimensionLine, VDimensionLine } from '../core.js';
 import { ColumnMenuItemId } from '../core/constants.js';
+import { PLACED_FIGURE_MODE_IDS } from '../core/placedFigureModes.js';
 import { ERR_COLUMN_ADD_ABORTED, ERR_COLUMN_DEL_ABORTED } from '../error.js';
 import { runInAction } from 'mobx';
 import { Viewport } from '../viewport.js';
@@ -239,7 +240,8 @@ test('【長クリック・構造】基礎伏図（非在来の最下階）・�
     appMode: 'structure', activeGraph: env.f1.graph, composition: comp1, project: env.project,
     world: { x: 1300, y: 2700 }, scaleX: SX, scaleY: SY, thresholdPx: TH, endpointDistPx: null, openingHit: false,
   }), '基礎伏図');
-  for (const appMode of ['finish', 'ceiling', 'opening', 'site', 'elevation', 'facade']) {
+  // 図面モード（姿図配置モード）の id も null＝manualColumnAnchorLines（未対応 appMode で投げる）まで届かない
+  for (const appMode of ['finish', 'ceiling', 'opening', 'site', 'elevation', 'facade', ...PLACED_FIGURE_MODE_IDS]) {
     isNull(press(env, appMode, 1300, 2700), appMode);
   }
 });

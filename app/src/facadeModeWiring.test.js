@@ -67,9 +67,9 @@ test('【配線】SceneLayers.jsx: facade は平面レイヤー群より前に�
   assert.ok(iPlan >= 0 && iFacade < iPlan, '早期 return は平面レイヤー群の組み立てより前');
 });
 
-test('【配線】ModeBar.jsx: 「立面」は展開の後ろ（最後）', () => {
+test('【配線】ModeBar.jsx: 「立面」は展開の後ろ（手書きの一覧の最後。図面モードは定義表から導いた分が続く）', () => {
   const code = stripCommentLines(readSrc('ui/ModeBar.jsx'));
-  assert.match(code, /^\s*\{ mode: 'elevation', label: '展開' \},\r?\n\s*\{ mode: 'facade', {4}label: '立面' \},\r?\n\];\s*$/m);
+  assert.match(code, /^\s*\{ mode: 'elevation', label: '展開' \},\r?\n\s*\{ mode: 'facade', {4}label: '立面' \},\r?\n(\s*\.\.\.PLACED_FIGURE_MODE_IDS\.map\([^\n]*\),\r?\n)?\];\s*$/m);
 });
 
 test('【配線】usePointerInteraction.js: facade は縦スクロールだけ（ホイール・ドラッグ）。建具ヒット・スナップ・パン・長押しは通らない', () => {

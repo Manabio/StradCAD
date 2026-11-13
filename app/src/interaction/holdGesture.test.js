@@ -190,11 +190,11 @@ test('【不変条件】usePointerInteraction: パンは panTo に一本化（�
   assert.match(panTo, /^\s*viewport\.pan\(dx, dy\);\s*$/m);
   // ポインタ由来の viewport.pan は panTo の1箇所だけ（ピンチの viewport.pan(midX - …) は別）
   assert.equal((src.match(/viewport\.pan\(dx, dy\)/g) ?? []).length, 1, 'viewport.pan(dx, dy) が panTo の外にある');
-  assert.equal((src.match(/panTo\(clientX, clientY\);/g) ?? []).length, 4, '仕上げ・天伏・敷地・汎用の4経路が panTo を使う（呼び出しの4箇所。定義は除く）');
+  assert.equal((src.match(/panTo\(clientX, clientY\);/g) ?? []).length, 5, '仕上げ・天伏・敷地・図面モード・汎用の5経路が panTo を使う（呼び出しの5箇所。定義は除く）');
   // 積算は閾値分（TAP_MOVE_PX）から始める——押下点から既に 8px 超動いているので、9〜15px で離しても didPanEnd が真になる（QA N1）
   const startPan = src.slice(src.indexOf('function startPanAt(clientX, clientY) {'), src.indexOf('const handlePointerDown = (e) => {'));
   assert.match(startPan, /^\s*drag\.current = \{ lastX: clientX, lastY: clientY \};\s*\n\s*panDistRef\.current = TAP_MOVE_PX;.*\n\s*setIsPanning\(true\);\s*$/m);
-  assert.equal((src.match(/startPanAt\(clientX, clientY\);/g) ?? []).length, 4, '仕上げ1・天伏2・汎用1 のパン開始が startPanAt を使う');
+  assert.equal((src.match(/startPanAt\(clientX, clientY\);/g) ?? []).length, 5, '仕上げ1・天伏2・図面モード1・汎用1 のパン開始が startPanAt を使う');
   assert.match(src, /^\s*if \(shouldPan\) \{\s*\n\s*startPanAt\(clientX, clientY\);\s*\n\s*return;/m, '汎用経路のパン開始が startPanAt でない');
   const down = src.slice(src.indexOf('const handlePointerDown = (e) => {'), src.indexOf('const handlePointerMove = (e) => {'));
   assert.match(down, /^\s*panDistRef\.current = 0;\s*$/m);

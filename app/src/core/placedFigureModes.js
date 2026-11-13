@@ -11,16 +11,23 @@ import { PLACED_FIGURE_MODES, PLACED_FIGURE_SUBJECTS, CEILING_PLACED_FIGURE_SUBJ
 import {
   ERR_PLACED_FIGURE_MODE_DUPLICATE, ERR_PLACED_FIGURE_MODE_CONFLICT, ERR_PLACED_FIGURE_MODE_NO_SUBJECTS,
   ERR_PLACED_FIGURE_MODE_BAD_SUBJECT, ERR_PLACED_FIGURE_MODE_OVERLAP,
+  ERR_PLACED_FIGURE_MODE_BAD_ID, ERR_PLACED_FIGURE_MODE_BAD_LABEL,
 } from '../error.js';
+
+/** appMode の id の形（英字だけ・先頭は小文字）。 */
+const MODE_ID_PATTERN = /^[a-z][A-Za-z]*$/;
 
 function validateRows(rows, coreModes) {
   const ownerOfMode = new Map();
   const ownerOfSubject = new Map();
   for (const row of rows) {
+    if (row === null || typeof row !== 'object') throw new Error(ERR_PLACED_FIGURE_MODE_BAD_ID(row));
     const id = row.mode;
+    if (typeof id !== 'string' || !MODE_ID_PATTERN.test(id)) throw new Error(ERR_PLACED_FIGURE_MODE_BAD_ID(id));
     if (ownerOfMode.has(id)) throw new Error(ERR_PLACED_FIGURE_MODE_DUPLICATE(id));
     if (coreModes.includes(id)) throw new Error(ERR_PLACED_FIGURE_MODE_CONFLICT(id));
     ownerOfMode.set(id, row);
+    if (typeof row.label !== 'string' || row.label.trim() === '') throw new Error(ERR_PLACED_FIGURE_MODE_BAD_LABEL(id));
     if (!Array.isArray(row.subjects) || row.subjects.length === 0) throw new Error(ERR_PLACED_FIGURE_MODE_NO_SUBJECTS(id));
     for (const subject of row.subjects) {
       if (!PLACED_FIGURE_SUBJECTS.includes(subject)) throw new Error(ERR_PLACED_FIGURE_MODE_BAD_SUBJECT(id, subject));
