@@ -147,16 +147,70 @@ export function previewVertexPoints(prims) {
   return out;
 }
 
+/**
+ * points（{x, y}）のうち mm（{x, y}）から radiusMm 以内（境界を含む）の点を、距離の近い順に返す（同距離は入力の順）。
+ * 座標が完全に同じ（x も y も ===）点は先に出た方 1 つにまとめる（誤差程度のほぼ同じ点はまとめない）。
+ * 返す要素は入力の点そのもの（写しを作らない）。入力は書き換えない。非有限の mm・半径・points が無い→[]。x・y が非有限の要素・null は飛ばす。
+ */
+export function verticesWithin(points, mm, radiusMm) {
+  if (!Number.isFinite(mm?.x) || !Number.isFinite(mm?.y) || !Number.isFinite(radiusMm)) return [];
+  const found = [];
+  const seen = new Set();
+  for (const p of points ?? []) {
+    const d = Math.hypot(p?.x - mm.x, p?.y - mm.y);
+    if (!(d <= radiusMm)) continue; // NaN（非有限の座標・null の要素）もここで落ちる
+    const key = `${p.x},${p.y}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push({ p, d });
+  }
+  return found.sort((a, b) => a.d - b.d).map(f => f.p); // sort は安定＝同距離は入力の順
+}
+
 /** points（{x, y}）のうち mm（{x, y}）に最も近い点。radiusMm 以内に無ければ null（同距離は先勝ち。非有限の入力も null）。 */
 export function nearestPointWithin(points, mm, radiusMm) {
-  if (!Number.isFinite(mm?.x) || !Number.isFinite(mm?.y) || !Number.isFinite(radiusMm)) return null;
-  let best = null;
-  let bestDist = Infinity;
-  for (const p of points ?? []) {
-    const d = Math.hypot(p.x - mm.x, p.y - mm.y);
-    if (d <= radiusMm && d < bestDist) { best = p; bestDist = d; }
-  }
-  return best;
+  return verticesWithin(points, mm, radiusMm)[0] ?? null;
+}
+
+/**
+ * 基準点の候補の状態 { owner, list, index }（無ければ null）。owner＝候補を作ったときの頂点の配列（参照）。
+ * 下書きの編集・1 手戻し・回転で配列が作り直されると自動で無効になる（bindView／activeView と同じ考え方）。状態は書き換えず新しいものを返す。
+ */
+function validCandidate(state, points) {
+  return state != null && state.owner === points && Array.isArray(state.list)
+    && Number.isInteger(state.index) && state.index >= 0 && state.index < state.list.length ? state : null;
+}
+
+/** タップで候補を作る。1 件以上→先頭を指す新しい状態。0 件→state をそのまま（候補を残す）＋ miss。 */
+export function baseCandidateOnTap(state, { points, mm, radiusMm }) {
+  const list = verticesWithin(points, mm, radiusMm);
+  if (list.length === 0) return { state, miss: true };
+  return { state: { owner: points, list, index: 0 }, miss: false };
+}
+
+/** 今の候補の点。状態が無効（無い・owner 違い・list が空・index 範囲外）なら null。 */
+export function activeBaseCandidate(state, points) {
+  const v = validCandidate(state, points);
+  return v ? v.list[v.index] : null;
+}
+
+/** 次の候補へ送った新しい状態（末尾の次は先頭）。無効・1 件以下は state をそのまま返す。 */
+export function nextBaseCandidate(state, points) {
+  const v = validCandidate(state, points);
+  if (!v || v.list.length < 2) return state;
+  return { ...v, index: (v.index + 1) % v.list.length };
+}
+
+/** 候補の表示用 { index（0 始まり）, count }。無効なら null。 */
+export function baseCandidateSummary(state, points) {
+  const v = validCandidate(state, points);
+  return v ? { index: v.index, count: v.list.length } : null;
+}
+
+/** 候補の印の CSS（プレビュー px。t＝makeTransform の結果）。点が無い・非有限なら null。 */
+export function baseCandidateMarkerStyle(point, t) {
+  if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) return null;
+  return { left: t.tx(point.x), top: t.ty(point.y) };
 }
 
 /**

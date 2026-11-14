@@ -144,6 +144,9 @@ export const DETAIL_HELPER_TEXT = Object.freeze({
   // 基準点を指す（S7d-4。ペン入力タブ）
   basePoint: '基準点を指す', basePointHint: '基準にしたい頂点をタップしてください（もう一度ボタンで解除）',
   basePointMiss: '近くに頂点がありません。頂点の近くをタップしてください',
+  basePointNext: '次の候補',
+  basePointConfirm: '確定',
+  basePointCandidate: (i, n) => `候補 ${i} ／ ${n}・［確定］で基準点にします（別の頂点をタップで選び直し）`,
   pickSummary: (inRect, total, selected) => `矩形内 ${inRect} ／ 全 ${total} 成分・選択 ${selected}`,
   // DXF のレイヤ on/off（S7d）
   layers: 'レイヤ', layersAllOn: '全部 on',
@@ -865,6 +868,13 @@ export function rebaseDelta(form, p) {
     delta[axis] = (Number.isFinite(off) ? off : 0) - p[axis];
   }
   return delta;
+}
+
+/** 基準点を指すときのヒント文。miss（遠いタップの直後）を先に、次に候補の要約 summary（{ index（0 始まり）, count }）、どちらも無ければ既定のヒント。 */
+export function basePointHintText(state) {
+  if (state?.miss) return DETAIL_HELPER_TEXT.basePointMiss;
+  if (state?.summary) return DETAIL_HELPER_TEXT.basePointCandidate(state.summary.index + 1, state.summary.count);
+  return DETAIL_HELPER_TEXT.basePointHint;
 }
 
 // ---- 下書きを基準点まわりに時計回りへ 90° 回す（H2）----
