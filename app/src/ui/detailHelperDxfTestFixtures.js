@@ -4,11 +4,10 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { loadDxf } from './detailHelperForm.js';
 import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
+import { dxfText, dxfLine, dxfSection } from '../detail/dxf/dxfTestFixtures.js';
 
-/** [group code, 値] の並びを ASCII DXF の本文にする。 */
-export const dxfText = pairs => `${pairs.map(([c, v]) => `${c}\n${v}`).join('\n')}\n`;
-/** LINE 1 本（レイヤは既定 '0'）。 */
-export const dxfLine = (x1, y1, x2, y2, layer = '0') => [[0, 'LINE'], [8, layer], [10, x1], [20, y1], [11, x2], [21, y2]];
+// 下の層（detail/dxf）の共有部品を同じ名前で再 export する。
+export { dxfText, dxfLine, dxfSection };
 /** 閉じた折れ線（頂点の並びを LINE でつなぎ、最後の点から最初の点へ戻る）。 */
 export const dxfPoly = (pts, layer) => pts.flatMap((p, i) => dxfLine(...p, ...pts[(i + 1) % pts.length], layer));
 /** 矩形（(x, y) から幅 w・高さ h。DXF の座標＝y 上向き）。 */

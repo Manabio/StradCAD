@@ -11,15 +11,13 @@ import { dxfToComponents, contourToStrokes } from './dxfToStrokes.js';
 import { buildDxfProvenance, sha256HexWith, baseNameOf } from './dxfProvenance.js';
 import { readDxf, buildDxfScene } from './dxfImport.js';
 import { DxfWarning, DxfReject, PenDir, DetailLenMode, DetailProvenanceSource } from '../../core/constants.js';
+import { dxfText as text, dxfSection as section, dxfLine as line } from './dxfTestFixtures.js';
 
 // ---- fixture の組み立て ----
-const text = arr => `${arr.map(([c, v]) => `${c}\n${v}`).join('\n')}\n`;
-const section = (name, body) => [[0, 'SECTION'], [2, name], ...body, [0, 'ENDSEC']];
 const headerSec = units => section('HEADER', units === undefined ? [] : [[9, '$INSUNITS'], [70, units]]);
 const entitiesSec = body => section('ENTITIES', body.flat());
 const blocksSec = blocks => section('BLOCKS', blocks.flat());
 const block = (name, body, base = [0, 0]) => [[0, 'BLOCK'], [8, '0'], [2, name], [70, 0], [10, base[0]], [20, base[1]], ...body.flat(), [0, 'ENDBLK']];
-const line = (x1, y1, x2, y2, layer = '0') => [[0, 'LINE'], [8, layer], [10, x1], [20, y1], [11, x2], [21, y2]];
 const circle = (x, y, r) => [[0, 'CIRCLE'], [8, '0'], [10, x], [20, y], [40, r]];
 const insert = (name, x, y, { sx = 1, sy = 1, rot = 0 } = {}) => [[0, 'INSERT'], [8, '0'], [2, name], [10, x], [20, y], [41, sx], [42, sy], [50, rot]];
 const lwpoly = (verts, closed = false) => [[0, 'LWPOLYLINE'], [8, '0'], [70, closed ? 1 : 0], ...verts.flatMap(([x, y, b]) => [[10, x], [20, y], ...(b ? [[42, b]] : [])])];
