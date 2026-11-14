@@ -238,22 +238,26 @@ export function formatDetailSubjectLabel(value) {
   return typeof value === 'string' && Object.hasOwn(DETAIL_SUBJECT_LABELS, value) ? DETAIL_SUBJECT_LABELS[value] : formatReadonlyValue(value);
 }
 
-/** 姿図の「図の束」の表示名（DetailPlacementView → 文言）。ヘルパーの select と保守パネルの閲覧で共有する。 */
+/**
+ * 姿図の「図の束」の表示名（DetailPlacementView → 文言）。ヘルパーの select と保守パネルの閲覧で共有する。
+ * 宣言の順＝表示の順（欄・保守パネルの並び。製図の呼び方で 正面図・背面図・左側面図・右側面図・見上げ図）。
+ * 保存・照合・通知の順は DetailPlacementView の順で、この表とは別。
+ */
 export const DETAIL_PLACEMENT_VIEW_LABELS = Object.freeze({
   [DetailPlacementView.FRONT]:   DETAIL_PLACEMENT_VIEW_LABEL_TEXT.front,
   [DetailPlacementView.BACK]:    DETAIL_PLACEMENT_VIEW_LABEL_TEXT.back,
-  [DetailPlacementView.LEFT]:    DETAIL_PLACEMENT_VIEW_LABEL_TEXT.left,
   [DetailPlacementView.RIGHT]:   DETAIL_PLACEMENT_VIEW_LABEL_TEXT.right,
+  [DetailPlacementView.LEFT]:    DETAIL_PLACEMENT_VIEW_LABEL_TEXT.left,
   [DetailPlacementView.CEILING]: DETAIL_PLACEMENT_VIEW_LABEL_TEXT.ceiling,
 });
 
 /**
- * 詳細図の views（図の束）を閲覧用の 1 行にする。DetailPlacementView の順に「正面図: 図キー」を「・」で並べる。
+ * 詳細図の views（図の束）を閲覧用の 1 行にする。欄と同じ順（DETAIL_PLACEMENT_VIEW_LABELS の宣言順）に「正面図: 図キー」を「・」で並べる。
  * 未知のキー・非文字列の値は後ろに生のまま足す（壊れた束を隠さない）。views が無い（null/undefined）・空は formatReadonlyValue に委ねる。
  */
 export function formatDetailViews(views) {
   if (views === null || typeof views !== 'object' || Array.isArray(views) || Object.keys(views).length === 0) return formatReadonlyValue(views);
-  const known = Object.values(DetailPlacementView).filter(v => Object.hasOwn(views, v));
+  const known = Object.keys(DETAIL_PLACEMENT_VIEW_LABELS).filter(v => Object.hasOwn(views, v));
   const unknown = Object.keys(views).filter(k => !known.includes(k));
   return [...known.map(v => [DETAIL_PLACEMENT_VIEW_LABELS[v], views[v]]), ...unknown.map(k => [k, views[k]])]
     .map(([label, value]) => `${label}: ${formatReadonlyValue(value)}`).join('・');

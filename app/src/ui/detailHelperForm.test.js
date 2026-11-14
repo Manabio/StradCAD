@@ -15,7 +15,7 @@ import {
   setMoveLen, setMoveMode, moveRows, addDatum, removeDatum, setDatumField, setAnchor, anchorVertex, vertexOptions,
   comboOptions, setClassification, validation, saveBlockers, saveEnabled, libraryRows, defaultFitDims, tryFit,
   isElevationFigureForm, defaultRoleFor, fitDimFieldsFor, defaultFitDimsFor,
-  DETAIL_PLACEMENT_VIEW_LABELS, DETAIL_HELPER_TEXT, placementViewOptions, setPlacementView, setProductField,
+  DETAIL_PLACEMENT_VIEW_LABELS, labelOptions, DETAIL_HELPER_TEXT, placementViewOptions, setPlacementView, setProductField,
   previewPrimitivesOf, parseNumberText, planSave, saveContextFor, saveDecision, afterSaveDoc, penStep, describeError,
   wallThicknessNotice, displayLen, freshDocOf, docFromEntry, duplicateDoc, afterDeleteDoc, clearPenError, docContextFor, DETAIL_HELPER_MESSAGES, DETAIL_ROLE_LABELS, DETAIL_MODE_LABELS, DETAIL_PARAM_LABELS,
   DETAIL_MATERIAL_FIELD_LABELS, DETAIL_DATUM_KIND_LABELS, DETAIL_AXIS_LABELS, PEN_BUTTONS, PEN_DIR_LABELS,
@@ -694,10 +694,17 @@ const VIEW_CATALOG = [
   mkFig('f_elec_ceil', DetailCategory.FIGURE, DetailView.PLAN, DetailSubject.ELECTRICAL, '電気 見上げ'),
 ];
 
-test('DETAIL_PLACEMENT_VIEW_LABELS: DetailPlacementView の全 5 値を網羅し、承認済みの文言になる', () => {
-  assert.deepEqual(Object.keys(DETAIL_PLACEMENT_VIEW_LABELS), Object.values(DetailPlacementView));
-  assert.deepEqual(Object.values(DETAIL_PLACEMENT_VIEW_LABELS), ['正面図', '背面図', '右側面図', '左側面図', '見上げ図']); // 表示名は製図の呼び方（キー left＝右側面図・right＝左側面図）。並びはキーの並び
-  assert.deepEqual([DETAIL_PLACEMENT_VIEW_LABELS.left, DETAIL_PLACEMENT_VIEW_LABELS.right], ['右側面図', '左側面図']);
+test('DETAIL_PLACEMENT_VIEW_LABELS: DetailPlacementView の全 5 値を網羅し、承認済みの文言と表示の並びになる', () => {
+  const labelKeys = new Set(Object.keys(DETAIL_PLACEMENT_VIEW_LABELS));
+  const enumValues = new Set(Object.values(DetailPlacementView));
+  assert.equal(labelKeys.size, 5);
+  assert.equal(enumValues.size, 5);
+  assert.equal([...labelKeys].every(k => enumValues.has(k)), true, '全 5 値を網羅');
+  // 表示の並び（欄が使う形）。製図の呼び方で 正面図・背面図・左側面図・右側面図・見上げ図＝キーは right が left より先
+  const opts = labelOptions(DETAIL_PLACEMENT_VIEW_LABELS);
+  assert.deepEqual(opts.map(o => o.value), ['front', 'back', 'right', 'left', 'ceiling']);
+  assert.deepEqual(opts.map(o => o.label), ['正面図', '背面図', '左側面図', '右側面図', '見上げ図']);
+  assert.deepEqual([DETAIL_PLACEMENT_VIEW_LABELS.left, DETAIL_PLACEMENT_VIEW_LABELS.right], ['右側面図', '左側面図']); // 表示名は製図の呼び方（キー left＝右側面図・right＝左側面図）
   assert.equal(DETAIL_HELPER_TEXT.viewsGroup, '図の束');
 });
 
@@ -774,6 +781,9 @@ test('views の往復: formFromEntry ⇄ entryFromForm。views 無しは無し�
   assert.deepEqual(Object.keys(e1.views), ['front', 'left', 'ceiling']);
   assert.deepEqual(formFromEntry(e1).views, e1.views);
   assert.deepEqual(entryFromForm(formFromEntry(e1)), e1);
+  // 保存の並びは表示の並びと別＝right と left を表示順（RIGHT→LEFT）で入れても enum の順
+  const rl = setPlacementView(setPlacementView(f, DetailPlacementView.RIGHT, 'r'), DetailPlacementView.LEFT, 'l');
+  assert.deepEqual(Object.keys(entryFromForm(rl).views), ['left', 'right']);
   // 空の {} は書かない（持てない分類の {} は BAD_VIEWS のため）。null も無しと同じ
   assert.equal(Object.hasOwn(entryFromForm({ ...f, views: {} }), 'views'), false);
   assert.equal(Object.hasOwn(formFromEntry({ ...e0, views: null }), 'views'), false);

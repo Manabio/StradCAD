@@ -1005,13 +1005,14 @@ test('formatDetailViewLabel: plan→平面・section→断面・elevation→立�
   assert.equal(formatDetailViewLabel(null), '（未設定）');
 });
 
-test('formatDetailViews（P2-3）: DetailPlacementView の順に「ラベル: 図キー」。未知キーは後ろに生で・views 無し／空はフォールバック', () => {
+test('formatDetailViews（P2-3）: 欄と同じ順（表示名の表の宣言順）に「ラベル: 図キー」。未知キーは後ろに生で・views 無し／空はフォールバック', () => {
   assert.equal(formatDetailViews({ ceiling: 'c', front: 'a', left: 'l' }), '正面図: a・右側面図: l・見上げ図: c'); // キー left の表示名は「右側面図」（製図の呼び方）
+  assert.equal(formatDetailViews({ left: 'l', right: 'r', front: 'a' }), '正面図: a・左側面図: r・右側面図: l'); // 左側面図（キー right）が右側面図（キー left）より先
   assert.equal(formatDetailViews({ front: 'a', oblique: 'x' }), '正面図: a・oblique: x');
   assert.equal(formatDetailViews(undefined), '（未設定）');
   assert.equal(formatDetailViews({}), '（なし）');
   assert.equal(formatDetailViews(['a']), 'a');
-  assert.deepEqual(Object.keys(DETAIL_PLACEMENT_VIEW_LABELS), Object.values(DetailPlacementView), '全 5 値を網羅');
+  assert.deepEqual(Object.keys(DETAIL_PLACEMENT_VIEW_LABELS).sort(), Object.values(DetailPlacementView).sort(), '全 5 値を網羅');
 });
 
 test('formatDetailProduct（S1）: DetailProductField の順に「ラベル: 値」。未知キーは後ろに生で・無し／空はフォールバック', () => {
