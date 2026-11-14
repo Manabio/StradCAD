@@ -2,7 +2,6 @@
 // 差し替え、ページの演算子列は合成する。読込み→ページ→範囲→縮尺→抽出→成分の選択→新規下書き→検証・出所。期待値は定数。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { webcrypto } from 'node:crypto';
 import {
   loadPdf, setPdfPage, stepPdfPage, setPdfPageView, pageSizeOf, setPdfScale, setPdfClip, setPdfClipField, pdfClipText,
   pointToPage, clipFromDrag, clipOverlayStyle, pdfCanExtract, pdfCanCopy, extractPdf, pdfWarningTexts, describePdfWarning, describePdfReject,
@@ -11,7 +10,6 @@ import {
   toggleDxfComponent, draftFromDxf, validation, saveBlockers, entryFromForm, provenanceNoticeOf, setProvenanceField, DETAIL_HELPER_MESSAGES,
   dxfComponentRows, describeDxfWarning,
 } from './detailHelperForm.js';
-import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
 import { formatDetailProvenance } from '../catalog/catalogMaintenance.js';
 import {
   WARN_PDF_SCALE_MISSING, WARN_PDF_TEXT_IGNORED, WARN_PDF_PAGE_LIMIT, WARN_DXF_LICENSE_UNKNOWN, WARN_DXF_NO_DIGEST, WARN_PDF_NO_PATHS,
@@ -20,9 +18,8 @@ import {
 import {
   PdfDrawOp, PdfReject, PdfWarning, DxfWarning, DetailProvenanceSource, DXF_PROVENANCE_FIELDS, PDF_MAX_BYTES, PDF_MAX_PAGES, PenDir,
 } from '../core/constants.js';
+import { dxfDigest as digest, fixedId as ids } from './detailHelperDxfTestFixtures.js';
 
-const digest = sha256HexWith(webcrypto.subtle);
-const ids = () => 'fixed-id';
 const bytes = new TextEncoder().encode('%PDF-1.7\nsample');
 const openOk = (pageCount = 3) => async () => ({ ok: true, doc: { tag: 'doc' }, pageCount });
 

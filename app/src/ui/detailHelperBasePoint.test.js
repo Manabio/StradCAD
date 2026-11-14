@@ -3,33 +3,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { webcrypto } from 'node:crypto';
 import {
-  loadDxf, toggleDxfComponent, draftFromDxf, previewPrimitivesOf, rebaseOrigin, entryFromForm, formFromEntry, validation,
+  draftFromDxf, previewPrimitivesOf, rebaseOrigin, entryFromForm, formFromEntry, validation,
   pushHistory, undoDraft, DETAIL_HELPER_TEXT, dxfPreviewPrimitives, rebaseDelta,
 } from './detailHelperForm.js';
 import {
   previewVertexPoints, nearestPointWithin, draftViewOfImport, DETAIL_BASE_SNAP_PX, bindView, activeView,
 } from './detailHelperPick.js';
-import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
 import { SvgFigurePrimitiveType } from '../core/constants.js';
 import { fitDetailFigure } from '../detail/detailFit.js';
 import { stretchFigure } from '../detail/detailTestFixtures.js';
+import { dxfRect as rect, fixedId as ids, loadDxfBody as loadBody, pickDxfComponents as pick } from './detailHelperDxfTestFixtures.js';
 
-const text = arr => `${arr.map(([c, v]) => `${c}\n${v}`).join('\n')}\n`;
-const line = (x1, y1, x2, y2) => [[0, 'LINE'], [8, '0'], [10, x1], [20, y1], [11, x2], [21, y2]];
-const rect = (x, y, w, h) => [...line(x, y, x + w, y), ...line(x + w, y, x + w, y + h), ...line(x + w, y + h, x, y + h), ...line(x, y + h, x, y)];
-const bytesOf = body => new TextEncoder().encode(text([
-  [0, 'SECTION'], [2, 'HEADER'], [9, '$INSUNITS'], [70, 4], [0, 'ENDSEC'],
-  [0, 'SECTION'], [2, 'ENTITIES'], ...body, [0, 'ENDSEC'], [0, 'EOF'],
-]));
-const digest = sha256HexWith(webcrypto.subtle);
-const ids = () => 'fixed-id';
 async function twoRectForm() {
   // 1 つ目の矩形を原点から離す（P.s・P.t が 0 でない）＝draftViewOfImport の両軸の符号をテストが検出できるように
-  const r = await loadDxf({ bytes: bytesOf([...rect(20, 10, 100, 50), ...rect(300, 100, 60, 40)]), fileName: 'o.dxf', digest });
-  assert.equal(r.ok, true, r.message);
-  const dxf = [0, 1].reduce((d, i) => toggleDxfComponent(d, i), r.dxf);
+  const dxf = pick(await loadBody([...rect(20, 10, 100, 50), ...rect(300, 100, 60, 40)]), 0, 1);
   return { ...draftFromDxf({ dxf, idFactory: ids }), dxf };
 }
 const strokePts = form => previewPrimitivesOf(form)

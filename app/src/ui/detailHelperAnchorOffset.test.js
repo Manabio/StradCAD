@@ -1,30 +1,14 @@
 // Anchor.offsetMm（S7d-3）の ui 側: draftFromDxf が位置関係を保つ・setAnchor が位置を保つ・fittedDatums の差し引き・往復。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { webcrypto } from 'node:crypto';
 import {
-  loadDxf, toggleDxfComponent, draftFromDxf, previewPrimitivesOf, setAnchor, entryFromForm, formFromEntry, validation,
+  draftFromDxf, previewPrimitivesOf, setAnchor, entryFromForm, formFromEntry, validation,
 } from './detailHelperForm.js';
-import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
 import { SvgFigurePrimitiveType, DetailDatumKind } from '../core/constants.js';
 import { fitDetailFigure } from '../detail/detailFit.js';
 import { stretchFigure } from '../detail/detailTestFixtures.js';
+import { dxfRect as rect, fixedId as ids, loadDxfBody as loadBody, pickDxfComponents as pick } from './detailHelperDxfTestFixtures.js';
 
-const text = arr => `${arr.map(([c, v]) => `${c}\n${v}`).join('\n')}\n`;
-const line = (x1, y1, x2, y2) => [[0, 'LINE'], [8, '0'], [10, x1], [20, y1], [11, x2], [21, y2]];
-const rect = (x, y, w, h) => [...line(x, y, x + w, y), ...line(x + w, y, x + w, y + h), ...line(x + w, y + h, x, y + h), ...line(x, y + h, x, y)];
-const bytesOf = body => new TextEncoder().encode(text([
-  [0, 'SECTION'], [2, 'HEADER'], [9, '$INSUNITS'], [70, 4], [0, 'ENDSEC'],
-  [0, 'SECTION'], [2, 'ENTITIES'], ...body, [0, 'ENDSEC'], [0, 'EOF'],
-]));
-const digest = sha256HexWith(webcrypto.subtle);
-const ids = () => 'fixed-id';
-const loadBody = async body => {
-  const r = await loadDxf({ bytes: bytesOf(body), fileName: 'o.dxf', digest });
-  assert.equal(r.ok, true, r.message);
-  return r.dxf;
-};
-const pick = (dxf, ...idx) => idx.reduce((d, i) => toggleDxfComponent(d, i), dxf);
 // 位置の違う矩形 2 つ（左下 (0,0) 100×50 と 左下 (300,100) 60×40）
 const TWO = [...rect(0, 0, 100, 50), ...rect(300, 100, 60, 40)];
 

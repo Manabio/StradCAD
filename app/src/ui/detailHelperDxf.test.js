@@ -2,7 +2,6 @@
 // 読込み→成分の選択→新規下書きへ写す→検証・出所。実ファイルは使わず、テスト内の小さな DXF 文字列を読む。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { webcrypto } from 'node:crypto';
 import {
   loadDxf, setDxfUnit, toggleDxfComponent, setDxfProvenanceField, dxfComponentRows, dxfUnitHint, dxfWarningTexts,
   dxfPreviewPrimitives, draftFromDxf, draftDocOf, provenanceNoticeOf, describeDxfWarning, describeDxfReject,
@@ -10,16 +9,15 @@ import {
   toggleDxfLayer, setDxfLayers, dxfLayerRows, DETAIL_HELPER_TEXT,
 } from './detailHelperForm.js';
 import { setPickRect, activePickRect } from './detailHelperPick.js';
-import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
 import { formatDetailProvenance } from '../catalog/catalogMaintenance.js';
 import {
   ERR_DXF_BINARY, ERR_DXF_TRUNCATED, WARN_DXF_LICENSE_UNKNOWN, WARN_DXF_UNIT_UNKNOWN, WARN_DXF_NO_DIGEST, ERR_DXF_NOT_BYTES,
 } from '../error.js';
 import { DxfWarning, DxfReject, PenDir, DetailProvenanceSource, DXF_PROVENANCE_FIELDS } from '../core/constants.js';
+import {
+  dxfText as text, dxfSection as section, dxfLine as line, dxfDigest as digest, fixedId as ids, dxfBytesOf,
+} from './detailHelperDxfTestFixtures.js';
 
-const text = arr => `${arr.map(([c, v]) => `${c}\n${v}`).join('\n')}\n`;
-const section = (name, body) => [[0, 'SECTION'], [2, name], ...body, [0, 'ENDSEC']];
-const line = (x1, y1, x2, y2) => [[0, 'LINE'], [8, '0'], [10, x1], [20, y1], [11, x2], [21, y2]];
 const sampleBytes = ({ units = 4, slot = false } = {}) => new TextEncoder().encode(text([
   ...(units === null ? [] : section('HEADER', [[9, '$INSUNITS'], [70, units]])),
   ...section('ENTITIES', [
@@ -29,8 +27,6 @@ const sampleBytes = ({ units = 4, slot = false } = {}) => new TextEncoder().enco
   ]),
   [0, 'EOF'],
 ]));
-const digest = sha256HexWith(webcrypto.subtle);
-const ids = () => 'fixed-id';
 
 async function load(opts, fileName = 'sample.dxf') {
   const r = await loadDxf({ bytes: sampleBytes(opts), fileName, digest });
@@ -123,16 +119,7 @@ test('setDxfUnit: 係数を指定し直すと成分が mm 換算で作り直さ�
 });
 
 // ---- レイヤ（S7d-0a） ----
-const layered = (extra = []) => new TextEncoder().encode(text([
-  ...section('HEADER', [[9, '$INSUNITS'], [70, 4]]),
-  ...section('ENTITIES', [
-    [0, 'LINE'], [8, 'WALL'], [10, 0], [20, 0], [11, 100], [21, 0],
-    [0, 'LINE'], [8, 'DIM'], [10, 200], [20, 0], [11, 300], [21, 0],
-    [0, 'LINE'], [8, 'DIM'], [10, 300], [20, 0], [11, 300], [21, 50],
-    ...extra,
-  ]),
-  [0, 'EOF'],
-]));
+const layered = (extra = []) => dxfBytesOf([...line(0, 0, 100, 0, 'WALL'), ...line(200, 0, 300, 0, 'DIM'), ...line(300, 0, 300, 50, 'DIM'), ...extra]);
 const loadLayered = async () => {
   const r = await loadDxf({ bytes: layered(), fileName: 'l.dxf', digest });
   assert.equal(r.ok, true, r.message);

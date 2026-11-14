@@ -5,18 +5,19 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  toggleDxfComponent, draftFromDxf, previewPrimitivesOf, setClassification, tryFit, validation, entryFromForm,
+  draftFromDxf, previewPrimitivesOf, setClassification, tryFit, validation, entryFromForm,
   setDxfUnit, DETAIL_HELPER_TEXT, DETAIL_HELPER_MESSAGES, dxfLayerRows, toggleDxfLayer,
 } from './detailHelperForm.js';
 import { loadPdf, setPdfPageView, setPdfClip, setPdfScale, extractPdf } from './detailHelperPdf.js';
-import { dxfRect as rect, dxfDigest as digest, fixedId as ids, loadDxfBody as loadBody } from './detailHelperDxfTestFixtures.js';
+import {
+  dxfRect as rect, dxfDigest as digest, fixedId as ids, loadDxfBody as loadBody, pickDxfComponents as pick,
+} from './detailHelperDxfTestFixtures.js';
 import { validateDetailFigure } from '../detail/detailModel.js';
 import { fitLocal } from '../detail/detailPlacement.js';
 import { placedFigureTargets } from '../finish/placedFigure/placedFigureTargets.js';
 import { SvgFigurePrimitiveType, DetailCategory, DetailView, DetailSubject, PdfDrawOp } from '../core/constants.js';
 import { stripCommentsKeepStrings as stripComments, extractBodyAfterParams, topLevelBlock } from '../uiBusySourceScan.js';
 
-const pick = (dxf, ...idx) => idx.reduce((d, i) => toggleDxfComponent(d, i), dxf);
 const polylines = prims => prims.filter(p => p.type === SvgFigurePrimitiveType.POLYLINE && p.strokeId);
 const vertex0Of = (form, strokeId) => polylines(previewPrimitivesOf(form)).find(p => p.strokeId === strokeId).points[0];
 // 原点から離した 2 つの矩形（原点に頂点なし。第 1 象限寄りと第 4 象限寄り）

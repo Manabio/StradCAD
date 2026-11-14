@@ -2,7 +2,7 @@
 // 同じ中身をテストファイルごとに定義しない（実装方針 12）。新しいテストはここから引く。
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
-import { loadDxf } from './detailHelperForm.js';
+import { loadDxf, toggleDxfComponent } from './detailHelperForm.js';
 import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
 import { dxfText, dxfLine, dxfSection } from '../detail/dxf/dxfTestFixtures.js';
 
@@ -27,3 +27,5 @@ export const loadDxfBody = async body => {
   assert.equal(r.ok, true, r.message);
   return r.dxf;
 };
+/** 成分 idx を順に選択する（プレビューのタップ選択 toggleDxfComponent の畳み込み）。 */
+export const pickDxfComponents = (dxf, ...idx) => idx.reduce((d, i) => toggleDxfComponent(d, i), dxf);

@@ -2,7 +2,6 @@
 // 窓選択（bbox の完全な包含）・選択の置き換え・矩形の scene への結び付き・ドラッグの換算。期待値は手計算の定数。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { webcrypto } from 'node:crypto';
 import {
   componentsInRect, activePickRect, setPickRect, clearPickRect, pickedComponentRows, pickSummaryOf,
   figurePointToMm, pickRectFromDrag, pickOverlayStyle, dragKindOf, bindView, activeView,
@@ -11,9 +10,9 @@ import {
 import { transformOfView, panView, pinchView, viewLimitsOf } from '../structural/sectionFigure/figureView.js';
 import { loadDxf, setDxfUnit, toggleDxfComponent, dxfComponentRows, DETAIL_HELPER_TEXT } from './detailHelperForm.js';
 import { loadPdf, setPdfScale, setPdfClip, setPdfPageView, extractPdf } from './detailHelperPdf.js';
-import { sha256HexWith } from '../detail/dxf/dxfProvenance.js';
 import { makeTransform } from '../structural/sectionFigure/sectionGeometry.js';
 import { PdfDrawOp } from '../core/constants.js';
+import { dxfDigest as digest, dxfLine as line, dxfBytesOf } from './detailHelperDxfTestFixtures.js';
 
 const approx = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} != ${b}`);
 const comp = (index, minS, minT, maxS, maxT) => ({ index, bbox: { minS, minT, maxS, maxT }, vertexCount: 4, closed: true, warnings: [] });
@@ -144,16 +143,10 @@ test('pickOverlayStyle: 矩形 (0,0,100,50) は縮尺 1/2 で left 82・top 57�
 });
 
 // ---- 本番の状態（DXF・PDF）で通す ----
-const digest = sha256HexWith(webcrypto.subtle);
-const text = arr => `${arr.map(([c, v]) => `${c}\n${v}`).join('\n')}\n`;
-const line = (x1, y1, x2, y2) => [[0, 'LINE'], [8, '0'], [10, x1], [20, y1], [11, x2], [21, y2]];
-const dxfBytes = () => new TextEncoder().encode(text([
-  [0, 'SECTION'], [2, 'HEADER'], [9, '$INSUNITS'], [70, 4], [0, 'ENDSEC'],
-  [0, 'SECTION'], [2, 'ENTITIES'],
+const dxfBytes = () => dxfBytesOf([
   ...line(0, 0, 100, 0), ...line(100, 0, 100, 50), ...line(100, 50, 0, 50), ...line(0, 50, 0, 0),
   ...line(200, 0, 260, 0), ...line(260, 0, 230, 40),
-  [0, 'ENDSEC'], [0, 'EOF'],
-]));
+]);
 // 全成分を含む広い矩形（bbox の合併から導く）
 const hull = comps => {
   const b = comps.map(c => c.bbox);
